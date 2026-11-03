@@ -1707,7 +1707,7 @@ impl App {
             return;
         };
 
-        if snapshot.devices.is_empty() && snapshot.avds.is_empty() {
+        if snapshot.devices.is_empty() && snapshot.avds.is_empty() && snapshot.iphones.is_empty() {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
                 ui.add(Label::new(regular(
@@ -1777,6 +1777,39 @@ impl App {
                             device.clone(),
                             settings.scrcpy_options(),
                         );
+                    }
+                }
+            }
+
+            for iphone in &snapshot.iphones {
+                if !std::mem::take(&mut first) {
+                    divider(ui);
+                }
+
+                let key = backend::iphone_mirror_key(iphone);
+                let mirroring = mirrors.contains(&key);
+                let action = if mirroring {
+                    RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
+                } else {
+                    RowAction::enabled(ph::PLAY, theme::text_bright()).with_tooltip("Mirror screen")
+                };
+                let row = Row {
+                    key: &key,
+                    icon: ph::APPLE_LOGO,
+                    name: &iphone.name,
+                    tooltip: &iphone.model,
+                    status: if mirroring { "Mirroring" } else { "Ready" },
+                    status_color: if mirroring {
+                        theme::green()
+                    } else {
+                        theme::text_faint()
+                    },
+                };
+                if list_row_with(ui, &row, &[action]).is_some() {
+                    if mirroring {
+                        backend::stop_mirror(shared, &key);
+                    } else {
+                        backend::start_iphone_mirror(shared.clone(), ctx.clone(), iphone.clone());
                     }
                 }
             }

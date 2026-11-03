@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use awb_core::adb::{self, Adb};
 use awb_core::emulator::{self, Emulator};
+use awb_core::imb::{Imb, Iphone};
 use awb_core::pairing_flow::{
     self, AlreadyConnectedChoice, PairingEvent, PairingFlowDelegate, PairingProgressKind,
 };
@@ -71,6 +72,8 @@ pub struct Snapshot {
     pub scrcpy: ToolInfo,
     pub devices: Vec<DeviceInfo>,
     pub avds: Vec<AvdInfo>,
+    /// iPhones on USB, when imb is installed.
+    pub iphones: Vec<Iphone>,
 }
 
 #[derive(Debug, Clone)]
@@ -366,6 +369,9 @@ fn collect_snapshot() -> Snapshot {
         })
         .unwrap_or_default();
     let avds = avd_rows(avds, &devices, &running_avds);
+    let iphones = Imb::resolve()
+        .and_then(|imb| imb.iphones())
+        .unwrap_or_default();
 
     Snapshot {
         adb: adb_info,
@@ -373,6 +379,7 @@ fn collect_snapshot() -> Snapshot {
         scrcpy: scrcpy_info,
         devices,
         avds,
+        iphones,
     }
 }
 
@@ -530,6 +537,35 @@ pub fn start_mirror(
         drop(state);
         ctx.request_repaint();
     });
+}
+
+/// The key an iPhone's mirror is tracked under in `Shared::mirrors`.
+pub fn iphone_mirror_key(iphone: &Iphone) -> String {
+    format!("ios:{}", iphone.udid)
+}
+
+pub fn start_iphone_mirror(shared: Arc<Mutex<Shared>>, ctx: Context, iphone: Iphone) {
+    let mirror_key = iphone_mirror_key(&iphone);
+    let mut state = shared.lock().unwrap();
+    if state.mirrors.contains_key(&mirror_key) {
+        state.log(format!("Already mirroring {}", iphone.name));
+        return;
+    }
+    match Imb::resolve().and_then(|imb| imb.spawn_mirror(&iphone.udid)) {
+        Ok(mut child) => {
+            state.log(format!("Mirroring {} (pid {})", iphone.name, child.id()));
+            if let Some(out) = child.stdout.take() {
+                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
+            }
+            if let Some(err) = child.stderr.take() {
+                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
+            }
+            state.mirrors.insert(mirror_key, child);
+        }
+        Err(error) => state.log(format!("Mirror failed: {error:#}")),
+    }
+    drop(state);
+    ctx.request_repaint();
 }
 
 pub fn start_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String) {
@@ -1061,6 +1097,7 @@ mod tests {
                         name: "Pixel_9a".to_string(),
                         device,
                     }],
+                    iphones: vec![],
                 }),
                 starting_avds: if starting {
                     HashSet::from(["Pixel_9a".to_string()])

@@ -11,3 +11,5 @@ repository.workspace = true
 anyhow.workspace = true
 qrcode.workspace = true
 rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -62,7 +62,7 @@ pub(crate) fn path_env_with_tool_dirs(
     env::join_paths(dirs).ok()
 }
 
-/// Common macOS install locations for adb, emulator, and scrcpy, probed when PATH is the
+/// Common macOS install locations for adb, emulator, scrcpy and imb, probed when PATH is the
 /// minimal launchd environment rather than the user's shell.
 fn standard_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
@@ -72,6 +72,8 @@ fn standard_dirs() -> Vec<PathBuf> {
     ];
 
     if let Some(home) = env::var_os("HOME") {
+        // Where awb and imb install themselves
+        dirs.push(PathBuf::from(&home).join(".local/bin"));
         dirs.extend(android_sdk_tool_dirs(
             &PathBuf::from(home).join("Library/Android/sdk"),
         ));
