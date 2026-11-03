@@ -68,8 +68,9 @@ func draw(_ size: CGFloat) -> NSBitmapImageRep {
     NSGradient(starting: color(0x343946), ending: color(0x101216))!.draw(in: squircle, angle: -90)
 
     if args[1] == "pair" {
-        drawPhone(center: NSPoint(x: 512 * s - 128 * s, y: 512 * s), scale: 0.62 * s, android: true)
-        drawPhone(center: NSPoint(x: 512 * s + 128 * s, y: 512 * s), scale: 0.62 * s, android: false)
+        // A clear gap between the phones, so they read as two at 16 px
+        drawPhone(center: NSPoint(x: 512 * s - 150 * s, y: 512 * s), scale: 0.54 * s, android: true)
+        drawPhone(center: NSPoint(x: 512 * s + 150 * s, y: 512 * s), scale: 0.54 * s, android: false)
     } else {
         drawPhone(center: NSPoint(x: 512 * s, y: 512 * s), scale: s, android: args[1] == "android")
     }
