@@ -6,7 +6,8 @@ imb: mirror a USB-connected iPhone in a QuickTime-style window
 
   imb status [--json]          list iPhones on USB and whether each is mirrored
   imb mirror [--udid UDID]     open the mirror (the first iPhone without --udid)
-             [--wda URL]       and send clicks and typing to WebDriverAgent
+             [--wda URL]       send clicks and typing to WebDriverAgent instead
+             [--exec]          become the mirror process, for apps that track it (awb)
   imb --version
 """
 
@@ -66,10 +67,15 @@ func status(json: Bool) {
 
 func mirror(_ args: [String]) {
     var udid: String?
+    var exec = false
     var passthrough: [String] = []
     var it = args.makeIterator()
     while let arg = it.next() {
-        if arg == "--udid" { udid = it.next() } else { passthrough.append(arg) }
+        switch arg {
+        case "--udid": udid = it.next()
+        case "--exec": exec = true
+        default: passthrough.append(arg)
+        }
     }
     let devices: [Device]
     do { devices = try Devices.list().filter(\.wired) } catch { fail("\(error)") }
@@ -82,11 +88,19 @@ func mirror(_ args: [String]) {
         return
     }
     guard let binary = mirrorBinary() else { fail("iOS Mirror.app not found; reinstall imb") }
+    let arguments = ["--name", device.name, "--udid", device.udid, "--product", device.productType] + passthrough
+    try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+    if exec {
+        // The caller's child becomes the mirror, so stopping it closes the mirror
+        try? "\(getpid())\n".write(to: pidFile(device.udid), atomically: true, encoding: .utf8)
+        let argv = ([binary] + arguments).map { strdup($0) } + [nil]
+        execv(binary, argv)
+        fail("cannot start iOS Mirror: \(String(cString: strerror(errno)))")
+    }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: binary)
-    process.arguments = ["--name", device.name, "--udid", device.udid, "--product", device.productType] + passthrough
+    process.arguments = arguments
     process.standardOutput = FileHandle.nullDevice
-    try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     let log = stateDir.appendingPathComponent("mirror-\(device.udid).log")
     FileManager.default.createFile(atPath: log.path, contents: nil)
     process.standardError = try? FileHandle(forWritingTo: log)
