@@ -87,6 +87,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                               backing: .buffered, defer: false)
         window.collectionBehavior = [.fullScreenPrimary]
         window.isMovableByWindowBackground = false
+        window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false
         window.contentAspectRatio = NSSize(width: width, height: height)
         view = MirrorView(frame: NSRect(x: 0, y: 0, width: width, height: height))

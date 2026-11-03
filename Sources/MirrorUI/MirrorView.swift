@@ -7,7 +7,6 @@ import IMBCore
 final class MirrorView: NSView {
     let display = AVSampleBufferDisplayLayer()
     private let status = NSTextField(labelWithString: "")
-    private let touchDot = CAShapeLayer()
     weak var input: InputSink?
     private var pressed = false
     private var commandPress = false
@@ -21,12 +20,6 @@ final class MirrorView: NSView {
         display.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         layer?.addSublayer(display)
 
-        touchDot.fillColor = NSColor.white.withAlphaComponent(0.35).cgColor
-        touchDot.strokeColor = NSColor.white.withAlphaComponent(0.8).cgColor
-        touchDot.lineWidth = 1.5
-        touchDot.path = CGPath(ellipseIn: CGRect(x: -14, y: -14, width: 28, height: 28), transform: nil)
-        touchDot.isHidden = true
-        layer?.addSublayer(touchDot)
 
         status.textColor = .secondaryLabelColor
         status.alignment = .center
@@ -59,41 +52,82 @@ final class MirrorView: NSView {
                        y: min(max(p.y / max(bounds.height, 1), 0), 1))
     }
 
-    private func showDot(at event: NSEvent?) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        if let event {
-            touchDot.position = convert(event.locationInWindow, from: nil)
-            touchDot.isHidden = false
-        } else {
-            touchDot.isHidden = true
+    /// A round pointer like iOS's own over the phone, darker while it touches
+    static let touchCursor = circleCursor(fill: 0.42)
+    static let pressedCursor = circleCursor(fill: 0.62)
+
+    private static func circleCursor(fill: CGFloat) -> NSCursor {
+        let size: CGFloat = 30
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 3, dy: 3))
+            NSColor(white: 0.5, alpha: fill).setFill()
+            circle.fill()
+            NSColor(white: 1, alpha: 0.9).setStroke()
+            circle.lineWidth = 2
+            circle.stroke()
+            // A faint dark rim keeps it visible on white
+            let rim = NSBezierPath(ovalIn: rect.insetBy(dx: 1.5, dy: 1.5))
+            NSColor(white: 0, alpha: 0.22).setStroke()
+            rim.lineWidth = 1
+            rim.stroke()
+            return true
         }
-        CATransaction.commit()
+        return NSCursor(image: image, hotSpot: NSPoint(x: size / 2, y: size / 2))
+    }
+
+    private var commandHeld = false
+
+    private var currentCursor: NSCursor {
+        if commandPress { return .closedHand }
+        if commandHeld { return .openHand }
+        return pressed ? Self.pressedCursor : Self.touchCursor
+    }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: currentCursor) }
+
+    override func updateTrackingAreas() {
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect, .cursorUpdate],
+                                       owner: self))
+    }
+
+    override func cursorUpdate(with event: NSEvent) { currentCursor.set() }
+    override func mouseMoved(with event: NSEvent) { setCommand(event.modifierFlags.contains(.command)) }
+    override func flagsChanged(with event: NSEvent) { setCommand(event.modifierFlags.contains(.command)) }
+
+    private func setCommand(_ held: Bool) {
+        commandHeld = held
+        window?.invalidateCursorRects(for: self)
+        if let window, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
+            currentCursor.set()
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
             commandPress = true
+            currentCursor.set()
             window?.performDrag(with: event)
+            commandPress = false
+            setCommand(NSEvent.modifierFlags.contains(.command))
             return
         }
         commandPress = false
         pressed = true
+        currentCursor.set()
         input?.touch(.down, at: phonePoint(event))
-        showDot(at: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard pressed else { return }
         input?.touch(.move, at: phonePoint(event))
-        showDot(at: event)
     }
 
     override func mouseUp(with event: NSEvent) {
-        showDot(at: nil)
         commandPress = false
         guard pressed else { return }
         pressed = false
+        currentCursor.set()
         input?.touch(.up, at: phonePoint(event))
     }
 
