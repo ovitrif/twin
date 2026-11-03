@@ -68,7 +68,11 @@ elif [ -x "${SCRCPY_DIR}/scrcpy" ]; then
   cp "${SCRCPY_DIR}/scrcpy-server" "${SCRCPY_DIR}/scrcpy.png" \
     "${SCRCPY_DIR}/disconnected.png" "${SCRCPY_DIR}/LICENSE" \
     "${MIRROR}/Contents/Resources/"
-  cp "${APP}/Contents/Resources/${ICON_NAME}.icns" "${MIRROR}/Contents/Resources/AppIcon.icns"
+  # Made with imb's scripts/make-icon.swift android. scrcpy sets its Dock icon
+  # from scrcpy.png at runtime, so that is this icon too
+  cp "$(dirname "$0")/../scrcpy/AndroidMirror.icns" "${MIRROR}/Contents/Resources/AppIcon.icns"
+  sips -s format png "${MIRROR}/Contents/Resources/AppIcon.icns" \
+    --out "${MIRROR}/Contents/Resources/scrcpy.png" >/dev/null
 
   # awb starts mirrors through this launcher; opened with no arguments (Finder,
   # Raycast, Spotlight) it quits, since only awb knows which phone to mirror.
