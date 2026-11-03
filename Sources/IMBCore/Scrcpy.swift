@@ -161,8 +161,12 @@ public final class ScrcpySession {
     public func start() throws {
         try run(["push", server, ScrcpyProtocol.devicePath])
         let scid = String(format: "%08x", UInt32.random(in: 1..<0x7FFF_FFFF))
-        let portText = try run(["forward", "tcp:0", "localabstract:scrcpy_\(scid)"])
-        guard let port = Int(portText.split(separator: "\n").last ?? "") else { throw IMBError("adb forward: \(portText)") }
+        // IMB_SCRCPY_PORT fixes the port, for tests that tunnel it
+        let fixed = ProcessInfo.processInfo.environment["IMB_SCRCPY_PORT"]
+        let portText = try run(["forward", "tcp:\(fixed ?? "0")", "localabstract:scrcpy_\(scid)"])
+        guard let port = fixed.flatMap(Int.init) ?? Int(portText.split(separator: "\n").last ?? "") else {
+            throw IMBError("adb forward: \(portText)")
+        }
         self.port = port
         let shell = Process()
         shell.executableURL = URL(fileURLWithPath: adb)

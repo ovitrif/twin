@@ -9,6 +9,8 @@ imb: mirror a USB-connected iPhone in a QuickTime-style window
              [--wda URL]       send clicks and typing to WebDriverAgent instead
              [--wait]          stay running while the mirror is open; ending imb
                                closes it, for apps that track it (awb)
+  imb devices --serial SERIAL  open Android v iOS: this Android phone beside the
+              [--udid UDID]    iPhone, in one window; --wait as for mirror
   imb --version
 """
 
@@ -71,6 +73,44 @@ func launch(_ binary: String, _ arguments: [String]) throws -> pid_t {
     }
     done.wait()
     return try result.get()
+}
+
+/// Android v iOS's binary, found as iOS Mirror's is
+func pairBinary() -> String? {
+    guard let mirror = mirrorBinary(), mirror.contains("iOS Mirror.app") else { return nil }
+    let path = mirror.replacingOccurrences(of: "iOS Mirror.app/Contents/MacOS/iOS Mirror",
+                                           with: "Android v iOS.app/Contents/MacOS/Android v iOS")
+    return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+}
+
+func devices(_ args: [String]) {
+    var udid: String?, serial: String?
+    var wait = false
+    var passthrough: [String] = []
+    var it = args.makeIterator()
+    while let arg = it.next() {
+        switch arg {
+        case "--udid": udid = it.next()
+        case "--serial": serial = it.next()
+        case "--wait": wait = true
+        default: passthrough.append(arg)
+        }
+    }
+    guard let serial else { fail("devices needs --serial, the Android phone's adb serial") }
+    let phones: [Device]
+    do { phones = try Devices.list().filter(\.wired) } catch { fail("\(error)") }
+    guard let iphone = udid.map({ u in phones.first { $0.udid == u } }) ?? phones.first else {
+        fail("no iPhone on USB; plug one in and tap Trust on it")
+    }
+    guard let binary = pairBinary() else { fail("Android v iOS.app not found; reinstall imb") }
+    try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+    var arguments = ["--serial", serial, "--udid", iphone.udid, "--name", iphone.name, "--product", iphone.productType,
+                     "--log", stateDir.appendingPathComponent("devices.log").path] + passthrough
+    if wait { arguments += ["--parent", "\(getpid())"] }
+    let pid: pid_t
+    do { pid = try launch(binary, arguments) } catch { fail("cannot start Android v iOS: \(error.localizedDescription)") }
+    print("Showing \(serial) and \(iphone.name)")
+    if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
 }
 
 func status(json: Bool) {
@@ -136,6 +176,7 @@ switch args.first {
 case "status", "list": status(json: args.contains("--json"))
 case "mirror": mirror(Array(args.dropFirst()))
 case "android-probe": androidProbe(Array(args.dropFirst()))
+case "devices": devices(Array(args.dropFirst()))
 case "--version", "-V": print("imb 0.1.0")
 case nil, "-h", "--help", "help": print(usage)
 default: fail("unknown command \(args[0])\n\n\(usage)")

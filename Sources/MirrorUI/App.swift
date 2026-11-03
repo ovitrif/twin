@@ -17,9 +17,6 @@ import IMBCore
 //   --no-input            show the phone only
 //   --parent <pid>        quit when this process ends (imb mirror --wait)
 //   --log <file>          append diagnostics here instead of stderr
-//   --group <id>          move with the mirror of the same group (awb's Side by side)
-//   --side left|right     this mirror's side in the group (default right)
-//   --gap <points>        space between the two (default 12)
 //   --cursor touch|system the round touch pointer (default) or macOS's own
 
 public struct Options {
@@ -34,9 +31,6 @@ public struct Options {
     var noInput = false
     var parent: pid_t?
     var log: String?
-    var group: String?
-    var side = "right"
-    var gap: CGFloat = 12
     var cursor = "touch"
 
     public init(_ args: [String]) {
@@ -54,10 +48,7 @@ public struct Options {
             case "--no-input": noInput = true
             case "--parent": parent = it.next().flatMap { pid_t($0) }
             case "--log": log = it.next()
-            case "--group": group = it.next()
-            case "--side": side = it.next() ?? side
             case "--cursor": cursor = it.next() ?? cursor
-            case "--gap": gap = it.next().flatMap { Double($0) }.map { CGFloat($0) } ?? gap
             default: break
             }
         }
@@ -76,7 +67,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hid: HIDInput?
     private var videoSize = CGSize.zero
     private var parentWatch: DispatchSourceProcess?
-    private var group: MirrorGroup?
 
     public init(options: Options) { self.options = options }
 
@@ -111,10 +101,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         styler = WindowStyler(window: window, title: title, cornerRatio: Screen.cornerRatio(productType: options.product))
         window.makeKeyAndOrderFront(nil)
         styler.applyStyle()  // places the resize ring now the window is on screen
-        if let id = options.group {
-            group = MirrorGroup(window: window, group: id, side: MirrorGroup.Side(rawValue: options.side) ?? .right,
-                                gap: options.gap)
-        }
         window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -160,21 +146,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func show(_ buffer: CMSampleBuffer) {
-        if let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true),
-           CFArrayGetCount(attachments) > 0 {
-            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
-            CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
-                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
-        }
-        guard let format = CMSampleBufferGetFormatDescription(buffer) else { return }
-        let dims = CMVideoFormatDescriptionGetDimensions(format)
-        let size = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+        guard let size = view.enqueue(buffer) else { return }
         DispatchQueue.main.async {
             if size != self.videoSize { self.resize(to: size) }
         }
-        let renderer = view.display.sampleBufferRenderer
-        if renderer.status == .failed { renderer.flush() }
-        renderer.enqueue(buffer)
     }
 
     /// Fit the window to the video. On a rotation the window turns about its
@@ -187,7 +162,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         videoSize = size
         view.setStatus(nil)
         guard size.width > 0, size.height > 0, !window.styleMask.contains(.fullScreen) else { return }
-        defer { if old == .zero { group?.placeInitially() } }
         var frame = window.frame
         let turned = old != .zero && (old.width > old.height) != (size.width > size.height)
         let long = max(frame.width, frame.height)

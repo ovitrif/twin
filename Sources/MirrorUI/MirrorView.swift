@@ -40,6 +40,32 @@ final class MirrorView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var isFlipped: Bool { true }
 
+    /// Rounds this phone in a window of several
+    var cornerRadius: CGFloat = 0 {
+        didSet {
+            layer?.cornerRadius = cornerRadius
+            layer?.cornerCurve = .continuous
+            layer?.masksToBounds = cornerRadius > 0
+        }
+    }
+
+    /// Shows a frame as soon as it arrives and returns the video's size
+    @discardableResult
+    func enqueue(_ buffer: CMSampleBuffer) -> CGSize? {
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
+        let renderer = display.sampleBufferRenderer
+        if renderer.status == .failed { renderer.flush() }
+        renderer.enqueue(buffer)
+        guard let format = CMSampleBufferGetFormatDescription(buffer) else { return nil }
+        let dims = CMVideoFormatDescriptionGetDimensions(format)
+        return CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+    }
+
     func setStatus(_ text: String?) {
         status.stringValue = text ?? ""
         status.isHidden = text == nil
@@ -117,6 +143,7 @@ final class MirrorView: NSView {
         }
         commandPress = false
         pressed = true
+        window?.makeFirstResponder(self)
         currentCursor.set()
         input?.touch(.down, at: phonePoint(event))
     }
@@ -133,6 +160,9 @@ final class MirrorView: NSView {
         currentCursor.set()
         input?.touch(.up, at: phonePoint(event))
     }
+
+    /// Android's Back, as in scrcpy
+    override func rightMouseDown(with event: NSEvent) { input?.button("back") }
 
     override func scrollWheel(with event: NSEvent) {
         guard !event.modifierFlags.contains(.command) else { return }

@@ -1,0 +1,272 @@
+import AppKit
+import AVFoundation
+import IMBCore
+
+// Android v iOS: one window showing an Android phone and an iPhone side by
+// side, a gap apart and the same height. One window is one app to macOS, so
+// window managers (Raycast's Center), Mission Control and Cmd-Tab treat the
+// pair as one, and it moves as one.
+//
+//   --serial <serial>        the Android phone (adb)
+//   --udid <udid>            the iPhone
+//   --name <phone name>      the iPhone's capture device name (default: the first iPhone)
+//   --product <type>         the iPhone's productType, for its corner radius
+//   --height <points>        initial height (default 80% of the screen)
+//   --gap <points>           space between the phones (default 12)
+//   --android-title <text>   default Android
+//   --iphone-title <text>    default iPhone
+//   --cursor touch|system    the round touch pointer (default) or macOS's own
+//   --server <file>          scrcpy-server 5.0.1 (default: the one in this app)
+//   --parent <pid>           quit when this process ends (imb devices --wait)
+//   --log <file>             append diagnostics here instead of stderr
+
+public struct PairOptions {
+    var serial: String?
+    var udid: String?
+    var name: String?
+    var product = ""
+    var height: CGFloat?
+    var gap: CGFloat = 12
+    var androidTitle = "Android"
+    var iphoneTitle = "iPhone"
+    var cursor = "touch"
+    var server: String?
+    var parent: pid_t?
+    var log: String?
+
+    public init(_ args: [String]) {
+        var it = args.makeIterator()
+        while let arg = it.next() {
+            switch arg {
+            case "--serial": serial = it.next()
+            case "--udid": udid = it.next()
+            case "--name": name = it.next()
+            case "--product": product = it.next() ?? ""
+            case "--height": height = it.next().flatMap { Double($0) }.map { CGFloat($0) }
+            case "--gap": gap = it.next().flatMap { Double($0) }.map { CGFloat($0) } ?? gap
+            case "--android-title": androidTitle = it.next() ?? androidTitle
+            case "--iphone-title": iphoneTitle = it.next() ?? iphoneTitle
+            case "--cursor": cursor = it.next() ?? cursor
+            case "--server": server = it.next()
+            case "--parent": parent = it.next().flatMap { pid_t($0) }
+            case "--log": log = it.next()
+            default: break
+            }
+        }
+    }
+
+    public var isEmpty: Bool { serial == nil || udid == nil }
+}
+
+/// Lays out the two phones: the same height, a gap apart, centered.
+private final class PairView: NSView {
+    let android = MirrorView(frame: .zero)
+    let iphone = MirrorView(frame: .zero)
+    var androidAspect: CGFloat = 1080.0 / 2400
+    var iphoneAspect: CGFloat = 1260.0 / 2736
+    var gap: CGFloat = 12
+    var cornerRatio: CGFloat = 0.14
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        addSubview(android)
+        addSubview(iphone)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    /// The window width for this height
+    func width(forHeight height: CGFloat) -> CGFloat {
+        (height * (androidAspect + iphoneAspect) + gap).rounded()
+    }
+
+    override func layout() {
+        super.layout()
+        // Full screen leaves room around the pair; fit and center it
+        var height = bounds.height
+        if width(forHeight: height) > bounds.width {
+            height = (bounds.width - gap) / (androidAspect + iphoneAspect)
+        }
+        let a = (height * androidAspect).rounded(), i = (height * iphoneAspect).rounded()
+        var x = ((bounds.width - (a + gap + i)) / 2).rounded()
+        let y = ((bounds.height - height) / 2).rounded()
+        android.frame = NSRect(x: x, y: y, width: a, height: height)
+        x += a + gap
+        iphone.frame = NSRect(x: x, y: y, width: i, height: height)
+        let fullScreen = window?.styleMask.contains(.fullScreen) == true
+        for pane in [android, iphone] {
+            pane.cornerRadius = fullScreen ? 0 : (min(pane.frame.width, pane.frame.height) * cornerRatio).rounded()
+        }
+    }
+}
+
+public final class PairDelegate: NSObject, NSApplicationDelegate {
+    private let options: PairOptions
+    private var window: MirrorWindow!
+    private var pair: PairView!
+    private var styler: WindowStyler!
+    private var androidSource: ScrcpySource?
+    private var iphoneSource: CaptureSource?
+    private var hid: HIDInput?
+    private var androidInput: ScrcpyInput?
+    private var parentWatch: DispatchSourceProcess?
+    private var androidSize = CGSize.zero
+    private var iphoneSize = CGSize.zero
+
+    public init(options: PairOptions) { self.options = options }
+
+    private func log(_ text: String) { FileHandle.standardError.write(Data("imb: \(text)\n".utf8)) }
+
+    public func applicationDidFinishLaunching(_ notification: Notification) {
+        if let log = options.log { freopen(log, "a", stderr) }
+        if let parent = options.parent {
+            let watch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+            watch.setEventHandler { NSApp.terminate(nil) }
+            watch.resume()
+            parentWatch = watch
+            if kill(parent, 0) != 0 { NSApp.terminate(nil) }
+        }
+        buildMenu()
+
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let height = options.height ?? (screen.height * 0.8).rounded()
+        pair = PairView(frame: .zero)
+        pair.gap = options.gap
+        pair.cornerRatio = Screen.cornerRatio(productType: options.product)
+        let width = pair.width(forHeight: height)
+        window = MirrorWindow(contentRect: NSRect(x: screen.midX - width / 2, y: screen.midY - height / 2,
+                                                  width: width, height: height),
+                              styleMask: [.borderless, .miniaturizable], backing: .buffered, defer: false)
+        window.collectionBehavior = [.fullScreenPrimary]
+        window.isReleasedWhenClosed = false
+        window.acceptsMouseMovedEvents = true
+        window.title = "\(options.androidTitle) v \(options.iphoneTitle)"
+        pair.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        pair.autoresizingMask = [.width, .height]
+        window.contentView = pair
+        styler = WindowStyler(window: window, title: window.title, cornerRatio: pair.cornerRatio)
+        styler.panes = { [weak self] in
+            guard let self else { return [] }
+            return [Pane(frame: self.pair.android.frame, title: self.options.androidTitle),
+                    Pane(frame: self.pair.iphone.frame, title: self.options.iphoneTitle)]
+        }
+        for view in [pair.android, pair.iphone] { view.touchPointer = options.cursor != "system" }
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(pair.android)
+        styler.applyStyle()
+        NSApp.activate(ignoringOtherApps: true)
+
+        startAndroid()
+        startIPhone()
+    }
+
+    private var serverPath: String? {
+        options.server ?? Bundle.main.path(forResource: "scrcpy-server", ofType: nil)
+    }
+
+    private func startAndroid() {
+        guard let serial = options.serial, let adb = ScrcpySession.findADB(), let server = serverPath else {
+            pair.android.setStatus("adb or scrcpy-server not found")
+            return
+        }
+        let session = ScrcpySession(serial: serial, adb: adb, server: server)
+        let source = ScrcpySource(session: session)
+        source.onStatus = { [weak self] in self?.pair.android.setStatus($0) }
+        source.onFrame = { [weak self] buffer in
+            guard let self, let size = self.pair.android.enqueue(buffer) else { return }
+            DispatchQueue.main.async { if size != self.androidSize { self.resized(android: size) } }
+        }
+        let input = ScrcpyInput(session: session)
+        input.onError = { [weak self] in self?.log($0) }
+        pair.android.input = input
+        androidInput = input
+        androidSource = source
+        source.start()
+    }
+
+    private func startIPhone() {
+        let source = CaptureSource(name: options.name)
+        source.onStatus = { [weak self] text in DispatchQueue.main.async { self?.pair.iphone.setStatus(text) } }
+        source.onFrame = { [weak self] buffer in
+            guard let self, let size = self.pair.iphone.enqueue(buffer) else { return }
+            DispatchQueue.main.async { if size != self.iphoneSize { self.resized(iphone: size) } }
+        }
+        if let udid = options.udid,
+           let helper = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("imb-hid"),
+           FileManager.default.isExecutableFile(atPath: helper.path) {
+            let hid = HIDInput(helper: helper, udid: udid)
+            hid.onError = { [weak self] in self?.log($0) }
+            hid.onReady = { [weak self] in self?.log("iPhone input ready") }
+            pair.iphone.input = hid
+            self.hid = hid
+        }
+        iphoneSource = source
+        source.start()
+    }
+
+    private func resized(android size: CGSize) {
+        if androidSize == .zero { pair.android.setStatus(nil) }
+        androidSize = size
+        pair.androidAspect = size.width / size.height
+        fitWindow()
+    }
+
+    private func resized(iphone size: CGSize) {
+        if iphoneSize == .zero {
+            pair.iphone.setStatus(nil)
+            // The phone reconnects its USB once capture starts, so input waits for it
+            do { try hid?.start() } catch { log("cannot start imb-hid: \(error)") }
+        }
+        iphoneSize = size
+        pair.iphoneAspect = size.width / size.height
+        fitWindow()
+    }
+
+    /// Keeps the height and the center when a phone turns or first shows
+    private func fitWindow() {
+        guard !window.styleMask.contains(.fullScreen) else { pair.needsLayout = true; return }
+        var frame = window.frame
+        let width = pair.width(forHeight: frame.height)
+        frame.origin.x += (frame.width - width) / 2
+        frame.size.width = width
+        window.setFrame(frame, display: true)
+        pair.needsLayout = true
+        styler.applyStyle()
+    }
+
+    /// The phone the pointer last used takes Home, Lock and typing
+    private var activeInput: InputSink? {
+        (window.firstResponder as? MirrorView)?.input ?? androidInput
+    }
+
+    private func buildMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem()
+        let app = NSMenu()
+        app.addItem(withTitle: "Quit Android v iOS", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = app
+        main.addItem(appItem)
+        let deviceItem = NSMenuItem()
+        let device = NSMenu(title: "Device")
+        device.addItem(withTitle: "Home", action: #selector(home), keyEquivalent: "h").target = self
+        device.addItem(withTitle: "Lock", action: #selector(lock), keyEquivalent: "l").target = self
+        device.addItem(withTitle: "Back", action: #selector(back), keyEquivalent: "b").target = self
+        device.addItem(withTitle: "Close", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "w")
+        deviceItem.submenu = device
+        main.addItem(deviceItem)
+        NSApp.mainMenu = main
+    }
+
+    @objc private func home() { activeInput?.button("home") }
+    @objc private func lock() { activeInput?.button("lock") }
+    @objc private func back() { activeInput?.button("back") }
+
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        androidSource?.stop()
+        iphoneSource?.stop()
+        hid?.stop()
+    }
+}

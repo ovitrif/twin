@@ -54,7 +54,18 @@ private final class TitleBarView: NSView {
     }
 }
 
+/// One phone in a window that shows several (Android v iOS): its frame in
+/// the window's coordinates and its title.
+struct Pane {
+    var frame: NSRect
+    var title: String
+}
+
 final class WindowStyler: NSObject {
+    /// The phones a window shows side by side; nil for a window of one phone,
+    /// which then rounds itself
+    var panes: (() -> [Pane])?
+    private var barPane = 0
     private let window: NSWindow
     private let bar: NSPanel
     private let material = NSVisualEffectView()
@@ -152,16 +163,27 @@ final class WindowStyler: NSObject {
 
     private var isFullscreen: Bool { window.styleMask.contains(.fullScreen) }
 
-    private var cornerRadius: CGFloat {
-        isFullscreen ? 0 : (min(window.frame.width, window.frame.height) * cornerRatio).rounded()
+    /// Each phone's frame on screen with its title
+    private var paneRects: [(frame: NSRect, title: String)] {
+        guard let panes else { return [(window.frame, titleLabel.stringValue)] }
+        return panes().map { ($0.frame.offsetBy(dx: window.frame.minX, dy: window.frame.minY), $0.title) }
     }
 
-    // Fit the bar to the window's current width and corners
+    private func radius(of rect: NSRect) -> CGFloat {
+        isFullscreen ? 0 : (min(rect.width, rect.height) * cornerRatio).rounded()
+    }
+
+    private var cornerRadius: CGFloat { radius(of: paneRects.first?.frame ?? window.frame) }
+
+    // Fit the bar to the hovered phone's width and corners
     private func layoutBar() {
-        let parent = window.frame
+        let rects = paneRects
+        let pane = rects[min(barPane, rects.count - 1)]
+        let parent = pane.frame
+        if panes != nil { titleLabel.stringValue = pane.title }
         bar.setFrame(NSRect(x: parent.minX, y: parent.maxY - titleBarHeight,
                             width: parent.width, height: titleBarHeight), display: false)
-        let radius = cornerRadius
+        let radius = radius(of: parent)
         material.frame = NSRect(x: 0, y: titleBarHeight - parent.height,
                                 width: parent.width, height: parent.height)
         material.layer?.cornerRadius = radius
@@ -185,9 +207,10 @@ final class WindowStyler: NSObject {
         window.hasShadow = true
         guard let content = window.contentView else { return }
         content.wantsLayer = true
-        content.layer?.cornerRadius = cornerRadius
+        // A window of several phones leaves the rounding to each
+        content.layer?.cornerRadius = panes == nil ? cornerRadius : 0
         content.layer?.cornerCurve = .continuous
-        content.layer?.masksToBounds = true
+        content.layer?.masksToBounds = panes == nil
         // The shadow follows the window's alpha; recompute it for the new corners
         window.invalidateShadow()
         ring.update(radius: cornerRadius, shown: window.isVisible && !isFullscreen && !window.isMiniaturized)
@@ -226,7 +249,13 @@ final class WindowStyler: NSObject {
             // Keep the bar while it drags the window
             let dragging = barShown && (NSEvent.pressedMouseButtons & 1) != 0
                 && (bar.contentView as? TitleBarView)?.dragging == true
-            hovered = (onTop && window.frame.contains(mouse)) || dragging || forceBar
+            let over = paneRects.firstIndex { $0.frame.contains(mouse) }
+            hovered = (onTop && over != nil) || dragging || forceBar
+            // The bar moves to the phone under the pointer
+            if let over, over != barPane, !dragging {
+                barPane = over
+                if barShown { layoutBar() }
+            }
         }
         if barShown && bar.level != window.level { bar.level = window.level }
         if hovered && !barShown { showBar() } else if !hovered && barShown { hideBar() }

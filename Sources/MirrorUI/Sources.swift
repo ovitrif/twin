@@ -36,6 +36,7 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized: break
         case .notDetermined:
+            onStatus?("Allow camera access to see the iPhone")
             AVCaptureDevice.requestAccess(for: .video) { _ in DispatchQueue.main.async { self.start() } }
             return
         default:
