@@ -9,7 +9,9 @@ bin=$(swift build -c release --show-bin-path)
 version=$("$bin/imb" --version | awk '{print $2}')
 app="$out/iOS Mirror.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+# Made with scripts/make-icon.swift iphone
+cp "assets/iOS Mirror.icns" "$app/Contents/Resources/AppIcon.icns"
 cp "$bin/IOSMirror" "$app/Contents/MacOS/iOS Mirror"
 (cd hid && cargo build --release --quiet)
 cp hid/target/release/imb-hid "$app/Contents/MacOS/imb-hid"
@@ -22,6 +24,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>iOS Mirror</string>
   <key>CFBundleIdentifier</key><string>tech.masivo.imb.mirror</string>
   <key>CFBundleName</key><string>iOS Mirror</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
