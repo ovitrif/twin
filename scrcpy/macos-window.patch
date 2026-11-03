@@ -88,7 +88,7 @@ diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 --- a/app/src/sys/macos/window.m
 +++ b/app/src/sys/macos/window.m
-@@ -0,0 +1,942 @@
+@@ -0,0 +1,796 @@
 +#include "sys/macos/window.h"
 +
 +#import <AppKit/AppKit.h>
@@ -371,149 +371,6 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    return cursor;
 +}
 +
-+// Mirrors opened side by side (awb's Side by side setting) move as one: when
-+// one moves or changes height, the other follows, a gap apart and the same
-+// height. The mirrors are separate apps (this one and imb's iOS Mirror), so
-+// they tell each other through distributed notifications. awb passes the
-+// group in AWB_GROUP, this mirror's side in AWB_SIDE and the gap in AWB_GAP.
-+#define SC_GROUP_MOVED @"tech.masivo.mirror.group.moved"
-+
-+@interface SCMirrorGroup : NSObject
-+- (instancetype)initWithWindow:(NSWindow *)window;
-+- (void)placeInitially;
-+@end
-+
-+@implementation SCMirrorGroup {
-+    __weak NSWindow *window;
-+    NSString *group;
-+    NSString *side;
-+    CGFloat gap;
-+    NSString *ident;
-+    BOOL following;
-+    BOOL placed;
-+    NSRect partner;
-+}
-+
-+- (instancetype)initWithWindow:(NSWindow *)w {
-+    const char *env = getenv("AWB_GROUP");
-+    if (!env || !*env) {
-+        return nil;
-+    }
-+    self = [super init];
-+    if (!self) {
-+        return nil;
-+    }
-+    window = w;
-+    group = [NSString stringWithUTF8String:env];
-+    const char *side_env = getenv("AWB_SIDE");
-+    side = side_env && !strcmp(side_env, "right") ? @"right" : @"left";
-+    const char *gap_env = getenv("AWB_GAP");
-+    gap = gap_env ? atof(gap_env) : 12;
-+    ident = [NSUUID UUID].UUIDString;
-+    [[NSDistributedNotificationCenter defaultCenter]
-+        addObserver:self selector:@selector(partnerMoved:)
-+               name:SC_GROUP_MOVED object:group
-+ suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
-+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-+    for (NSNotificationName name in @[NSWindowDidMoveNotification,
-+                                       NSWindowDidResizeNotification]) {
-+        [center addObserver:self selector:@selector(announce)
-+                       name:name object:w];
-+    }
-+    return self;
-+}
-+
-+// Before the partner speaks, the left mirror makes room for it so the pair
-+// starts centered; then each announces where it is
-+- (void)placeInitially {
-+    NSWindow *w = window;
-+    if (placed || !w.screen) {
-+        return;
-+    }
-+    placed = YES;
-+    NSRect screen = w.screen.visibleFrame;
-+    NSRect frame = w.frame;
-+    // The partner is about as wide as a phone this tall
-+    CGFloat pair = frame.size.width + gap + frame.size.height * 0.46;
-+    frame.origin.x = [side isEqualToString:@"left"]
-+        ? NSMidX(screen) - pair / 2
-+        : NSMidX(screen) + pair / 2 - frame.size.width;
-+    following = YES;
-+    [w setFrameOrigin:frame.origin];
-+    following = NO;
-+    [self announce];
-+}
-+
-+// A window manager's Center (Raycast's) moves only one mirror; when one lands
-+// centered on its screen, the pair is centered instead
-+- (BOOL)centerPairIfCentered {
-+    NSWindow *w = window;
-+    if (NSIsEmptyRect(partner) || !w.screen) {
-+        return NO;
-+    }
-+    NSRect screen = w.screen.visibleFrame;
-+    NSRect frame = w.frame;
-+    if (fabs(NSMidX(frame) - NSMidX(screen)) >= 1.5) {
-+        return NO;
-+    }
-+    CGFloat pair = frame.size.width + gap + partner.size.width;
-+    CGFloat x = [side isEqualToString:@"left"]
-+        ? NSMidX(screen) - pair / 2
-+        : NSMidX(screen) - pair / 2 + partner.size.width + gap;
-+    if (fabs(x - frame.origin.x) < 1) {
-+        return NO;
-+    }
-+    [w setFrameOrigin:NSMakePoint(round(x), frame.origin.y)];  // announces again
-+    return YES;
-+}
-+
-+- (void)announce {
-+    NSWindow *w = window;
-+    if (following || !w.visible) {
-+        return;
-+    }
-+    if ([self centerPairIfCentered]) {
-+        return;
-+    }
-+    NSRect f = w.frame;
-+    [[NSDistributedNotificationCenter defaultCenter]
-+        postNotificationName:SC_GROUP_MOVED object:group
-+                    userInfo:@{@"id": ident, @"side": side,
-+                               @"x": @(f.origin.x), @"y": @(f.origin.y),
-+                               @"w": @(f.size.width), @"h": @(f.size.height)}
-+          deliverImmediately:YES];
-+}
-+
-+- (void)partnerMoved:(NSNotification *)note {
-+    NSWindow *w = window;
-+    NSDictionary *info = note.userInfo;
-+    if (!w || [info[@"id"] isEqual:ident] || [info[@"side"] isEqual:side]
-+            || (w.styleMask & NSWindowStyleMaskFullScreen)) {
-+        return;
-+    }
-+    CGFloat px = [info[@"x"] doubleValue], py = [info[@"y"] doubleValue];
-+    CGFloat pw = [info[@"w"] doubleValue], ph = [info[@"h"] doubleValue];
-+    if (ph <= 0) {
-+        return;
-+    }
-+    partner = NSMakeRect(px, py, pw, ph);
-+    NSRect frame = w.frame;
-+    // Same height, keeping this phone's shape, tops aligned
-+    CGFloat width = round(frame.size.width * ph / MAX(frame.size.height, 1));
-+    frame.size = NSMakeSize(width, ph);
-+    frame.origin.y = py;
-+    frame.origin.x = [side isEqualToString:@"right"] ? px + pw + gap
-+                                                    : px - gap - width;
-+    if (NSEqualRects(frame, w.frame)) {
-+        return;
-+    }
-+    following = YES;
-+    [w setFrame:frame display:YES];
-+    following = NO;
-+}
-+
-+@end
-+
 +@interface SCWindowStyler : NSObject
 +@end
 +
@@ -535,7 +392,6 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    SDL_Cursor *touch_cursor;
 +    SDL_Cursor *pressed_cursor;
 +    SDL_Cursor *move_cursor;
-+    SCMirrorGroup *mirror_group;
 +}
 +
 +- (instancetype)initWithSDLWindow:(SDL_Window *)sdl
@@ -559,7 +415,6 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    if (touch_cursor) {
 +        SDL_SetCursor(touch_cursor);
 +    }
-+    mirror_group = [[SCMirrorGroup alloc] initWithWindow:window];
 +
 +    [self applyStyle];
 +
@@ -842,7 +697,6 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    // After scrcpy's own resize, which follows this call
 +    dispatch_async(dispatch_get_main_queue(), ^{
 +        [self fitAspect];
-+        [self->mirror_group placeInitially];
 +    });
 +}
 +

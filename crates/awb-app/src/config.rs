@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use awb_core::imb::PairOptions;
 use awb_core::scrcpy::ScrcpyOptions;
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +27,8 @@ pub struct Settings {
     pub borderless: bool,
     /// Auto-start mirroring when a physical phone connects (never emulators).
     pub auto_mirror: bool,
-    /// Mirroring a physical phone also opens the other platform's, side by
-    /// side `gap` points apart, and the two move together.
+    /// Mirroring a physical phone with an iPhone also on USB opens both in
+    /// one window, Android v iOS, `gap` points apart.
     pub side_by_side: bool,
     pub gap: u32,
     /// A round touch pointer over the phones instead of macOS's.
@@ -60,6 +61,16 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn pair_options(&self) -> PairOptions {
+        PairOptions {
+            height: self.window_height,
+            gap: self.gap,
+            android_title: self.window_title.clone(),
+            iphone_title: self.iphone_title.clone(),
+            touch_pointer: self.touch_pointer,
+        }
+    }
+
     pub fn scrcpy_options(&self) -> ScrcpyOptions {
         ScrcpyOptions {
             borderless: self.borderless,
@@ -67,7 +78,6 @@ impl Settings {
             window_title: self.window_title.clone(),
             window_width: self.window_width,
             window_height: self.window_height,
-            side_by_side_gap: self.side_by_side.then_some(self.gap),
             touch_pointer: self.touch_pointer,
             ..ScrcpyOptions::default()
         }

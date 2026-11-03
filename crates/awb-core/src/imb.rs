@@ -9,9 +9,6 @@ use serde::Deserialize;
 
 use crate::command_path::resolve_program;
 
-/// The group the Android and iPhone mirrors share when side by side.
-pub const MIRROR_GROUP: &str = "awb";
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Iphone {
     pub udid: String,
@@ -53,44 +50,65 @@ impl Imb {
     /// The mirror for this iPhone; imb stays running while it is open and the
     /// mirror quits when imb ends, so killing the child closes the window.
     /// `height` is the window height in points, as for scrcpy; 0 or an empty
-    /// title leaves imb's default. With `side_by_side_gap` the mirror sits
-    /// right of the Android one and moves with it; `touch_pointer` off keeps
-    /// macOS's pointer.
+    /// title leaves imb's default; `touch_pointer` off keeps macOS's pointer.
     pub fn spawn_mirror(
         &self,
         udid: &str,
         height: u32,
         title: &str,
-        side_by_side_gap: Option<u32>,
         touch_pointer: bool,
     ) -> Result<Child> {
         let mut command = Command::new(&self.path);
         command.args(["mirror", "--wait", "--udid", udid]);
-        if height > 0 {
-            command.args(["--height", &height.to_string()]);
-        }
+        add_window_args(&mut command, height, touch_pointer);
         if !title.is_empty() {
             command.args(["--title", title]);
         }
-        if let Some(gap) = side_by_side_gap {
-            command.args([
-                "--group",
-                MIRROR_GROUP,
-                "--side",
-                "right",
-                "--gap",
-                &gap.to_string(),
-            ]);
+        Self::spawn(command)
+    }
+
+    /// Android v iOS: this Android phone and this iPhone side by side in one
+    /// window, `gap` points apart, through imb's own scrcpy client.
+    pub fn spawn_pair(&self, serial: &str, udid: &str, options: &PairOptions) -> Result<Child> {
+        let mut command = Command::new(&self.path);
+        command.args(["devices", "--wait", "--serial", serial, "--udid", udid]);
+        command.args(["--gap", &options.gap.to_string()]);
+        add_window_args(&mut command, options.height, options.touch_pointer);
+        if !options.android_title.is_empty() {
+            command.args(["--android-title", &options.android_title]);
         }
-        if !touch_pointer {
-            command.args(["--cursor", "system"]);
+        if !options.iphone_title.is_empty() {
+            command.args(["--iphone-title", &options.iphone_title]);
         }
+        Self::spawn(command)
+    }
+
+    fn spawn(mut command: Command) -> Result<Child> {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context("starting imb mirror")
+            .context("starting imb")
+    }
+}
+
+/// The window of Android v iOS, as awb's Settings set it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairOptions {
+    pub height: u32,
+    pub gap: u32,
+    pub android_title: String,
+    pub iphone_title: String,
+    pub touch_pointer: bool,
+}
+
+fn add_window_args(command: &mut Command, height: u32, touch_pointer: bool) {
+    if height > 0 {
+        command.args(["--height", &height.to_string()]);
+    }
+    if !touch_pointer {
+        command.args(["--cursor", "system"]);
     }
 }
 

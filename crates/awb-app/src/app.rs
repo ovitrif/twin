@@ -1677,13 +1677,19 @@ impl App {
     }
 
     fn devices_tab(&mut self, ui: &mut Ui, ctx: &Context) {
-        let (snapshot, mirrors, starting_avds, deleting_avds) = {
+        let (snapshot, (mirrors, pair_keys), starting_avds, deleting_avds) = {
             let state = self.shared.lock().unwrap();
             let mut mirrors = state.mirrors.keys().cloned().collect::<Vec<_>>();
             mirrors.extend(state.starting_mirrors.iter().cloned());
+            let pair_keys = state
+                .pair
+                .as_ref()
+                .map(|pair| pair.keys.to_vec())
+                .unwrap_or_default();
+            mirrors.extend(pair_keys.iter().cloned());
             (
                 state.snapshot.clone(),
-                mirrors,
+                (mirrors, pair_keys),
                 state.starting_avds.clone(),
                 state.deleting_avds.clone(),
             )
@@ -1772,8 +1778,24 @@ impl App {
                     },
                 };
                 if list_row_with(ui, &row, &[action]).is_some() {
-                    if mirroring {
+                    if pair_keys.contains(&device.mirror_key) {
+                        backend::stop_pair(shared);
+                    } else if mirroring {
                         backend::stop_mirror(shared, &device.mirror_key);
+                    } else if settings.side_by_side
+                        && let Some(iphone) = snapshot
+                            .iphones
+                            .iter()
+                            .find(|iphone| !mirrors.contains(&backend::iphone_mirror_key(iphone)))
+                    {
+                        // Side by side: this phone and the first free iPhone in one window
+                        backend::start_pair(
+                            shared.clone(),
+                            ctx.clone(),
+                            device.clone(),
+                            iphone.clone(),
+                            settings.pair_options(),
+                        );
                     } else {
                         backend::start_mirror(
                             shared.clone(),
@@ -1781,22 +1803,6 @@ impl App {
                             device.clone(),
                             settings.scrcpy_options(),
                         );
-                        // Side by side: the first iPhone not mirrored joins it
-                        if settings.side_by_side
-                            && let Some(iphone) = snapshot.iphones.iter().find(|iphone| {
-                                !mirrors.contains(&backend::iphone_mirror_key(iphone))
-                            })
-                        {
-                            backend::start_iphone_mirror(
-                                shared.clone(),
-                                ctx.clone(),
-                                iphone.clone(),
-                                settings.window_height,
-                                &settings.iphone_title,
-                                Some(settings.gap),
-                                settings.touch_pointer,
-                            );
-                        }
                     }
                 }
             }
@@ -1826,8 +1832,25 @@ impl App {
                     },
                 };
                 if list_row_with(ui, &row, &[action]).is_some() {
-                    if mirroring {
+                    if pair_keys.contains(&key) {
+                        backend::stop_pair(shared);
+                    } else if mirroring {
                         backend::stop_mirror(shared, &key);
+                    } else if settings.side_by_side
+                        && let Some(device) = snapshot.devices.iter().find(|device| {
+                            device.ready
+                                && !device.is_emulator
+                                && !mirrors.contains(&device.mirror_key)
+                        })
+                    {
+                        // Side by side: the first free Android phone and this one in one window
+                        backend::start_pair(
+                            shared.clone(),
+                            ctx.clone(),
+                            device.clone(),
+                            iphone.clone(),
+                            settings.pair_options(),
+                        );
                     } else {
                         backend::start_iphone_mirror(
                             shared.clone(),
@@ -1835,26 +1858,8 @@ impl App {
                             iphone.clone(),
                             settings.window_height,
                             &settings.iphone_title,
-                            settings.side_by_side.then_some(settings.gap),
                             settings.touch_pointer,
                         );
-                        // Side by side: the first ready Android phone not
-                        // mirrored joins it
-                        if settings.side_by_side
-                            && scrcpy_ok
-                            && let Some(device) = snapshot.devices.iter().find(|device| {
-                                device.ready
-                                    && !device.is_emulator
-                                    && !mirrors.contains(&device.mirror_key)
-                            })
-                        {
-                            backend::start_mirror(
-                                shared.clone(),
-                                ctx.clone(),
-                                device.clone(),
-                                settings.scrcpy_options(),
-                            );
-                        }
                     }
                 }
             }

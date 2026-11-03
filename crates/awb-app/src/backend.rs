@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use awb_core::adb::{self, Adb};
 use awb_core::emulator::{self, Emulator};
-use awb_core::imb::{Imb, Iphone};
+use awb_core::imb::{Imb, Iphone, PairOptions};
 use awb_core::pairing_flow::{
     self, AlreadyConnectedChoice, PairingEvent, PairingFlowDelegate, PairingProgressKind,
 };
@@ -96,6 +96,12 @@ pub enum PairingPhase {
     },
 }
 
+pub struct PairMirror {
+    /// The two phones' mirror keys, so both rows read as mirroring
+    pub keys: [String; 2],
+    child: Child,
+}
+
 pub struct PairingSession {
     pub phase: PairingPhase,
     pub cancel: Arc<AtomicBool>,
@@ -110,6 +116,8 @@ pub struct Shared {
     pub logged_tool_warnings: HashSet<String>,
     pub pairing: Option<PairingSession>,
     pub mirrors: HashMap<String, Child>,
+    /// Android v iOS: one window for an Android phone and an iPhone
+    pub pair: Option<PairMirror>,
     pub starting_mirrors: HashSet<String>,
     pub starting_avds: HashSet<String>,
     pub deleting_avds: HashSet<String>,
@@ -467,6 +475,13 @@ impl Shared {
             self.mirrors.remove(&mirror_key);
             self.log(format!("Mirror of {mirror_key} ended"));
         }
+
+        if let Some(pair) = self.pair.as_mut()
+            && let Ok(Some(_)) = pair.child.try_wait()
+        {
+            self.pair = None;
+            self.log("Android v iOS ended");
+        }
     }
 }
 
@@ -550,7 +565,6 @@ pub fn start_iphone_mirror(
     iphone: Iphone,
     height: u32,
     title: &str,
-    side_by_side_gap: Option<u32>,
     touch_pointer: bool,
 ) {
     let mirror_key = iphone_mirror_key(&iphone);
@@ -559,9 +573,9 @@ pub fn start_iphone_mirror(
         state.log(format!("Already mirroring {}", iphone.name));
         return;
     }
-    match Imb::resolve().and_then(|imb| {
-        imb.spawn_mirror(&iphone.udid, height, title, side_by_side_gap, touch_pointer)
-    }) {
+    match Imb::resolve()
+        .and_then(|imb| imb.spawn_mirror(&iphone.udid, height, title, touch_pointer))
+    {
         Ok(mut child) => {
             state.log(format!("Mirroring {} (pid {})", iphone.name, child.id()));
             if let Some(out) = child.stdout.take() {
@@ -576,6 +590,53 @@ pub fn start_iphone_mirror(
     }
     drop(state);
     ctx.request_repaint();
+}
+
+/// Opens Android v iOS for this Android phone and this iPhone.
+pub fn start_pair(
+    shared: Arc<Mutex<Shared>>,
+    ctx: Context,
+    device: DeviceInfo,
+    iphone: Iphone,
+    options: PairOptions,
+) {
+    let mut state = shared.lock().unwrap();
+    if state.pair.is_some() {
+        state.log("Android v iOS is already open");
+        return;
+    }
+    match Imb::resolve().and_then(|imb| imb.spawn_pair(&device.serial, &iphone.udid, &options)) {
+        Ok(mut child) => {
+            state.log(format!(
+                "Showing {} and {} side by side (pid {})",
+                device.name,
+                iphone.name,
+                child.id()
+            ));
+            if let Some(out) = child.stdout.take() {
+                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
+            }
+            if let Some(err) = child.stderr.take() {
+                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
+            }
+            state.pair = Some(PairMirror {
+                keys: [device.mirror_key.clone(), iphone_mirror_key(&iphone)],
+                child,
+            });
+        }
+        Err(error) => state.log(format!("Android v iOS failed: {error:#}")),
+    }
+    drop(state);
+    ctx.request_repaint();
+}
+
+pub fn stop_pair(shared: &Arc<Mutex<Shared>>) {
+    let mut state = shared.lock().unwrap();
+    if let Some(mut pair) = state.pair.take() {
+        let _ = pair.child.kill();
+        let _ = pair.child.wait();
+        state.log("Closed Android v iOS");
+    }
 }
 
 pub fn start_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String) {
@@ -731,6 +792,10 @@ pub fn stop_all_mirrors(shared: &Arc<Mutex<Shared>>) {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+    if let Some(mut pair) = state.pair.take() {
+        let _ = pair.child.kill();
+        let _ = pair.child.wait();
     }
     state.starting_mirrors.clear();
 }

@@ -226,12 +226,6 @@ impl Scrcpy {
         let mut command = Command::new(&self.path);
         command.args(default_args(serial, options));
         self.configure_adb_env(&mut command);
-        if let Some(gap) = options.side_by_side_gap {
-            command
-                .env("AWB_GROUP", crate::imb::MIRROR_GROUP)
-                .env("AWB_SIDE", "left")
-                .env("AWB_GAP", gap.to_string());
-        }
         if !options.touch_pointer {
             command.env("AWB_CURSOR", "system");
         }
@@ -325,9 +319,6 @@ pub struct ScrcpyOptions {
     pub window_title: String,
     pub window_width: u32,
     pub window_height: u32,
-    /// Side by side with the iPhone mirror, this far apart: the patched
-    /// window then moves with it (AWB_GROUP, AWB_SIDE, AWB_GAP).
-    pub side_by_side_gap: Option<u32>,
     /// The round touch pointer over the phone; off keeps macOS's (AWB_CURSOR).
     pub touch_pointer: bool,
 }
@@ -342,7 +333,6 @@ impl Default for ScrcpyOptions {
             window_title: "Android".to_string(),
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
-            side_by_side_gap: None,
             touch_pointer: true,
         }
     }
@@ -679,7 +669,6 @@ mod tests {
             window_title: String::new(),
             window_width: 0,
             window_height: 0,
-            side_by_side_gap: None,
             touch_pointer: true,
         });
 
