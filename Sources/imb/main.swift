@@ -7,7 +7,8 @@ imb: mirror a USB-connected iPhone in a QuickTime-style window
   imb status [--json]          list iPhones on USB and whether each is mirrored
   imb mirror [--udid UDID]     open the mirror (the first iPhone without --udid)
              [--wda URL]       send clicks and typing to WebDriverAgent instead
-             [--exec]          become the mirror process, for apps that track it (awb)
+             [--wait]          stay running while the mirror is open; ending imb
+                               closes it, for apps that track it (awb)
   imb --version
 """
 
@@ -47,6 +48,31 @@ func mirrorBinary() -> String? {
     return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
 }
 
+/// Starts iOS Mirror through LaunchServices when it is an app bundle, so macOS
+/// asks camera access for iOS Mirror itself rather than for whoever ran imb.
+func launch(_ binary: String, _ arguments: [String]) throws -> pid_t {
+    let app = URL(fileURLWithPath: binary).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    guard app.pathExtension == "app" else {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = arguments
+        try process.run()
+        return process.processIdentifier
+    }
+    let config = NSWorkspace.OpenConfiguration()
+    config.arguments = arguments
+    config.createsNewApplicationInstance = true
+    config.activates = true
+    let done = DispatchSemaphore(value: 0)
+    var result: Result<pid_t, Error> = .failure(IMBError("LaunchServices did not answer"))
+    NSWorkspace.shared.openApplication(at: app, configuration: config) { running, error in
+        if let running { result = .success(running.processIdentifier) } else if let error { result = .failure(error) }
+        done.signal()
+    }
+    done.wait()
+    return try result.get()
+}
+
 func status(json: Bool) {
     let devices: [Device]
     do { devices = try Devices.list().filter(\.wired) } catch { fail("\(error)") }
@@ -67,13 +93,13 @@ func status(json: Bool) {
 
 func mirror(_ args: [String]) {
     var udid: String?
-    var exec = false
+    var wait = false
     var passthrough: [String] = []
     var it = args.makeIterator()
     while let arg = it.next() {
         switch arg {
         case "--udid": udid = it.next()
-        case "--exec": exec = true
+        case "--wait": wait = true
         default: passthrough.append(arg)
         }
     }
@@ -85,27 +111,23 @@ func mirror(_ args: [String]) {
     if let pid = mirrorPID(device.udid) {
         NSRunningApplication(processIdentifier: pid)?.activate()
         print("Already mirroring \(device.name)")
+        if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
         return
     }
     guard let binary = mirrorBinary() else { fail("iOS Mirror.app not found; reinstall imb") }
-    let arguments = ["--name", device.name, "--udid", device.udid, "--product", device.productType] + passthrough
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
-    if exec {
-        // The caller's child becomes the mirror, so stopping it closes the mirror
-        try? "\(getpid())\n".write(to: pidFile(device.udid), atomically: true, encoding: .utf8)
-        let argv = ([binary] + arguments).map { strdup($0) } + [nil]
-        execv(binary, argv)
-        fail("cannot start iOS Mirror: \(String(cString: strerror(errno)))")
-    }
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: binary)
-    process.arguments = arguments
-    process.standardOutput = FileHandle.nullDevice
     let log = stateDir.appendingPathComponent("mirror-\(device.udid).log")
-    FileManager.default.createFile(atPath: log.path, contents: nil)
-    process.standardError = try? FileHandle(forWritingTo: log)
-    do { try process.run() } catch { fail("cannot start iOS Mirror: \(error.localizedDescription)") }
-    try? "\(process.processIdentifier)\n".write(to: pidFile(device.udid), atomically: true, encoding: .utf8)
+    var arguments = ["--name", device.name, "--udid", device.udid, "--product", device.productType,
+                     "--log", log.path] + passthrough
+    if wait { arguments += ["--parent", "\(getpid())"] }
+    let pid: pid_t
+    do { pid = try launch(binary, arguments) } catch { fail("cannot start iOS Mirror: \(error.localizedDescription)") }
+    try? "\(pid)\n".write(to: pidFile(device.udid), atomically: true, encoding: .utf8)
+    if wait {
+        print("Mirroring \(device.name)")
+        while kill(pid, 0) == 0 { usleep(250_000) }
+        return
+    }
     print("Mirroring \(device.name)")
 }
 

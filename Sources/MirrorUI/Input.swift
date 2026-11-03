@@ -21,6 +21,7 @@ final class HIDInput: InputSink {
     private let process = Process()
     private let stdin = Pipe()
     private var scrollPoint: CGPoint?
+    private var scrollPending = CGVector.zero
     private var scrollTimer: Timer?
 
     init(helper: URL, udid: String) {
@@ -40,7 +41,16 @@ final class HIDInput: InputSink {
     }
 
     func start() throws { try process.run() }
-    func stop() { if process.isRunning { process.terminate() } }
+
+    /// Closing stdin lets imb-hid end the media stream, which the phone needs
+    /// to accept the next session; terminate only if it hangs
+    func stop() {
+        guard process.isRunning else { return }
+        try? stdin.fileHandleForWriting.close()
+        let deadline = Date().addingTimeInterval(0.5)
+        while process.isRunning && Date() < deadline { usleep(20_000) }
+        if process.isRunning { process.terminate() }
+    }
 
     private func send(_ command: [String: Any]) {
         guard process.isRunning, let data = try? JSONSerialization.data(withJSONObject: command) else { return }
@@ -52,23 +62,36 @@ final class HIDInput: InputSink {
     }
 
     /// A scroll is a finger that lands where the pointer is, follows the
-    /// scroll and lifts once it pauses
+    /// scroll and lifts once it pauses. It lands only once the scroll has
+    /// travelled 1.5% of the screen, so a nudge never reads as a tap.
     func scroll(at point: CGPoint, by delta: CGVector) {
+        scrollTimer?.invalidate()
+        scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.scrollPending = .zero
+            guard let p = self.scrollPoint else { return }
+            self.scrollPoint = nil
+            self.touch(.up, at: p)
+        }
         if scrollPoint == nil {
+            scrollPending.dx += delta.dx
+            scrollPending.dy += delta.dy
+            guard hypot(scrollPending.dx, scrollPending.dy) >= 0.015 else { return }
             scrollPoint = point
             touch(.down, at: point)
+            moveScroll(by: scrollPending)
+            scrollPending = .zero
+        } else {
+            moveScroll(by: delta)
         }
-        var p = scrollPoint!
+    }
+
+    private func moveScroll(by delta: CGVector) {
+        guard var p = scrollPoint else { return }
         p.x = min(max(p.x + delta.dx, 0), 1)
         p.y = min(max(p.y + delta.dy, 0), 1)
         scrollPoint = p
         touch(.move, at: p)
-        scrollTimer?.invalidate()
-        scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak self] _ in
-            guard let self, let p = self.scrollPoint else { return }
-            self.scrollPoint = nil
-            self.touch(.up, at: p)
-        }
     }
 
     func type(_ text: String) { send(["text": text]) }

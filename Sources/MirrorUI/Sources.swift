@@ -33,6 +33,15 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
     }
 
     func start() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: break
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { _ in DispatchQueue.main.async { self.start() } }
+            return
+        default:
+            onStatus?("Camera access is off for iOS Mirror.\nTurn it on in System Settings › Privacy & Security › Camera.")
+            return
+        }
         Self.allowScreenCaptureDevices()
         onStatus?("Waiting for \(name ?? "the iPhone")…")
         // The phone shows up a moment after the property is set, and again
@@ -48,7 +57,9 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
             deviceTypes: [.external], mediaType: .muxed, position: .unspecified).devices
             .filter { $0.modelID == "iOS Device" }
         guard let name else { return devices.first }
-        return devices.first { $0.localizedName == name }
+        // devicectl and the capture device may spell the name apart; with one
+        // iPhone plugged in it is that one
+        return devices.first { $0.localizedName == name } ?? (devices.count == 1 ? devices.first : nil)
     }
 
     private func attach() {

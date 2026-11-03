@@ -30,6 +30,7 @@ final class MirrorView: NSView {
 
         status.textColor = .secondaryLabelColor
         status.alignment = .center
+        status.maximumNumberOfLines = 0
         status.font = .systemFont(ofSize: 13)
         status.translatesAutoresizingMaskIntoConstraints = false
         addSubview(status)

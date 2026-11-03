@@ -15,6 +15,8 @@ import IMBCore
 //   --wda <url>           send input to WebDriverAgent at this URL instead of
 //                         imb-hid, for phones before iOS 27
 //   --no-input            show the phone only
+//   --parent <pid>        quit when this process ends (imb mirror --wait)
+//   --log <file>          append diagnostics here instead of stderr
 
 public struct Options {
     var name: String?
@@ -26,6 +28,8 @@ public struct Options {
     var mjpeg: String?
     var wda: String?
     var noInput = false
+    var parent: pid_t?
+    var log: String?
 
     public init(_ args: [String]) {
         var it = args.makeIterator()
@@ -40,6 +44,8 @@ public struct Options {
             case "--mjpeg": mjpeg = it.next()
             case "--wda": wda = it.next()
             case "--no-input": noInput = true
+            case "--parent": parent = it.next().flatMap { pid_t($0) }
+            case "--log": log = it.next()
             default: break
             }
         }
@@ -57,10 +63,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var input: InputSink?
     private var hid: HIDInput?
     private var videoSize = CGSize.zero
+    private var parentWatch: DispatchSourceProcess?
 
     public init(options: Options) { self.options = options }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        if let log = options.log { freopen(log, "a", stderr) }
+        if let parent = options.parent {
+            let watch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+            watch.setEventHandler { NSApp.terminate(nil) }
+            watch.resume()
+            parentWatch = watch
+            if kill(parent, 0) != 0 { NSApp.terminate(nil) }
+        }
         buildMenu()
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let height = options.height ?? (screen.height * 0.8).rounded()

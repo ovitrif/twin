@@ -59,3 +59,24 @@ private func key(_ chars: String, code: UInt16, flags: NSEvent.ModifierFlags = [
     view.keyDown(with: key("a", code: 0, flags: .command))
     #expect(recorder.typed == ["a", "\u{8}", "\n"])
 }
+
+/// imb-hid stand-in that records the JSON lines HIDInput writes
+@MainActor @Test func aNudgeOfTheTrackpadNeverTapsThePhone() throws {
+    let script = FileManager.default.temporaryDirectory.appendingPathComponent("imb-hid-\(UUID()).sh")
+    let log = script.appendingPathExtension("log")
+    try "#!/bin/sh\necho ready\ncat > '\(log.path)'\n".write(to: script, atomically: true, encoding: .utf8)
+    chmod(script.path, 0o755)
+    let hid = HIDInput(helper: script, udid: "TEST")
+    try hid.start()
+    hid.scroll(at: CGPoint(x: 0.5, y: 0.5), by: CGVector(dx: 0, dy: 0.005))
+    hid.scroll(at: CGPoint(x: 0.5, y: 0.5), by: CGVector(dx: 0, dy: 0.005))
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))  // the scroll pauses
+    hid.scroll(at: CGPoint(x: 0.5, y: 0.5), by: CGVector(dx: 0, dy: 0.02))
+    hid.scroll(at: CGPoint(x: 0.5, y: 0.5), by: CGVector(dx: 0, dy: 0.02))
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    hid.stop()
+    let phases = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+        .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        .compactMap { $0["touch"] as? String }
+    #expect(phases == ["down", "move", "move", "up"])
+}
