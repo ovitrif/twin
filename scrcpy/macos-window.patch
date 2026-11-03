@@ -64,7 +64,7 @@ diff -ruN a/app/src/screen.c b/app/src/screen.c
 diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 --- a/app/src/sys/macos/window.h
 +++ b/app/src/sys/macos/window.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,21 @@
 +#ifndef SC_MACOS_WINDOW_H
 +#define SC_MACOS_WINDOW_H
 +
@@ -74,7 +74,8 @@ diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 +
 +// Style a borderless window like QuickTime's iPhone mirror: rounded corners,
 +// a shadow, and a title bar with traffic lights over the top of the screen
-+// while the pointer is over the window. Dragging that bar, or Cmd + dragging
++// while Cmd is held over the window (and briefly when it opens), so the top
++// edge stays the phone's for pull-downs. Dragging that bar, or Cmd + dragging
 +// anywhere, moves the window; with Cmd held, no mouse event reaches the device.
 +void
 +sc_macos_window_init(SDL_Window *window, const char *title);
@@ -88,7 +89,7 @@ diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 --- a/app/src/sys/macos/window.m
 +++ b/app/src/sys/macos/window.m
-@@ -0,0 +1,819 @@
+@@ -0,0 +1,830 @@
 +#include "sys/macos/window.h"
 +
 +#import <AppKit/AppKit.h>
@@ -407,6 +408,8 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    NSTimer *timer;
 +    id mouse_monitor;
 +    BOOL bar_shown;
++    // The bar shows for a moment when the window opens, so it can be found
++    NSDate *intro_until;
 +    // Buttons pressed with Cmd, kept from the device until released
 +    NSUInteger cmd_buttons;
 +    NSPanel *ring;
@@ -809,7 +812,16 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +        // Keep the bar while it drags the window
 +        BOOL dragging = bar_shown && ([NSEvent pressedMouseButtons] & 1)
 +                     && ((SCTitleBarView *) bar.contentView).dragging;
-+        hovered = (on_top && NSPointInRect(mouse, window.frame)) || dragging;
++        // Only while Cmd is held, so the top edge stays the phone's for
++        // pull-downs
++        BOOL cmd = ([NSEvent modifierFlags] & NSEventModifierFlagCommand) != 0;
++        // scrcpy shows the window a moment after styling it
++        if (!intro_until) {
++            intro_until = [NSDate dateWithTimeIntervalSinceNow:1.5];
++        }
++        BOOL intro = [intro_until timeIntervalSinceNow] > 0;
++        hovered = (on_top && cmd && NSPointInRect(mouse, window.frame))
++               || dragging || intro;
 +    }
 +
 +    if (bar_shown && bar.level != window.level) {
