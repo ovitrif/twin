@@ -47,11 +47,11 @@ impl Imb {
         parse_status(&String::from_utf8_lossy(&output.stdout))
     }
 
-    /// The mirror for this iPhone; imb becomes the mirror process, so killing
-    /// the child closes the window.
+    /// The mirror for this iPhone; imb stays running while it is open and the
+    /// mirror quits when imb ends, so killing the child closes the window.
     pub fn spawn_mirror(&self, udid: &str) -> Result<Child> {
         Command::new(&self.path)
-            .args(["mirror", "--exec", "--udid", udid])
+            .args(["mirror", "--wait", "--udid", udid])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
