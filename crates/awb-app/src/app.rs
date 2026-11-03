@@ -1809,7 +1809,12 @@ impl App {
                     if mirroring {
                         backend::stop_mirror(shared, &key);
                     } else {
-                        backend::start_iphone_mirror(shared.clone(), ctx.clone(), iphone.clone());
+                        backend::start_iphone_mirror(
+                            shared.clone(),
+                            ctx.clone(),
+                            iphone.clone(),
+                            settings.window_height,
+                        );
                     }
                 }
             }

@@ -544,14 +544,14 @@ pub fn iphone_mirror_key(iphone: &Iphone) -> String {
     format!("ios:{}", iphone.udid)
 }
 
-pub fn start_iphone_mirror(shared: Arc<Mutex<Shared>>, ctx: Context, iphone: Iphone) {
+pub fn start_iphone_mirror(shared: Arc<Mutex<Shared>>, ctx: Context, iphone: Iphone, height: u32) {
     let mirror_key = iphone_mirror_key(&iphone);
     let mut state = shared.lock().unwrap();
     if state.mirrors.contains_key(&mirror_key) {
         state.log(format!("Already mirroring {}", iphone.name));
         return;
     }
-    match Imb::resolve().and_then(|imb| imb.spawn_mirror(&iphone.udid)) {
+    match Imb::resolve().and_then(|imb| imb.spawn_mirror(&iphone.udid, height)) {
         Ok(mut child) => {
             state.log(format!("Mirroring {} (pid {})", iphone.name, child.id()));
             if let Some(out) = child.stdout.take() {
