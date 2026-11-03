@@ -40,7 +40,7 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
             AVCaptureDevice.requestAccess(for: .video) { _ in DispatchQueue.main.async { self.start() } }
             return
         default:
-            onStatus?("Camera access is off for iOS Mirror.\nTurn it on in System Settings › Privacy & Security › Camera.")
+            onStatus?("Camera access is off for Twin.\nTurn it on in System Settings › Privacy & Security › Camera.")
             return
         }
         Self.allowScreenCaptureDevices()

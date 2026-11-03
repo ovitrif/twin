@@ -80,6 +80,9 @@ final class HIDInput: InputSink {
     }
 
     func touch(_ phase: TouchPhase, at point: CGPoint) {
+        if phase != .move {
+            onError?(String(format: "touch %@ at %.3f, %.3f", phase.rawValue, point.x, point.y))
+        }
         send(["touch": phase.rawValue, "x": point.x, "y": point.y])
     }
 

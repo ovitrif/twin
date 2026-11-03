@@ -2,7 +2,7 @@ import AppKit
 import AVFoundation
 import IMBCore
 
-// Android v iOS: one window showing an Android phone and an iPhone side by
+// Twin's two-phone window: an Android phone and an iPhone side by
 // side, a gap apart and the same height. One window is one app to macOS, so
 // window managers (Raycast's Center), Mission Control and Cmd-Tab treat the
 // pair as one, and it moves as one.
@@ -141,7 +141,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         window.collectionBehavior = [.fullScreenPrimary]
         window.isReleasedWhenClosed = false
         window.acceptsMouseMovedEvents = true
-        window.title = "\(options.androidTitle) v \(options.iphoneTitle)"
+        window.title = "\(options.androidTitle) and \(options.iphoneTitle)"
         pair.frame = NSRect(x: 0, y: 0, width: width, height: height)
         pair.autoresizingMask = [.width, .height]
         window.contentView = pair
@@ -245,7 +245,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let app = NSMenu()
-        app.addItem(withTitle: "Quit Android v iOS", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        app.addItem(withTitle: "Quit Twin", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = app
         main.addItem(appItem)
         let deviceItem = NSMenuItem()

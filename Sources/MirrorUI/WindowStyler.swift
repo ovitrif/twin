@@ -65,7 +65,7 @@ private final class TitleBarView: NSView {
     }
 }
 
-/// One phone in a window that shows several (Android v iOS): its frame in
+/// One phone in a window that shows several (Twin's pair): its frame in
 /// the window's coordinates and its title.
 struct Pane {
     var frame: NSRect

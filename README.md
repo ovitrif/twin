@@ -38,11 +38,11 @@ it with `iproxy 8100 8100`); without either, the mirror is view-only.
 ## Build
 
 ```sh
-scripts/bundle-app.sh            # build/imb and build/iOS Mirror.app (needs cargo for imb-hid)
+scripts/bundle-app.sh            # build/imb and build/Twin.app (needs cargo for imb-hid)
 swift test
 ```
 
-`scripts/make-test-video.sh` and `iOS Mirror --replay` play test videos without a
+`scripts/make-test-video.sh` and `Twin --replay` play test videos without a
 phone; `scripts/fake-wda.py` stands in for WebDriverAgent.
 
 ## How it works

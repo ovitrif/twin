@@ -2,8 +2,8 @@ import AppKit
 import AVFoundation
 import IMBCore
 
-// iOS Mirror: one window showing one iPhone. `imb mirror` starts it with
-// the phone to show; opened on its own (Finder, Spotlight) it quits.
+// Twin's one-phone window: one iPhone. `imb mirror` starts it with the phone
+// to show.
 //
 //   --name <phone name>   the capture device to show (default: the first iPhone)
 //   --udid <udid>         the phone's UDID, for the title and `imb status`
@@ -183,7 +183,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let app = NSMenu()
-        app.addItem(withTitle: "Quit iOS Mirror", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        app.addItem(withTitle: "Quit Twin", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = app
         main.addItem(appItem)
         let deviceItem = NSMenuItem()

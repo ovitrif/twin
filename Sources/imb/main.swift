@@ -9,8 +9,8 @@ imb: mirror a USB-connected iPhone in a QuickTime-style window
              [--wda URL]       send clicks and typing to WebDriverAgent instead
              [--wait]          stay running while the mirror is open; ending imb
                                closes it, for apps that track it (awb)
-  imb devices --serial SERIAL  open Android v iOS: this Android phone beside the
-              [--udid UDID]    iPhone, in one window; --wait as for mirror
+  imb devices --serial SERIAL  show this Android phone beside the iPhone in one
+              [--udid UDID]    Twin window; --wait as for mirror
   imb --version
 """
 
@@ -34,24 +34,24 @@ func mirrorPID(_ udid: String) -> pid_t? {
     return pid
 }
 
-/// iOS Mirror's binary: inside the app next to this one, the installed app,
-/// or the bare build product in development.
-func mirrorBinary() -> String? {
+/// Twin's binary: inside the app next to this one, the installed app, or the
+/// bare build product in development.
+func twinBinary() -> String? {
     let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent()
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let candidates: [String?] = [
-        ProcessInfo.processInfo.environment["IMB_MIRROR"],
-        exe.appendingPathComponent("iOS Mirror.app/Contents/MacOS/iOS Mirror").path,
-        exe.appendingPathComponent("../iOS Mirror.app/Contents/MacOS/iOS Mirror").standardized.path,
-        "/Applications/iOS Mirror.app/Contents/MacOS/iOS Mirror",
-        "\(home)/Applications/iOS Mirror.app/Contents/MacOS/iOS Mirror",
-        exe.appendingPathComponent("IOSMirror").path,
+        ProcessInfo.processInfo.environment["IMB_TWIN"],
+        exe.appendingPathComponent("Twin.app/Contents/MacOS/Twin").path,
+        exe.appendingPathComponent("../Twin.app/Contents/MacOS/Twin").standardized.path,
+        "/Applications/Twin.app/Contents/MacOS/Twin",
+        "\(home)/Applications/Twin.app/Contents/MacOS/Twin",
+        exe.appendingPathComponent("Twin").path,
     ]
     return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
 }
 
-/// Starts iOS Mirror through LaunchServices when it is an app bundle, so macOS
-/// asks camera access for iOS Mirror itself rather than for whoever ran imb.
+/// Starts Twin through LaunchServices when it is an app bundle, so macOS asks
+/// camera access for Twin itself rather than for whoever ran imb.
 func launch(_ binary: String, _ arguments: [String]) throws -> pid_t {
     let app = URL(fileURLWithPath: binary).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     guard app.pathExtension == "app" else {
@@ -75,14 +75,6 @@ func launch(_ binary: String, _ arguments: [String]) throws -> pid_t {
     return try result.get()
 }
 
-/// Android v iOS's binary, found as iOS Mirror's is
-func pairBinary() -> String? {
-    guard let mirror = mirrorBinary(), mirror.contains("iOS Mirror.app") else { return nil }
-    let path = mirror.replacingOccurrences(of: "iOS Mirror.app/Contents/MacOS/iOS Mirror",
-                                           with: "Android v iOS.app/Contents/MacOS/Android v iOS")
-    return FileManager.default.isExecutableFile(atPath: path) ? path : nil
-}
-
 func devices(_ args: [String]) {
     var udid: String?, serial: String?
     var wait = false
@@ -102,13 +94,13 @@ func devices(_ args: [String]) {
     guard let iphone = udid.map({ u in phones.first { $0.udid == u } }) ?? phones.first else {
         fail("no iPhone on USB; plug one in and tap Trust on it")
     }
-    guard let binary = pairBinary() else { fail("Android v iOS.app not found; reinstall imb") }
+    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall imb") }
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     var arguments = ["--serial", serial, "--udid", iphone.udid, "--name", iphone.name, "--product", iphone.productType,
                      "--log", stateDir.appendingPathComponent("devices.log").path] + passthrough
     if wait { arguments += ["--parent", "\(getpid())"] }
     let pid: pid_t
-    do { pid = try launch(binary, arguments) } catch { fail("cannot start Android v iOS: \(error.localizedDescription)") }
+    do { pid = try launch(binary, arguments) } catch { fail("cannot start Twin: \(error.localizedDescription)") }
     print("Showing \(serial) and \(iphone.name)")
     if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
 }
@@ -154,14 +146,14 @@ func mirror(_ args: [String]) {
         if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
         return
     }
-    guard let binary = mirrorBinary() else { fail("iOS Mirror.app not found; reinstall imb") }
+    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall imb") }
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     let log = stateDir.appendingPathComponent("mirror-\(device.udid).log")
     var arguments = ["--name", device.name, "--udid", device.udid, "--product", device.productType,
                      "--log", log.path] + passthrough
     if wait { arguments += ["--parent", "\(getpid())"] }
     let pid: pid_t
-    do { pid = try launch(binary, arguments) } catch { fail("cannot start iOS Mirror: \(error.localizedDescription)") }
+    do { pid = try launch(binary, arguments) } catch { fail("cannot start Twin: \(error.localizedDescription)") }
     try? "\(pid)\n".write(to: pidFile(device.udid), atomically: true, encoding: .utf8)
     if wait {
         print("Mirroring \(device.name)")
