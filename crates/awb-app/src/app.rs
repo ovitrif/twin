@@ -1743,10 +1743,29 @@ impl App {
         let pending_avd_delete = &mut self.pending_avd_delete;
         chrome_scroll(ui, "devices-scroll", &shell, day_weight, false, |ui| {
             let devices = snapshot.devices.iter().filter(|device| !device.is_emulator);
+            let has_phones = snapshot.devices.iter().any(|device| !device.is_emulator)
+                || !snapshot.iphones.is_empty();
+            // Side by side: dots link the Android phone and the iPhone it opens with
+            let link_android = settings.side_by_side.then(|| {
+                snapshot
+                    .devices
+                    .iter()
+                    .find(|device| device.ready && !device.is_emulator)
+            });
+            let mut link_ends: Vec<egui::Pos2> = Vec::new();
+            if has_phones {
+                section_header(ui, "Phones");
+            }
             let mut first = true;
             for device in devices {
                 if !std::mem::take(&mut first) {
                     divider(ui);
+                }
+                if link_android
+                    .flatten()
+                    .is_some_and(|linked| linked.mirror_key == device.mirror_key)
+                {
+                    link_ends.push(row_icon_center(ui));
                 }
 
                 let mirroring = mirrors.contains(&device.mirror_key);
@@ -1807,9 +1826,12 @@ impl App {
                 }
             }
 
-            for iphone in &snapshot.iphones {
+            for (index, iphone) in snapshot.iphones.iter().enumerate() {
                 if !std::mem::take(&mut first) {
                     divider(ui);
+                }
+                if index == 0 && link_ends.len() == 1 {
+                    link_ends.push(row_icon_center(ui));
                 }
 
                 let key = backend::iphone_mirror_key(iphone);
@@ -1864,6 +1886,27 @@ impl App {
                 }
             }
 
+            if let [android, iphone] = link_ends[..] {
+                let paired = !pair_keys.is_empty();
+                link_dots(
+                    ui,
+                    android,
+                    iphone,
+                    if paired {
+                        theme::green()
+                    } else {
+                        theme::text_faint()
+                    },
+                );
+            }
+
+            if !snapshot.avds.is_empty() {
+                if has_phones {
+                    ui.add_space(14.0);
+                }
+                section_header(ui, "Emulators");
+                first = true;
+            }
             for avd in &snapshot.avds {
                 if !std::mem::take(&mut first) {
                     divider(ui);
@@ -2345,6 +2388,35 @@ fn tab_item(ui: &mut Ui, label: &str, active: bool) -> egui::Response {
         .inner;
 
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A small list header, as "Phones" and "Emulators" in the Devices tab
+fn section_header(ui: &mut Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.add(Label::new(semibold(text, 11.0, theme::text_faint())).selectable(false));
+    ui.add_space(2.0);
+}
+
+/// Where the next row's icon will sit
+fn row_icon_center(ui: &Ui) -> egui::Pos2 {
+    let top_left = ui.cursor().min;
+    egui::pos2(
+        top_left.x + ROW_ICON_SIZE / 2.0,
+        top_left.y + ROW_HEIGHT / 2.0,
+    )
+}
+
+/// Dots from one row's icon down to another's, linking the two phones
+/// Side by side opens together
+fn link_dots(ui: &Ui, from: egui::Pos2, to: egui::Pos2, color: egui::Color32) {
+    let start = from.y + ROW_ICON_SIZE / 2.0 + 5.0;
+    let end = to.y - ROW_ICON_SIZE / 2.0 - 5.0;
+    let mut y = start;
+    while y <= end + 0.5 {
+        ui.painter()
+            .circle_filled(egui::pos2(from.x, y), 1.4, color);
+        y += 5.0;
+    }
 }
 
 fn divider(ui: &mut Ui) {
