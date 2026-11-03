@@ -7,7 +7,7 @@ import IMBCore
 //
 //   --name <phone name>   the capture device to show (default: the first iPhone)
 //   --udid <udid>         the phone's UDID, for the title and `imb status`
-//   --title <text>        window title (default: the phone's name)
+//   --title <text>        window title (default: iPhone)
 //   --product <type>      productType such as iPhone18,4, for the corner radius
 //   --height <points>     initial window height
 //   --replay <files>      play comma-separated videos in turn instead of a phone, for testing
@@ -92,7 +92,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentAspectRatio = NSSize(width: width, height: height)
         view = MirrorView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         window.contentView = view
-        let title = options.title ?? options.name ?? "iPhone"
+        let title = options.title ?? "iPhone"
         window.title = title
         styler = WindowStyler(window: window, title: title, cornerRatio: Screen.cornerRatio(productType: options.product))
         window.makeKeyAndOrderFront(nil)
