@@ -83,7 +83,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let width = (height * 1260 / 2736).rounded()
         window = MirrorWindow(contentRect: NSRect(x: screen.midX - width / 2, y: screen.midY - height / 2,
                                                   width: width, height: height),
-                              styleMask: [.borderless, .resizable, .miniaturizable],
+                              styleMask: [.borderless, .miniaturizable],  // the resize ring resizes it
                               backing: .buffered, defer: false)
         window.collectionBehavior = [.fullScreenPrimary]
         window.isMovableByWindowBackground = false
@@ -95,6 +95,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = title
         styler = WindowStyler(window: window, title: title, cornerRatio: Screen.cornerRatio(productType: options.product))
         window.makeKeyAndOrderFront(nil)
+        styler.applyStyle()  // places the resize ring now the window is on screen
         window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps: true)
 

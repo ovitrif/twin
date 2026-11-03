@@ -56,6 +56,7 @@ final class WindowStyler: NSObject {
     private let titleLabel: NSTextField
     private var timer: Timer?
     private var barShown = false
+    private lazy var ring = ResizeRing(mirror: window)
     /// Share of the window width the corners round by.
     var cornerRatio: CGFloat { didSet { applyStyle() } }
 
@@ -71,6 +72,7 @@ final class WindowStyler: NSObject {
         applyStyle()
 
         let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(exitedFullScreen), name: NSWindow.didExitFullScreenNotification, object: window)
         for name in [NSWindow.didResizeNotification, NSWindow.didExitFullScreenNotification,
                      NSWindow.didEnterFullScreenNotification, NSWindow.didDeminiaturizeNotification] {
             center.addObserver(self, selector: #selector(windowChanged), name: name, object: window)
@@ -181,7 +183,10 @@ final class WindowStyler: NSObject {
         content.layer?.masksToBounds = true
         // The shadow follows the window's alpha; recompute it for the new corners
         window.invalidateShadow()
+        ring.update(radius: cornerRadius, shown: window.isVisible && !isFullscreen && !window.isMiniaturized)
     }
+
+    @objc private func exitedFullScreen() { window.styleMask.remove(.resizable) }
 
     @objc private func windowChanged() {
         applyStyle()
@@ -252,5 +257,9 @@ final class WindowStyler: NSObject {
 
     @objc private func closeClicked() { NSApp.terminate(nil) }
     @objc private func minimizeClicked() { window.miniaturize(nil) }
-    @objc private func zoomClicked() { window.toggleFullScreen(nil) }
+    // Full screen needs a resizable window; the ring does all other resizing
+    @objc private func zoomClicked() {
+        if !isFullscreen { window.styleMask.insert(.resizable) }
+        window.toggleFullScreen(nil)
+    }
 }

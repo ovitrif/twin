@@ -20,7 +20,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>iOS Mirror</string>
-  <key>CFBundleIdentifier</key><string>com.ovitrif.imb.mirror</string>
+  <key>CFBundleIdentifier</key><string>tech.masivo.imb.mirror</string>
   <key>CFBundleName</key><string>iOS Mirror</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
