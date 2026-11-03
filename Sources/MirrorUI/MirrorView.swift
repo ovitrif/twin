@@ -83,9 +83,9 @@ final class MirrorView: NSView {
     static let pressedCursor = circleCursor(fill: 0.62)
 
     private static func circleCursor(fill: CGFloat) -> NSCursor {
-        let size: CGFloat = 22
+        let size: CGFloat = 18
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 2.5, dy: 2.5))
+            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2))
             NSColor(white: 0.5, alpha: fill).setFill()
             circle.fill()
             NSColor(white: 1, alpha: 0.9).setStroke()
@@ -120,16 +120,23 @@ final class MirrorView: NSView {
                                        owner: self))
     }
 
-    override func cursorUpdate(with event: NSEvent) { currentCursor.set() }
+    override func cursorUpdate(with event: NSEvent) {
+        guard let window, NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
+            == window.windowNumber else { return }
+        currentCursor.set()
+    }
     override func mouseMoved(with event: NSEvent) { setCommand(event.modifierFlags.contains(.command)) }
     override func flagsChanged(with event: NSEvent) { setCommand(event.modifierFlags.contains(.command)) }
 
     private func setCommand(_ held: Bool) {
         commandHeld = held
         window?.invalidateCursorRects(for: self)
-        if let window, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
-            currentCursor.set()
-        }
+        // Only where this window is the one under the pointer: the title bar
+        // and other windows over it keep their own cursor
+        guard let window, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)),
+              NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber
+        else { return }
+        currentCursor.set()
     }
 
     override func mouseDown(with event: NSEvent) {

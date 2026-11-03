@@ -31,6 +31,16 @@ private final class TitleBarView: NSView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // The bar is chrome you click, so it keeps macOS's arrow, never the touch pointer
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
+
+    override func updateTrackingAreas() {
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.cursorUpdate, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
+
     // Drag from anywhere but the buttons, the title label included
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
