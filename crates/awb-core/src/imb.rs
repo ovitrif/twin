@@ -49,12 +49,16 @@ impl Imb {
 
     /// The mirror for this iPhone; imb stays running while it is open and the
     /// mirror quits when imb ends, so killing the child closes the window.
-    /// `height` is the window height in points, as for scrcpy; 0 leaves imb's default.
-    pub fn spawn_mirror(&self, udid: &str, height: u32) -> Result<Child> {
+    /// `height` is the window height in points, as for scrcpy; 0 or an empty
+    /// title leaves imb's default.
+    pub fn spawn_mirror(&self, udid: &str, height: u32, title: &str) -> Result<Child> {
         let mut command = Command::new(&self.path);
         command.args(["mirror", "--wait", "--udid", udid]);
         if height > 0 {
             command.args(["--height", &height.to_string()]);
+        }
+        if !title.is_empty() {
+            command.args(["--title", title]);
         }
         command
             .stdin(Stdio::null())

@@ -17,6 +17,8 @@ pub enum ThemeMode {
 #[serde(default)]
 pub struct Settings {
     pub window_title: String,
+    /// The iPhone mirror's window title.
+    pub iphone_title: String,
     pub window_width: u32,
     pub window_height: u32,
     pub always_on_top: bool,
@@ -36,6 +38,7 @@ impl Default for Settings {
 
         Self {
             window_title: defaults.window_title,
+            iphone_title: "iPhone".to_string(),
             window_width: defaults.window_width,
             window_height: defaults.window_height,
             always_on_top: true,
@@ -60,10 +63,15 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        config_path()
+        let mut settings: Self = config_path()
             .and_then(|path| fs::read_to_string(path).ok())
             .and_then(|raw| toml::from_str(&raw).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // 2.1.0 saved its default title, a phone's model, as the Android title
+        if settings.window_title == "Pixel 10 Pro" {
+            settings.window_title = ScrcpyOptions::default().window_title;
+        }
+        settings
     }
 
     pub fn save(&self) {

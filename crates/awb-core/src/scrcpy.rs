@@ -325,7 +325,7 @@ impl Default for ScrcpyOptions {
             stay_awake: true,
             borderless: true,
             always_on_top: false,
-            window_title: "Pixel 10 Pro".to_string(),
+            window_title: "Android".to_string(),
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
         }
@@ -503,7 +503,7 @@ mod tests {
                 "--stay-awake",
                 "--window-borderless",
                 "--window-title",
-                "Pixel 10 Pro",
+                "Android",
                 "--window-width",
                 "480",
                 "--window-height",

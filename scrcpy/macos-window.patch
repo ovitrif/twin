@@ -37,7 +37,18 @@ diff -ruN a/app/src/screen.c b/app/src/screen.c
  
  #define DISPLAY_MARGINS 96
  
-@@ -618,6 +621,12 @@
+@@ -25,6 +28,10 @@
+             LOGW("Could not set window aspect ratio: %s", SDL_GetError());
+         }
+     }
++#ifdef __APPLE__
++    sc_macos_window_set_aspect(screen->window, content_size.width,
++                               content_size.height);
++#endif
+ }
+ 
+ static inline struct sc_size
+@@ -618,6 +625,12 @@
          LOGE("Could not create renderer: %s", SDL_GetError());
          goto error_destroy_window;
      }
@@ -53,7 +64,7 @@ diff -ruN a/app/src/screen.c b/app/src/screen.c
 diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 --- a/app/src/sys/macos/window.h
 +++ b/app/src/sys/macos/window.h
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,20 @@
 +#ifndef SC_MACOS_WINDOW_H
 +#define SC_MACOS_WINDOW_H
 +
@@ -68,11 +79,16 @@ diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 +void
 +sc_macos_window_init(SDL_Window *window, const char *title);
 +
++// The phone's screen size, so the window keeps its shape: the window fits it
++// exactly (no letterbox) and resizing from the outline keeps it.
++void
++sc_macos_window_set_aspect(SDL_Window *window, int width, int height);
++
 +#endif
 diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 --- a/app/src/sys/macos/window.m
 +++ b/app/src/sys/macos/window.m
-@@ -0,0 +1,458 @@
+@@ -0,0 +1,790 @@
 +#include "sys/macos/window.h"
 +
 +#import <AppKit/AppKit.h>
@@ -136,6 +152,225 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +
 +@end
 +
++// Resizing from the visible outline. macOS puts the resize zones of a
++// borderless window on its rectangle, a few points outside it, so with the
++// rounded corners they sit away from what you see. The ring is a child window
++// around the mirror that takes the pointer only in a thin band hugging the
++// rounded outline, shows the matching resize cursor and resizes the mirror
++// keeping the phone's aspect ratio.
++#define SC_RING_BAND 6.0
++#define SC_RING_MIN_HEIGHT 320.0
++
++@interface SCRingView : NSView
++@property(nonatomic, weak) NSWindow *mirror;
++@property(nonatomic) CGFloat radius;
++@property(nonatomic) CGFloat aspect;
++@end
++
++@implementation SCRingView {
++    NSInteger edge_x;
++    NSInteger edge_y;
++    BOOL dragging;
++    NSRect start_frame;
++    NSPoint start_mouse;
++}
++
++- (BOOL)acceptsFirstMouse:(NSEvent *)event {
++    (void) event;
++    return YES;
++}
++
++// The band between the mirror's outline and the same outline SC_RING_BAND out
++- (NSBezierPath *)ringPath {
++    NSRect inner = NSInsetRect(self.bounds, SC_RING_BAND, SC_RING_BAND);
++    NSBezierPath *path = [NSBezierPath
++        bezierPathWithRoundedRect:self.bounds
++                          xRadius:self.radius + SC_RING_BAND
++                          yRadius:self.radius + SC_RING_BAND];
++    [path appendBezierPath:[NSBezierPath bezierPathWithRoundedRect:inner
++                                                           xRadius:self.radius
++                                                           yRadius:self.radius]];
++    path.windingRule = NSWindingRuleEvenOdd;
++    return path;
++}
++
++- (void)drawRect:(NSRect)dirty {
++    (void) dirty;
++    // Nearly invisible, but not transparent: the window server passes clicks
++    // through fully transparent pixels
++    [[NSColor colorWithWhite:0 alpha:0.012] setFill];
++    [[self ringPath] fill];
++}
++
++- (NSView *)hitTest:(NSPoint)point {
++    NSPoint local = [self convertPoint:point fromView:self.superview];
++    return [[self ringPath] containsPoint:local] ? self : nil;
++}
++
++- (void)updateTrackingAreas {
++    for (NSTrackingArea *area in self.trackingAreas) {
++        [self removeTrackingArea:area];
++    }
++    [self addTrackingArea:[[NSTrackingArea alloc]
++        initWithRect:self.bounds
++             options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited
++                   | NSTrackingActiveAlways | NSTrackingCursorUpdate
++               owner:self
++            userInfo:nil]];
++}
++
++- (void)edgeAt:(NSPoint)point x:(NSInteger *)x y:(NSInteger *)y {
++    NSRect inner = NSInsetRect(self.bounds, SC_RING_BAND, SC_RING_BAND);
++    // Within the corner's curve both sides move
++    CGFloat reach = MAX(self.radius, 12);
++    NSInteger ex = point.x < NSMinX(inner) + reach
++                 ? -1 : (point.x > NSMaxX(inner) - reach ? 1 : 0);
++    NSInteger ey = point.y < NSMinY(inner) + reach
++                 ? -1 : (point.y > NSMaxY(inner) - reach ? 1 : 0);
++    if (!ex || !ey) {
++        // Along a side, the side the point is outside of
++        ex = point.x < NSMinX(inner) ? -1 : (point.x > NSMaxX(inner) ? 1 : 0);
++        ey = ex ? 0 : (point.y < NSMinY(inner) ? -1 : 1);
++    }
++    *x = ex;
++    *y = ey;
++}
++
++- (NSCursor *)cursorForX:(NSInteger)x y:(NSInteger)y {
++    if (@available(macOS 15.0, *)) {
++        NSCursorFrameResizePosition position =
++              x < 0 && y > 0 ? NSCursorFrameResizePositionTopLeft
++            : x > 0 && y > 0 ? NSCursorFrameResizePositionTopRight
++            : x < 0 && y < 0 ? NSCursorFrameResizePositionBottomLeft
++            : x > 0 && y < 0 ? NSCursorFrameResizePositionBottomRight
++            : x < 0 ? NSCursorFrameResizePositionLeft
++            : x > 0 ? NSCursorFrameResizePositionRight
++            : y > 0 ? NSCursorFrameResizePositionTop
++            : NSCursorFrameResizePositionBottom;
++        return [NSCursor frameResizeCursorFromPosition:position
++                                          inDirections:NSCursorFrameResizeDirectionsAll];
++    }
++    return y ? NSCursor.resizeUpDownCursor : NSCursor.resizeLeftRightCursor;
++}
++
++- (void)mouseMoved:(NSEvent *)event {
++    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
++    if ([[self ringPath] containsPoint:point]) {
++        NSInteger x, y;
++        [self edgeAt:point x:&x y:&y];
++        [[self cursorForX:x y:y] set];
++    }
++}
++
++- (void)cursorUpdate:(NSEvent *)event {
++    [self mouseMoved:event];
++}
++
++- (void)mouseExited:(NSEvent *)event {
++    (void) event;
++    if (!dragging) {
++        [NSCursor.arrowCursor set];
++    }
++}
++
++- (NSPoint)screenPoint:(NSEvent *)event {
++    return self.window ? [self.window convertPointToScreen:event.locationInWindow]
++                       : [NSEvent mouseLocation];
++}
++
++- (void)mouseDown:(NSEvent *)event {
++    NSWindow *mirror = self.mirror;
++    if (!mirror) {
++        return;
++    }
++    [self edgeAt:[self convertPoint:event.locationInWindow fromView:nil]
++               x:&edge_x y:&edge_y];
++    dragging = YES;
++    start_frame = mirror.frame;
++    start_mouse = [self screenPoint:event];
++}
++
++- (void)mouseDragged:(NSEvent *)event {
++    NSWindow *mirror = self.mirror;
++    if (!mirror || !dragging || start_frame.size.height <= 0) {
++        return;
++    }
++    [[self cursorForX:edge_x y:edge_y] set];
++    CGFloat aspect = self.aspect > 0
++        ? self.aspect : start_frame.size.width / start_frame.size.height;
++    NSPoint mouse = [self screenPoint:event];
++    CGFloat dx = (mouse.x - start_mouse.x) * edge_x;
++    CGFloat dy = (mouse.y - start_mouse.y) * edge_y;
++    // The side the pointer pulls furthest sets the size; the other follows
++    // the aspect
++    CGFloat height = start_frame.size.height + MAX(dy, dx / aspect);
++    if (!edge_x) {
++        height = start_frame.size.height + dy;
++    }
++    if (!edge_y) {
++        height = start_frame.size.height + dx / aspect;
++    }
++    CGFloat screen = mirror.screen ? mirror.screen.visibleFrame.size.height
++                                   : CGFLOAT_MAX;
++    height = round(MIN(MAX(height, SC_RING_MIN_HEIGHT), screen));
++    CGFloat width = round(height * aspect);
++    // The opposite sides stay put; a side drag keeps the top, a top or bottom
++    // drag keeps the left
++    CGFloat x = edge_x < 0 ? NSMaxX(start_frame) - width : NSMinX(start_frame);
++    CGFloat y = edge_y < 0 ? NSMaxY(start_frame) - height
++              : (edge_y > 0 ? NSMinY(start_frame)
++                            : NSMaxY(start_frame) - height);
++    [mirror setFrame:NSMakeRect(x, y, width, height) display:YES];
++}
++
++- (void)mouseUp:(NSEvent *)event {
++    (void) event;
++    dragging = NO;
++}
++
++@end
++
++// A round pointer like iOS's own over the phone, darker while it touches
++static SDL_Cursor *
++sc_touch_cursor(CGFloat fill) {
++    SDL_Surface *images[2] = {NULL, NULL};
++    for (int scale = 1; scale <= 2; ++scale) {
++        int size = 30 * scale;
++        SDL_Surface *surface = SDL_CreateSurface(size, size, SDL_PIXELFORMAT_ARGB8888);
++        if (!surface) {
++            break;
++        }
++        CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
++        CGContextRef ctx = CGBitmapContextCreate(surface->pixels, size, size, 8,
++            surface->pitch, space,
++            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
++        CGColorSpaceRelease(space);
++        memset(surface->pixels, 0, surface->pitch * size);
++        CGContextScaleCTM(ctx, scale, scale);
++        CGContextSetRGBFillColor(ctx, 0.5, 0.5, 0.5, fill);
++        CGContextFillEllipseInRect(ctx, CGRectMake(3, 3, 24, 24));
++        CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 0.9);
++        CGContextSetLineWidth(ctx, 2);
++        CGContextStrokeEllipseInRect(ctx, CGRectMake(3, 3, 24, 24));
++        // A faint dark rim keeps it visible on white
++        CGContextSetRGBStrokeColor(ctx, 0, 0, 0, 0.22);
++        CGContextSetLineWidth(ctx, 1);
++        CGContextStrokeEllipseInRect(ctx, CGRectMake(1.5, 1.5, 27, 27));
++        CGContextRelease(ctx);
++        images[scale - 1] = surface;
++    }
++    if (!images[0]) {
++        return NULL;
++    }
++    if (images[1]) {
++        SDL_AddSurfaceAlternateImage(images[0], images[1]);
++        SDL_DestroySurface(images[1]);
++    }
++    SDL_Cursor *cursor = SDL_CreateColorCursor(images[0], 15, 15);
++    SDL_DestroySurface(images[0]);
++    return cursor;
++}
++
 +@interface SCWindowStyler : NSObject
 +@end
 +
@@ -151,6 +386,12 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    BOOL bar_shown;
 +    // Buttons pressed with Cmd, kept from the device until released
 +    NSUInteger cmd_buttons;
++    NSPanel *ring;
++    SCRingView *ring_view;
++    CGFloat aspect;
++    SDL_Cursor *touch_cursor;
++    SDL_Cursor *pressed_cursor;
++    SDL_Cursor *move_cursor;
 +}
 +
 +- (instancetype)initWithSDLWindow:(SDL_Window *)sdl
@@ -164,6 +405,13 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    sdl_window = sdl;
 +    window = ns;
 +    bar = [self makeBarWithTitle:title];
++    [self makeRing];
++    touch_cursor = sc_touch_cursor(0.42);
++    pressed_cursor = sc_touch_cursor(0.62);
++    move_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
++    if (touch_cursor) {
++        SDL_SetCursor(touch_cursor);
++    }
 +
 +    [self applyStyle];
 +
@@ -318,7 +566,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +                     | NSEventMaskRightMouseDragged | NSEventMaskRightMouseUp
 +                     | NSEventMaskOtherMouseDown | NSEventMaskOtherMouseDragged
 +                     | NSEventMaskOtherMouseUp | NSEventMaskScrollWheel
-+                     | NSEventMaskMouseMoved;
++                     | NSEventMaskMouseMoved | NSEventMaskFlagsChanged;
 +    __weak SCWindowStyler *weak_self = self;
 +    mouse_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:mask
 +                                                          handler:^NSEvent *(NSEvent *event) {
@@ -327,8 +575,23 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    }];
 +}
 +
++// The round touch pointer, darker while pressed, or the move cursor while
++// Cmd is held
++- (void)updateCursor:(NSEvent *)event {
++    BOOL cmd = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
++    SDL_Cursor *cursor = cmd && ![self sdlHasButtonDown] ? move_cursor
++                       : [self sdlHasButtonDown] ? pressed_cursor : touch_cursor;
++    if (cursor && SDL_GetCursor() != cursor) {
++        SDL_SetCursor(cursor);
++    }
++}
++
 +- (NSEvent *)filterMouseEvent:(NSEvent *)event {
 +    NSEventType type = event.type;
++    if (type == NSEventTypeFlagsChanged) {
++        [self updateCursor:event];
++        return event;
++    }
 +    BOOL down = type == NSEventTypeLeftMouseDown
 +             || type == NSEventTypeRightMouseDown
 +             || type == NSEventTypeOtherMouseDown;
@@ -353,6 +616,10 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    if (event.window != window) {
 +        return event;
 +    }
++    // SDL sees the press after this monitor, so the pressed look follows it
++    dispatch_async(dispatch_get_main_queue(), ^{
++        [self updateCursor:[NSApp currentEvent] ?: event];
++    });
 +
 +    BOOL cmd = (event.modifierFlags & NSEventModifierFlagCommand)
 +            && ![self sdlHasButtonDown];
@@ -378,7 +645,76 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    return (window.styleMask & NSWindowStyleMaskFullScreen) != 0;
 +}
 +
++- (void)makeRing {
++    ring = [[NSPanel alloc] initWithContentRect:NSZeroRect
++                                      styleMask:NSWindowStyleMaskBorderless
++                                              | NSWindowStyleMaskNonactivatingPanel
++                                        backing:NSBackingStoreBuffered
++                                          defer:YES];
++    ring.opaque = NO;
++    ring.backgroundColor = NSColor.clearColor;
++    ring.hasShadow = NO;
++    ring.hidesOnDeactivate = NO;
++    ring.becomesKeyOnlyIfNeeded = YES;
++    ring.releasedWhenClosed = NO;
++    ring.collectionBehavior = NSWindowCollectionBehaviorTransient
++                            | NSWindowCollectionBehaviorIgnoresCycle;
++    ring.acceptsMouseMovedEvents = YES;
++    ring_view = [[SCRingView alloc] initWithFrame:NSZeroRect];
++    ring_view.mirror = window;
++    ring.contentView = ring_view;
++}
++
++// Fits the ring around the mirror; hidden while full screen or minimized
++- (void)updateRing {
++    BOOL shown = window.visible && !window.miniaturized && ![self isFullscreen];
++    if (!shown) {
++        if (ring.parentWindow) {
++            [window removeChildWindow:ring];
++        }
++        [ring orderOut:nil];
++        return;
++    }
++    ring_view.radius = [self cornerRadius];
++    ring_view.aspect = aspect;
++    [ring setFrame:NSInsetRect(window.frame, -SC_RING_BAND, -SC_RING_BAND)
++           display:NO];
++    ring_view.needsDisplay = YES;
++    if (!ring.parentWindow) {
++        [window addChildWindow:ring ordered:NSWindowBelow];
++    }
++    ring.level = window.level;
++}
++
++- (void)setAspect:(CGFloat)ratio {
++    aspect = ratio;
++    // After scrcpy's own resize, which follows this call
++    dispatch_async(dispatch_get_main_queue(), ^{
++        [self fitAspect];
++    });
++}
++
++// The window takes the phone's exact shape, keeping its height and center,
++// so no letterbox shows and its edges are the phone's
++- (void)fitAspect {
++    if (aspect <= 0 || [self isFullscreen]) {
++        return;
++    }
++    NSRect frame = window.frame;
++    CGFloat width = round(frame.size.height * aspect);
++    if (fabs(width - frame.size.width) < 1) {
++        return;
++    }
++    frame.origin.x += (frame.size.width - width) / 2;
++    frame.size.width = width;
++    [window setFrame:frame display:YES];
++}
++
 +- (void)applyStyle {
++    // The ring resizes; macOS's own zones sit off the rounded outline
++    if (![self isFullscreen] && (window.styleMask & NSWindowStyleMaskResizable)) {
++        window.styleMask &= ~NSWindowStyleMaskResizable;
++    }
 +    window.opaque = NO;
 +    window.backgroundColor = NSColor.clearColor;
 +    window.hasShadow = YES;
@@ -391,10 +727,12 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +
 +    // The shadow follows the window's alpha, recompute it for the new corners
 +    [window invalidateShadow];
++    [self updateRing];
 +}
 +
 +- (void)windowChanged:(NSNotification *)notification {
 +    (void) notification;
++    [self fitAspect];
 +    [self applyStyle];
 +    if (bar_shown) {
 +        [self layoutBar];
@@ -505,6 +843,8 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +
 +- (void)zoomClicked:(id)sender {
 +    (void) sender;
++    // Full screen needs a resizable window; applyStyle drops it again after
++    window.styleMask |= NSWindowStyleMaskResizable;
 +    bool fullscreen = SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_FULLSCREEN;
 +    SDL_SetWindowFullscreen(sdl_window, !fullscreen);
 +}
@@ -513,6 +853,14 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +
 +// Lives as long as the process: scrcpy has a single window
 +static SCWindowStyler *styler;
++
++void
++sc_macos_window_set_aspect(SDL_Window *window, int width, int height) {
++    (void) window;
++    if (styler && width > 0 && height > 0) {
++        [styler setAspect:(CGFloat) width / height];
++    }
++}
 +
 +void
 +sc_macos_window_init(SDL_Window *window, const char *title) {

@@ -100,7 +100,7 @@ LAUNCHER
 <dict>
   <key>CFBundleExecutable</key><string>Android Mirror</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>com.ovitrif.awb.mirror</string>
+  <key>CFBundleIdentifier</key><string>tech.masivo.awb.mirror</string>
   <key>CFBundleName</key><string>Android Mirror</string>
   <key>CFBundleDisplayName</key><string>Android Mirror</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -123,7 +123,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>awb-app</string>
   <key>CFBundleIconFile</key><string>${ICON_NAME}</string>
   ${ICON_PLIST_KEYS}
-  <key>CFBundleIdentifier</key><string>com.ovitrif.awb</string>
+  <key>CFBundleIdentifier</key><string>tech.masivo.awb</string>
   <key>CFBundleName</key><string>Android Wifi Bridge</string>
   <key>CFBundleDisplayName</key><string>Android Wifi Bridge</string>
   <key>CFBundlePackageType</key><string>APPL</string>

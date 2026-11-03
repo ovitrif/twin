@@ -77,7 +77,7 @@ awb --stable             # scrcpy + keepalive watch + reconnects + Wi-Fi diagnos
 awb --watch --wifi-doctor
 awb --timeout 120        # wait longer than the 60-second default
 awb --device-serial SERIAL --background
-awb --window-title "Pixel 10 Pro" --window-width 480 --window-height 1071
+awb --window-title "Android" --window-height 1071
 awb --plain-window --always-on-top
 awb --adb /path/to/adb --scrcpy /path/to/scrcpy
 ```
@@ -89,7 +89,7 @@ options in `~/.config/awb/config.toml`.
 On Apple silicon, awb prefers the scrcpy bundled in `Android Wifi Bridge.app` (move it from
 the release archive to `/Applications`; `install.sh` installs only the binaries), which runs
 as its own app,
-`Contents/Helpers/Android Mirror.app` (`com.ovitrif.awb.mirror`). It is a pinned scrcpy release
+`Contents/Helpers/Android Mirror.app` (`tech.masivo.awb.mirror`). It is a pinned scrcpy release
 patched to draw a QuickTime-style mirror window: rounded corners, a title bar with traffic
 lights over the top of the screen while the pointer is over it, and ⌘ + drag anywhere to move
 the window. It needs Homebrew's scrcpy dependencies; without them, or without the app, awb

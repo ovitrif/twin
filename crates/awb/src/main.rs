@@ -84,7 +84,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "Pixel 10 Pro",
+        default_value = "Android",
         value_name = "TEXT",
         help = "Window title passed to scrcpy"
     )]

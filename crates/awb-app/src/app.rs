@@ -1814,6 +1814,7 @@ impl App {
                             ctx.clone(),
                             iphone.clone(),
                             settings.window_height,
+                            &settings.iphone_title,
                         );
                     }
                 }
@@ -1956,10 +1957,13 @@ impl App {
             let mut changed = false;
             ui.horizontal(|ui| {
                 let total = ui.available_width();
-                let title_width = total - 2.0 * 64.0 - 2.0 * 8.0;
-                changed |= labeled_input(ui, "Title", title_width, &mut self.settings.window_title);
+                // The width follows each phone's shape, so only the height is set
+                let title_width = (total - 64.0 - 2.0 * 8.0) / 2.0;
+                changed |=
+                    labeled_input(ui, "Android", title_width, &mut self.settings.window_title);
                 ui.add_space(8.0);
-                changed |= labeled_input(ui, "W", 64.0, &mut self.width_text);
+                changed |=
+                    labeled_input(ui, "iPhone", title_width, &mut self.settings.iphone_title);
                 ui.add_space(8.0);
                 changed |= labeled_input(ui, "H", 64.0, &mut self.height_text);
             });
