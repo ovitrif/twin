@@ -30,6 +30,8 @@ pub struct Settings {
     /// side `gap` points apart, and the two move together.
     pub side_by_side: bool,
     pub gap: u32,
+    /// A round touch pointer over the phones instead of macOS's.
+    pub touch_pointer: bool,
     /// Follow the system appearance or force the light/dark app palette.
     pub theme: ThemeMode,
     /// Light the popover surface with gradients and glows; off draws it flat.
@@ -50,6 +52,7 @@ impl Default for Settings {
             auto_mirror: false,
             side_by_side: false,
             gap: 12,
+            touch_pointer: true,
             theme: ThemeMode::Auto,
             gradients: true,
         }
@@ -65,6 +68,7 @@ impl Settings {
             window_width: self.window_width,
             window_height: self.window_height,
             side_by_side_gap: self.side_by_side.then_some(self.gap),
+            touch_pointer: self.touch_pointer,
             ..ScrcpyOptions::default()
         }
     }

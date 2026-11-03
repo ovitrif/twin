@@ -54,13 +54,15 @@ impl Imb {
     /// mirror quits when imb ends, so killing the child closes the window.
     /// `height` is the window height in points, as for scrcpy; 0 or an empty
     /// title leaves imb's default. With `side_by_side_gap` the mirror sits
-    /// right of the Android one and moves with it.
+    /// right of the Android one and moves with it; `touch_pointer` off keeps
+    /// macOS's pointer.
     pub fn spawn_mirror(
         &self,
         udid: &str,
         height: u32,
         title: &str,
         side_by_side_gap: Option<u32>,
+        touch_pointer: bool,
     ) -> Result<Child> {
         let mut command = Command::new(&self.path);
         command.args(["mirror", "--wait", "--udid", udid]);
@@ -79,6 +81,9 @@ impl Imb {
                 "--gap",
                 &gap.to_string(),
             ]);
+        }
+        if !touch_pointer {
+            command.args(["--cursor", "system"]);
         }
         command
             .stdin(Stdio::null())

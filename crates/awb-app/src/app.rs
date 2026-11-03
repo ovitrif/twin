@@ -1794,6 +1794,7 @@ impl App {
                                 settings.window_height,
                                 &settings.iphone_title,
                                 Some(settings.gap),
+                                settings.touch_pointer,
                             );
                         }
                     }
@@ -1835,6 +1836,7 @@ impl App {
                             settings.window_height,
                             &settings.iphone_title,
                             settings.side_by_side.then_some(settings.gap),
+                            settings.touch_pointer,
                         );
                         // Side by side: the first ready Android phone not
                         // mirrored joins it
@@ -2008,9 +2010,12 @@ impl App {
             });
 
             ui.add_space(10.0);
+            // The second row's columns line up with the first's
+            let mut second_column = 0.0;
             ui.horizontal(|ui| {
                 changed |= check_item(ui, "Always on top", &mut self.settings.always_on_top);
                 ui.add_space(20.0);
+                second_column = ui.cursor().min.x;
                 changed |= check_item(ui, "Borderless", &mut self.settings.borderless);
                 ui.add_space(20.0);
                 changed |= check_item(ui, "Auto mirror", &mut self.settings.auto_mirror);
@@ -2018,6 +2023,8 @@ impl App {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 changed |= check_item(ui, "Side by side", &mut self.settings.side_by_side);
+                ui.add_space((second_column - ui.cursor().min.x).max(20.0));
+                changed |= check_item(ui, "Touch pointer", &mut self.settings.touch_pointer);
             });
 
             ui.add_space(12.0);

@@ -232,6 +232,9 @@ impl Scrcpy {
                 .env("AWB_SIDE", "left")
                 .env("AWB_GAP", gap.to_string());
         }
+        if !options.touch_pointer {
+            command.env("AWB_CURSOR", "system");
+        }
         command
     }
 
@@ -325,6 +328,8 @@ pub struct ScrcpyOptions {
     /// Side by side with the iPhone mirror, this far apart: the patched
     /// window then moves with it (AWB_GROUP, AWB_SIDE, AWB_GAP).
     pub side_by_side_gap: Option<u32>,
+    /// The round touch pointer over the phone; off keeps macOS's (AWB_CURSOR).
+    pub touch_pointer: bool,
 }
 
 impl Default for ScrcpyOptions {
@@ -338,6 +343,7 @@ impl Default for ScrcpyOptions {
             window_width: DEFAULT_WINDOW_WIDTH,
             window_height: DEFAULT_WINDOW_HEIGHT,
             side_by_side_gap: None,
+            touch_pointer: true,
         }
     }
 }
@@ -674,6 +680,7 @@ mod tests {
             window_width: 0,
             window_height: 0,
             side_by_side_gap: None,
+            touch_pointer: true,
         });
 
         assert!(!custom_flags.contains(&"--no-audio"));

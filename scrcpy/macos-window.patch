@@ -88,7 +88,7 @@ diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 --- a/app/src/sys/macos/window.m
 +++ b/app/src/sys/macos/window.m
-@@ -0,0 +1,908 @@
+@@ -0,0 +1,942 @@
 +#include "sys/macos/window.h"
 +
 +#import <AppKit/AppKit.h>
@@ -335,7 +335,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +sc_touch_cursor(CGFloat fill) {
 +    SDL_Surface *images[2] = {NULL, NULL};
 +    for (int scale = 1; scale <= 2; ++scale) {
-+        int size = 30 * scale;
++        int size = 22 * scale;
 +        SDL_Surface *surface = SDL_CreateSurface(size, size, SDL_PIXELFORMAT_ARGB8888);
 +        if (!surface) {
 +            break;
@@ -348,14 +348,14 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +        memset(surface->pixels, 0, surface->pitch * size);
 +        CGContextScaleCTM(ctx, scale, scale);
 +        CGContextSetRGBFillColor(ctx, 0.5, 0.5, 0.5, fill);
-+        CGContextFillEllipseInRect(ctx, CGRectMake(3, 3, 24, 24));
++        CGContextFillEllipseInRect(ctx, CGRectMake(2.5, 2.5, 17, 17));
 +        CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 0.9);
-+        CGContextSetLineWidth(ctx, 2);
-+        CGContextStrokeEllipseInRect(ctx, CGRectMake(3, 3, 24, 24));
++        CGContextSetLineWidth(ctx, 1.5);
++        CGContextStrokeEllipseInRect(ctx, CGRectMake(2.5, 2.5, 17, 17));
 +        // A faint dark rim keeps it visible on white
 +        CGContextSetRGBStrokeColor(ctx, 0, 0, 0, 0.22);
 +        CGContextSetLineWidth(ctx, 1);
-+        CGContextStrokeEllipseInRect(ctx, CGRectMake(1.5, 1.5, 27, 27));
++        CGContextStrokeEllipseInRect(ctx, CGRectMake(1, 1, 20, 20));
 +        CGContextRelease(ctx);
 +        images[scale - 1] = surface;
 +    }
@@ -366,7 +366,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +        SDL_AddSurfaceAlternateImage(images[0], images[1]);
 +        SDL_DestroySurface(images[1]);
 +    }
-+    SDL_Cursor *cursor = SDL_CreateColorCursor(images[0], 15, 15);
++    SDL_Cursor *cursor = SDL_CreateColorCursor(images[0], 11, 11);
 +    SDL_DestroySurface(images[0]);
 +    return cursor;
 +}
@@ -391,6 +391,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    NSString *ident;
 +    BOOL following;
 +    BOOL placed;
++    NSRect partner;
 +}
 +
 +- (instancetype)initWithWindow:(NSWindow *)w {
@@ -443,9 +444,35 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    [self announce];
 +}
 +
++// A window manager's Center (Raycast's) moves only one mirror; when one lands
++// centered on its screen, the pair is centered instead
++- (BOOL)centerPairIfCentered {
++    NSWindow *w = window;
++    if (NSIsEmptyRect(partner) || !w.screen) {
++        return NO;
++    }
++    NSRect screen = w.screen.visibleFrame;
++    NSRect frame = w.frame;
++    if (fabs(NSMidX(frame) - NSMidX(screen)) >= 1.5) {
++        return NO;
++    }
++    CGFloat pair = frame.size.width + gap + partner.size.width;
++    CGFloat x = [side isEqualToString:@"left"]
++        ? NSMidX(screen) - pair / 2
++        : NSMidX(screen) - pair / 2 + partner.size.width + gap;
++    if (fabs(x - frame.origin.x) < 1) {
++        return NO;
++    }
++    [w setFrameOrigin:NSMakePoint(round(x), frame.origin.y)];  // announces again
++    return YES;
++}
++
 +- (void)announce {
 +    NSWindow *w = window;
 +    if (following || !w.visible) {
++        return;
++    }
++    if ([self centerPairIfCentered]) {
 +        return;
 +    }
 +    NSRect f = w.frame;
@@ -469,6 +496,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    if (ph <= 0) {
 +        return;
 +    }
++    partner = NSMakeRect(px, py, pw, ph);
 +    NSRect frame = w.frame;
 +    // Same height, keeping this phone's shape, tops aligned
 +    CGFloat width = round(frame.size.width * ph / MAX(frame.size.height, 1));
@@ -522,8 +550,11 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    window = ns;
 +    bar = [self makeBarWithTitle:title];
 +    [self makeRing];
-+    touch_cursor = sc_touch_cursor(0.42);
-+    pressed_cursor = sc_touch_cursor(0.62);
++    // AWB_CURSOR=system keeps macOS's own pointer over the phone
++    const char *cursor_env = getenv("AWB_CURSOR");
++    BOOL touch = !cursor_env || strcmp(cursor_env, "system");
++    touch_cursor = touch ? sc_touch_cursor(0.42) : SDL_GetDefaultCursor();
++    pressed_cursor = touch ? sc_touch_cursor(0.62) : SDL_GetDefaultCursor();
 +    move_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
 +    if (touch_cursor) {
 +        SDL_SetCursor(touch_cursor);
@@ -587,6 +618,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    panel.collectionBehavior = NSWindowCollectionBehaviorTransient
 +                             | NSWindowCollectionBehaviorIgnoresCycle;
 +    panel.alphaValue = 0;
++    panel.accessibilityElement = NO;
 +
 +    SCTitleBarView *view = [[SCTitleBarView alloc] initWithFrame:frame];
 +    view.wantsLayer = YES;
@@ -777,6 +809,8 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    ring.collectionBehavior = NSWindowCollectionBehaviorTransient
 +                            | NSWindowCollectionBehaviorIgnoresCycle;
 +    ring.acceptsMouseMovedEvents = YES;
++    // Only the mirror is a window to window managers
++    ring.accessibilityElement = NO;
 +    ring_view = [[SCRingView alloc] initWithFrame:NSZeroRect];
 +    ring_view.mirror = window;
 +    ring.contentView = ring_view;
