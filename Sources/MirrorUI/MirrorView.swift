@@ -57,16 +57,16 @@ final class MirrorView: NSView {
     static let pressedCursor = circleCursor(fill: 0.62)
 
     private static func circleCursor(fill: CGFloat) -> NSCursor {
-        let size: CGFloat = 30
+        let size: CGFloat = 22
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 3, dy: 3))
+            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 2.5, dy: 2.5))
             NSColor(white: 0.5, alpha: fill).setFill()
             circle.fill()
             NSColor(white: 1, alpha: 0.9).setStroke()
-            circle.lineWidth = 2
+            circle.lineWidth = 1.5
             circle.stroke()
             // A faint dark rim keeps it visible on white
-            let rim = NSBezierPath(ovalIn: rect.insetBy(dx: 1.5, dy: 1.5))
+            let rim = NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
             NSColor(white: 0, alpha: 0.22).setStroke()
             rim.lineWidth = 1
             rim.stroke()
@@ -76,10 +76,13 @@ final class MirrorView: NSView {
     }
 
     private var commandHeld = false
+    /// The round touch pointer over the phone, or macOS's own (`--cursor system`)
+    var touchPointer = true
 
     private var currentCursor: NSCursor {
         if commandPress { return .closedHand }
         if commandHeld { return .openHand }
+        guard touchPointer else { return .arrow }
         return pressed ? Self.pressedCursor : Self.touchCursor
     }
 

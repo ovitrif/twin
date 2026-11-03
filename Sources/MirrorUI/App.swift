@@ -20,6 +20,7 @@ import IMBCore
 //   --group <id>          move with the mirror of the same group (awb's Side by side)
 //   --side left|right     this mirror's side in the group (default right)
 //   --gap <points>        space between the two (default 12)
+//   --cursor touch|system the round touch pointer (default) or macOS's own
 
 public struct Options {
     var name: String?
@@ -36,6 +37,7 @@ public struct Options {
     var group: String?
     var side = "right"
     var gap: CGFloat = 12
+    var cursor = "touch"
 
     public init(_ args: [String]) {
         var it = args.makeIterator()
@@ -54,6 +56,7 @@ public struct Options {
             case "--log": log = it.next()
             case "--group": group = it.next()
             case "--side": side = it.next() ?? side
+            case "--cursor": cursor = it.next() ?? cursor
             case "--gap": gap = it.next().flatMap { Double($0) }.map { CGFloat($0) } ?? gap
             default: break
             }
@@ -101,6 +104,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         window.contentAspectRatio = NSSize(width: width, height: height)
         view = MirrorView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        view.touchPointer = options.cursor != "system"
         window.contentView = view
         let title = options.title ?? "iPhone"
         window.title = title

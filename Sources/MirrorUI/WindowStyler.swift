@@ -16,6 +16,12 @@ private let lightMargin: CGFloat = 8
 final class MirrorWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    // Window managers (Raycast, Mission Control) find windows through
+    // Accessibility, which skips a borderless one unless it says it is standard
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .window }
+    override func accessibilitySubrole() -> NSAccessibility.Subrole? { .standardWindow }
+    override func accessibilityIsIgnored() -> Bool { false }
 }
 
 private final class TitleBarView: NSView {
@@ -102,6 +108,7 @@ final class WindowStyler: NSObject {
         bar.hidesOnDeactivate = false
         bar.becomesKeyOnlyIfNeeded = true
         bar.collectionBehavior = [.transient, .ignoresCycle]
+        bar.setAccessibilityElement(false)
         bar.alphaValue = 0
 
         let view = TitleBarView(frame: frame)

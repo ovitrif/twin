@@ -16,6 +16,7 @@ final class MirrorGroup {
     private let gap: CGFloat
     private let id = UUID().uuidString
     private var following = false
+    private var partner: NSRect?
     private var observers: [NSObjectProtocol] = []
 
     init(window: NSWindow, group: String, side: Side, gap: CGFloat) {
@@ -48,8 +49,22 @@ final class MirrorGroup {
         announce()
     }
 
+    /// A window manager's Center (Raycast's) moves only one mirror; when one
+    /// lands centered on its screen, the pair is centered instead
+    private func centerPairIfCentered() -> Bool {
+        guard let partner, let screen = window.screen?.visibleFrame else { return false }
+        let frame = window.frame
+        guard abs(frame.midX - screen.midX) < 1.5 else { return false }
+        let pair = frame.width + gap + partner.width
+        let x = side == .left ? screen.midX - pair / 2 : screen.midX - pair / 2 + partner.width + gap
+        guard abs(x - frame.minX) >= 1 else { return false }
+        window.setFrameOrigin(NSPoint(x: x.rounded(), y: frame.minY))  // announces again
+        return true
+    }
+
     private func announce() {
         guard !following, window.isVisible else { return }
+        if centerPairIfCentered() { return }
         let f = window.frame
         DistributedNotificationCenter.default().postNotificationName(
             moved, object: group,
@@ -64,6 +79,7 @@ final class MirrorGroup {
               !window.styleMask.contains(.fullScreen), h > 0
         else { return }
         let partner = NSRect(x: x, y: y, width: w, height: h)
+        self.partner = partner
         var frame = window.frame
         // Same height, keeping this phone's shape, tops aligned
         let width = (frame.width * h / max(frame.height, 1)).rounded()

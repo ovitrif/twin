@@ -146,6 +146,7 @@ final class ResizeRing {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.transient, .ignoresCycle]
         panel.acceptsMouseMovedEvents = true
+        panel.setAccessibilityElement(false)
         view.mirror = mirror
         panel.contentView = view
     }
