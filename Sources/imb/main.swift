@@ -135,6 +135,7 @@ var args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "status", "list": status(json: args.contains("--json"))
 case "mirror": mirror(Array(args.dropFirst()))
+case "android-probe": androidProbe(Array(args.dropFirst()))
 case "--version", "-V": print("imb 0.1.0")
 case nil, "-h", "--help", "help": print(usage)
 default: fail("unknown command \(args[0])\n\n\(usage)")
