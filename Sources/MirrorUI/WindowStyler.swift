@@ -3,8 +3,9 @@ import QuartzCore
 
 // Style the borderless mirror window like QuickTime's iPhone mirror, as awb's
 // Android mirror does: rounded corners, a shadow, and a title bar with traffic
-// lights over the top of the screen while the pointer is over the window.
-// Dragging that bar, or Cmd + dragging anywhere, moves the window.
+// lights over the top of the screen while Cmd is held over the window, so the
+// top edge stays the phone's for pull-downs. Dragging that bar, or Cmd +
+// dragging anywhere, moves the window.
 
 private let titleBarHeight: CGFloat = 28
 private let hoverPollInterval = 1.0 / 30
@@ -83,6 +84,8 @@ final class WindowStyler: NSObject {
     private let titleLabel: NSTextField
     private var timer: Timer?
     private var barShown = false
+    /// The bar shows for a moment when the window opens, so it can be found
+    private var introUntil = Date.distantPast
     private lazy var ring = ResizeRing(mirror: window)
     /// Share of the window width the corners round by.
     var cornerRatio: CGFloat { didSet { applyStyle() } }
@@ -260,7 +263,8 @@ final class WindowStyler: NSObject {
             let dragging = barShown && (NSEvent.pressedMouseButtons & 1) != 0
                 && (bar.contentView as? TitleBarView)?.dragging == true
             let over = paneRects.firstIndex { $0.frame.contains(mouse) }
-            hovered = (onTop && over != nil) || dragging || forceBar
+            let command = NSEvent.modifierFlags.contains(.command)
+            hovered = (onTop && over != nil && command) || dragging || forceBar || Date() < introUntil
             // The bar moves to the phone under the pointer
             if let over, over != barPane, !dragging {
                 barPane = over
@@ -269,6 +273,11 @@ final class WindowStyler: NSObject {
         }
         if barShown && bar.level != window.level { bar.level = window.level }
         if hovered && !barShown { showBar() } else if !hovered && barShown { hideBar() }
+    }
+
+    /// Flashes the bar once the window is on screen
+    func introduceBar(for seconds: TimeInterval = 1.5) {
+        introUntil = Date().addingTimeInterval(seconds)
     }
 
     private func showBar() {

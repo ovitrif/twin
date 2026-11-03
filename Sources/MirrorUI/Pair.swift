@@ -155,6 +155,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(pair.android)
         styler.applyStyle()
+        styler.introduceBar()
         NSApp.activate(ignoringOtherApps: true)
 
         startAndroid()
@@ -253,6 +254,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         device.addItem(withTitle: "Lock", action: #selector(lock), keyEquivalent: "l").target = self
         device.addItem(withTitle: "Back", action: #selector(back), keyEquivalent: "b").target = self
         device.addItem(withTitle: "Close", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "w")
+        device.addItem(withTitle: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
         deviceItem.submenu = device
         main.addItem(deviceItem)
         NSApp.mainMenu = main

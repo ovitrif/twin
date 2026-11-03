@@ -101,6 +101,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         styler = WindowStyler(window: window, title: title, cornerRatio: Screen.cornerRatio(productType: options.product))
         window.makeKeyAndOrderFront(nil)
         styler.applyStyle()  // places the resize ring now the window is on screen
+        styler.introduceBar()
         window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -190,6 +191,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         device.addItem(withTitle: "Home", action: #selector(home), keyEquivalent: "h").target = self
         device.addItem(withTitle: "Lock", action: #selector(lock), keyEquivalent: "l").target = self
         device.addItem(withTitle: "Close", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "w")
+        device.addItem(withTitle: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
         deviceItem.submenu = device
         main.addItem(deviceItem)
         NSApp.mainMenu = main
