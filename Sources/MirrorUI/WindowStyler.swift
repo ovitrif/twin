@@ -144,7 +144,7 @@ final class WindowStyler: NSObject {
     private var isFullscreen: Bool { window.styleMask.contains(.fullScreen) }
 
     private var cornerRadius: CGFloat {
-        isFullscreen ? 0 : (window.frame.width * cornerRatio).rounded()
+        isFullscreen ? 0 : (min(window.frame.width, window.frame.height) * cornerRatio).rounded()
     }
 
     // Fit the bar to the window's current width and corners
@@ -193,11 +193,15 @@ final class WindowStyler: NSObject {
         let colors = [NSColor(srgbRed: 1.00, green: 0.37, blue: 0.34, alpha: 1),
                       NSColor(srgbRed: 1.00, green: 0.74, blue: 0.18, alpha: 1),
                       NSColor(srgbRed: 0.16, green: 0.78, blue: 0.25, alpha: 1)]
-        let active = window.isKeyWindow
+        let active = window.isKeyWindow || forceBar
         for light in lights {
             light.layer?.backgroundColor = (active ? colors[light.tag] : NSColor(white: 0.5, alpha: 0.5)).cgColor
         }
     }
+
+    /// Keeps the bar shown and its lights lit, for screenshots in a test VM
+    /// with no pointer
+    private let forceBar = ProcessInfo.processInfo.environment["IMB_SHOW_BAR"] != nil
 
     private func tick() {
         let canShow = window.isVisible && !window.isMiniaturized && !isFullscreen
@@ -210,7 +214,7 @@ final class WindowStyler: NSObject {
             // Keep the bar while it drags the window
             let dragging = barShown && (NSEvent.pressedMouseButtons & 1) != 0
                 && (bar.contentView as? TitleBarView)?.dragging == true
-            hovered = (onTop && window.frame.contains(mouse)) || dragging
+            hovered = (onTop && window.frame.contains(mouse)) || dragging || forceBar
         }
         if barShown && bar.level != window.level { bar.level = window.level }
         if hovered && !barShown { showBar() } else if !hovered && barShown { hideBar() }

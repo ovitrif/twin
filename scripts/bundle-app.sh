@@ -11,6 +11,8 @@ app="$out/iOS Mirror.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 cp "$bin/IOSMirror" "$app/Contents/MacOS/iOS Mirror"
+(cd hid && cargo build --release --quiet)
+cp hid/target/release/imb-hid "$app/Contents/MacOS/imb-hid"
 cp "$bin/imb" "$out/imb"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -30,5 +32,6 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+codesign --force --sign - "$app/Contents/MacOS/imb-hid" >/dev/null 2>&1
 codesign --force --sign - "$app" >/dev/null 2>&1
 echo "$app"

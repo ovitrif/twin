@@ -8,22 +8,15 @@ final class MirrorView: NSView {
     let display = AVSampleBufferDisplayLayer()
     private let status = NSTextField(labelWithString: "")
     private let touchDot = CAShapeLayer()
-    var onGesture: ((Gesture) -> Void)?
-    var onScroll: ((CGPoint, CGVector) -> Void)?
-    var onKeys: ((String) -> Void)?
-    /// The phone's screen in points, for mapping the pointer; until known, the video's size.
-    var deviceSize = CGSize(width: 1, height: 1)
-
-    private var pressStart: TimeInterval?
-    private var points: [CGPoint] = []
-    private var times: [TimeInterval] = []
+    weak var input: InputSink?
+    private var pressed = false
     private var commandPress = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-        display.videoGravity = .resizeAspect
+        display.videoGravity = .resizeAspectFill  // the window keeps the video's aspect; fill hides rounding slivers
         display.frame = bounds
         display.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         layer?.addSublayer(display)
@@ -58,8 +51,11 @@ final class MirrorView: NSView {
         status.isHidden = text == nil
     }
 
+    /// The pointer from 0 to 1 across the phone's screen
     private func phonePoint(_ event: NSEvent) -> CGPoint {
-        Screen.devicePoint(convert(event.locationInWindow, from: nil), view: bounds.size, device: deviceSize)
+        let p = convert(event.locationInWindow, from: nil)
+        return CGPoint(x: min(max(p.x / max(bounds.width, 1), 0), 1),
+                       y: min(max(p.y / max(bounds.height, 1), 0), 1))
     }
 
     private func showDot(at event: NSEvent?) {
@@ -81,39 +77,31 @@ final class MirrorView: NSView {
             return
         }
         commandPress = false
-        pressStart = event.timestamp
-        points = [phonePoint(event)]
-        times = [0]
+        pressed = true
+        input?.touch(.down, at: phonePoint(event))
         showDot(at: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard !commandPress, let start = pressStart else { return }
-        points.append(phonePoint(event))
-        times.append(event.timestamp - start)
+        guard pressed else { return }
+        input?.touch(.move, at: phonePoint(event))
         showDot(at: event)
     }
 
     override func mouseUp(with event: NSEvent) {
         showDot(at: nil)
-        guard !commandPress, let start = pressStart else { commandPress = false; return }
-        pressStart = nil
-        let point = phonePoint(event)
-        if point != points.last {
-            points.append(point)
-        } else {
-            points.removeLast()
-            times.removeLast()
-            points.append(point)
-        }
-        times.append(event.timestamp - start)
-        onGesture?(Gesture(points: points, times: times))
+        commandPress = false
+        guard pressed else { return }
+        pressed = false
+        input?.touch(.up, at: phonePoint(event))
     }
 
     override func scrollWheel(with event: NSEvent) {
         guard !event.modifierFlags.contains(.command) else { return }
-        let scale = deviceSize.width / max(bounds.width, 1)
-        onScroll?(phonePoint(event), CGVector(dx: event.scrollingDeltaX * scale, dy: event.scrollingDeltaY * scale))
+        // The finger moves with the content, as macOS already turned the deltas
+        let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+        input?.scroll(at: phonePoint(event), by: CGVector(dx: event.scrollingDeltaX * scale / max(bounds.width, 1),
+                                                          dy: event.scrollingDeltaY * scale / max(bounds.height, 1)))
     }
 
     override func keyDown(with event: NSEvent) {
@@ -122,14 +110,14 @@ final class MirrorView: NSView {
             return
         }
         switch event.keyCode {
-        case 51: onKeys?("\u{8}")    // delete
-        case 117: onKeys?("\u{7F}")  // forward delete
-        case 36, 76: onKeys?("\n")   // return, enter
-        case 48: onKeys?("\t")
+        case 51: input?.type("\u{8}")    // delete
+        case 117: input?.type("\u{7F}")  // forward delete
+        case 36, 76: input?.type("\n")   // return, enter
+        case 48: input?.type("\t")
         default:
             if let text = event.characters, !text.isEmpty,
                text.unicodeScalars.allSatisfy({ $0.value >= 0x20 && !(0xF700...0xF8FF).contains($0.value) }) {
-                onKeys?(text)
+                input?.type(text)
             }
         }
     }
