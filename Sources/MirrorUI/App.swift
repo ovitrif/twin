@@ -128,10 +128,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             input.onError = log
             self.input = input
         } else if let udid = options.udid, let helper = hidHelper {
+            // Started on the first frame: the phone reconnects its USB when
+            // capture begins, which drops any session opened before
             let hid = HIDInput(helper: helper, udid: udid)
             hid.onError = log
             hid.onReady = { log("input ready") }
-            do { try hid.start() } catch { log("cannot start imb-hid: \(error)") }
             self.hid = hid
             self.input = hid
         }
@@ -159,6 +160,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Fit the window to the video. On a rotation the window turns about its
     /// center, so the phone stays the same size on screen.
     private func resize(to size: CGSize) {
+        if videoSize == .zero, let hid {
+            do { try hid.start() } catch { FileHandle.standardError.write(Data("imb: cannot start imb-hid: \(error)\n".utf8)) }
+        }
         let old = videoSize
         videoSize = size
         view.setStatus(nil)

@@ -115,6 +115,11 @@ final class MirrorView: NSView {
         case 117: input?.type("\u{7F}")  // forward delete
         case 36, 76: input?.type("\n")   // return, enter
         case 48: input?.type("\t")
+        case 53: input?.key(0x29)   // escape
+        case 123: input?.key(0x50)  // arrows: left, right, down, up
+        case 124: input?.key(0x4F)
+        case 125: input?.key(0x51)
+        case 126: input?.key(0x52)
         default:
             if let text = event.characters, !text.isEmpty,
                text.unicodeScalars.allSatisfy({ $0.value >= 0x20 && !(0xF700...0xF8FF).contains($0.value) }) {

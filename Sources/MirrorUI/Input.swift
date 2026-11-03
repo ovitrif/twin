@@ -10,23 +10,36 @@ protocol InputSink: AnyObject {
     func touch(_ phase: TouchPhase, at point: CGPoint)
     func scroll(at point: CGPoint, by delta: CGVector)
     func type(_ text: String)
+    /// A key with no character, as a HID keyboard usage
+    func key(_ usage: Int)
     func button(_ name: String)
 }
 
 /// Live touch through `imb-hid` and the CoreDevice HID service (iOS 27 and
-/// later): every pointer move reaches the phone as it happens.
+/// later): every pointer move reaches the phone as it happens. A session that
+/// drops, as when the phone replugs, starts again by itself.
 final class HIDInput: InputSink {
     var onError: ((String) -> Void)?
     var onReady: (() -> Void)?
-    private let process = Process()
-    private let stdin = Pipe()
+    private let helper: URL
+    private let udid: String
+    private var process: Process?
+    private var stdin = Pipe()
+    private var stopping = false
     private var scrollPoint: CGPoint?
     private var scrollPending = CGVector.zero
     private var scrollTimer: Timer?
 
     init(helper: URL, udid: String) {
+        self.helper = helper
+        self.udid = udid
+    }
+
+    func start() throws {
+        let process = Process()
         process.executableURL = helper
         process.arguments = [udid]
+        let stdin = Pipe()
         process.standardInput = stdin
         let stdout = Pipe()
         process.standardOutput = stdout
@@ -38,14 +51,23 @@ final class HIDInput: InputSink {
                 }
             }
         }
+        process.terminationHandler = { [weak self] ended in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let self, !self.stopping, self.process === ended else { return }
+                self.onError?("input session ended (\(ended.terminationStatus)), reconnecting")
+                try? self.start()
+            }
+        }
+        try process.run()
+        self.process = process
+        self.stdin = stdin
     }
-
-    func start() throws { try process.run() }
 
     /// Closing stdin lets imb-hid end the media stream, which the phone needs
     /// to accept the next session; terminate only if it hangs
     func stop() {
-        guard process.isRunning else { return }
+        stopping = true
+        guard let process, process.isRunning else { return }
         try? stdin.fileHandleForWriting.close()
         let deadline = Date().addingTimeInterval(0.5)
         while process.isRunning && Date() < deadline { usleep(20_000) }
@@ -53,7 +75,7 @@ final class HIDInput: InputSink {
     }
 
     private func send(_ command: [String: Any]) {
-        guard process.isRunning, let data = try? JSONSerialization.data(withJSONObject: command) else { return }
+        guard process?.isRunning == true, let data = try? JSONSerialization.data(withJSONObject: command) else { return }
         stdin.fileHandleForWriting.write(data + Data("\n".utf8))
     }
 
@@ -95,6 +117,7 @@ final class HIDInput: InputSink {
     }
 
     func type(_ text: String) { send(["text": text]) }
+    func key(_ usage: Int) { send(["key": usage]) }
     func button(_ name: String) { send(["button": name]) }
 }
 
@@ -172,6 +195,8 @@ final class WDAInput: InputSink {
             self.enqueue { try await self.client.type(text) }
         }
     }
+
+    func key(_ usage: Int) {}
 
     func button(_ name: String) {
         guard name == "home" else { return }

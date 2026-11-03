@@ -5,6 +5,7 @@
 //! Usage: `imb-hid <udid>`, then one JSON command per line on stdin:
 //!   {"touch":"down"|"move"|"up","x":0.5,"y":0.25}   x and y from 0 to 1 across the screen
 //!   {"text":"hello"}
+//!   {"key":79}                                     a HID keyboard usage (79 is right arrow)
 //!   {"button":"home"|"lock"|"volume-up"|"volume-down"|"siri"}
 //! It prints `ready` once the phone accepts input, and `error: <why>` lines.
 
@@ -28,6 +29,7 @@ struct Command {
     x: Option<f64>,
     y: Option<f64>,
     text: Option<String>,
+    key: Option<u64>,
     button: Option<String>,
 }
 
@@ -127,6 +129,8 @@ async fn run(udid: &str) -> Result<(), String> {
             touch.send_touchscreen(state, point.0, point.1, None).await.map_err(|e| format!("{e:?}"))
         } else if let Some(text) = command.text {
             type_text(&mut indigo, &text).await
+        } else if let Some(usage) = command.key {
+            press_key(&mut indigo, usage).await
         } else if let Some((usage, hold)) = command.button.as_deref().and_then(button) {
             press(&mut indigo, usage, hold).await
         } else {
@@ -134,6 +138,11 @@ async fn run(udid: &str) -> Result<(), String> {
         };
         if let Err(e) = result {
             println!("error: {e}");
+            // A dropped tunnel (the phone replugged or switched USB modes) does
+            // not come back; exit so the mirror starts a fresh session
+            if e.contains("BrokenPipe") || e.contains("channel closed") {
+                std::process::exit(3);
+            }
         }
     }
     let mut client = media.client;
@@ -149,6 +158,11 @@ async fn press(
     indigo.send_button(0x0C, usage, ButtonState::Down).await.map_err(|e| format!("{e:?}"))?;
     tokio::time::sleep(Duration::from_millis(hold)).await;
     indigo.send_button(0x0C, usage, ButtonState::Up).await.map_err(|e| format!("{e:?}"))
+}
+
+async fn press_key(indigo: &mut IndigoHidClient<Box<dyn idevice::ReadWrite>>, usage: u64) -> Result<(), String> {
+    indigo.send_keyboard(usage, ButtonState::Down).await.map_err(|e| format!("{e:?}"))?;
+    indigo.send_keyboard(usage, ButtonState::Up).await.map_err(|e| format!("{e:?}"))
 }
 
 async fn type_text(indigo: &mut IndigoHidClient<Box<dyn idevice::ReadWrite>>, text: &str) -> Result<(), String> {

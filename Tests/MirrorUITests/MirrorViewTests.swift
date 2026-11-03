@@ -9,6 +9,7 @@ private final class Recorder: InputSink {
     func touch(_ phase: TouchPhase, at point: CGPoint) { touches.append("\(phase.rawValue) \(point.x) \(point.y)") }
     func scroll(at point: CGPoint, by delta: CGVector) {}
     func type(_ text: String) { typed.append(text) }
+    func key(_ usage: Int) { typed.append("key \(usage)") }
     func button(_ name: String) {}
 }
 
@@ -57,7 +58,7 @@ private func key(_ chars: String, code: UInt16, flags: NSEvent.ModifierFlags = [
     view.keyDown(with: key("\r", code: 36))
     view.keyDown(with: key("\u{F700}", code: 126))  // up arrow
     view.keyDown(with: key("a", code: 0, flags: .command))
-    #expect(recorder.typed == ["a", "\u{8}", "\n"])
+    #expect(recorder.typed == ["a", "\u{8}", "\n", "key 82"])
 }
 
 /// imb-hid stand-in that records the JSON lines HIDInput writes
