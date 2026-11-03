@@ -286,6 +286,7 @@ pub struct App {
     settings: Settings,
     width_text: String,
     height_text: String,
+    gap_text: String,
     screen: Screen,
     animations: AnimationState,
     tab: Tab,
@@ -389,11 +390,13 @@ impl App {
 
         let width_text = settings.window_width.to_string();
         let height_text = settings.window_height.to_string();
+        let gap_text = settings.gap.to_string();
         Ok(Self {
             shared,
             settings,
             width_text,
             height_text,
+            gap_text,
             screen: Screen::Main,
             animations: AnimationState::new(appearance),
             tab: Tab::Devices,
@@ -731,6 +734,7 @@ impl App {
     fn save_settings(&mut self) {
         self.settings.window_width = self.width_text.trim().parse().unwrap_or(0);
         self.settings.window_height = self.height_text.trim().parse().unwrap_or(0);
+        self.settings.gap = self.gap_text.trim().parse().unwrap_or(12);
         self.settings.save();
     }
 
@@ -1777,6 +1781,21 @@ impl App {
                             device.clone(),
                             settings.scrcpy_options(),
                         );
+                        // Side by side: the first iPhone not mirrored joins it
+                        if settings.side_by_side
+                            && let Some(iphone) = snapshot.iphones.iter().find(|iphone| {
+                                !mirrors.contains(&backend::iphone_mirror_key(iphone))
+                            })
+                        {
+                            backend::start_iphone_mirror(
+                                shared.clone(),
+                                ctx.clone(),
+                                iphone.clone(),
+                                settings.window_height,
+                                &settings.iphone_title,
+                                Some(settings.gap),
+                            );
+                        }
                     }
                 }
             }
@@ -1815,7 +1834,25 @@ impl App {
                             iphone.clone(),
                             settings.window_height,
                             &settings.iphone_title,
+                            settings.side_by_side.then_some(settings.gap),
                         );
+                        // Side by side: the first ready Android phone not
+                        // mirrored joins it
+                        if settings.side_by_side
+                            && scrcpy_ok
+                            && let Some(device) = snapshot.devices.iter().find(|device| {
+                                device.ready
+                                    && !device.is_emulator
+                                    && !mirrors.contains(&device.mirror_key)
+                            })
+                        {
+                            backend::start_mirror(
+                                shared.clone(),
+                                ctx.clone(),
+                                device.clone(),
+                                settings.scrcpy_options(),
+                            );
+                        }
                     }
                 }
             }
@@ -1975,6 +2012,10 @@ impl App {
                 changed |= check_item(ui, "Borderless", &mut self.settings.borderless);
                 ui.add_space(20.0);
                 changed |= check_item(ui, "Auto mirror", &mut self.settings.auto_mirror);
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                changed |= check_item(ui, "Side by side", &mut self.settings.side_by_side);
             });
 
             ui.add_space(12.0);

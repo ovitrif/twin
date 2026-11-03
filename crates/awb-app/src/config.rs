@@ -26,6 +26,10 @@ pub struct Settings {
     pub borderless: bool,
     /// Auto-start mirroring when a physical phone connects (never emulators).
     pub auto_mirror: bool,
+    /// Mirroring a physical phone also opens the other platform's, side by
+    /// side `gap` points apart, and the two move together.
+    pub side_by_side: bool,
+    pub gap: u32,
     /// Follow the system appearance or force the light/dark app palette.
     pub theme: ThemeMode,
     /// Light the popover surface with gradients and glows; off draws it flat.
@@ -44,6 +48,8 @@ impl Default for Settings {
             always_on_top: true,
             borderless: true,
             auto_mirror: false,
+            side_by_side: false,
+            gap: 12,
             theme: ThemeMode::Auto,
             gradients: true,
         }
@@ -58,6 +64,7 @@ impl Settings {
             window_title: self.window_title.clone(),
             window_width: self.window_width,
             window_height: self.window_height,
+            side_by_side_gap: self.side_by_side.then_some(self.gap),
             ..ScrcpyOptions::default()
         }
     }

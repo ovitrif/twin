@@ -550,6 +550,7 @@ pub fn start_iphone_mirror(
     iphone: Iphone,
     height: u32,
     title: &str,
+    side_by_side_gap: Option<u32>,
 ) {
     let mirror_key = iphone_mirror_key(&iphone);
     let mut state = shared.lock().unwrap();
@@ -557,7 +558,9 @@ pub fn start_iphone_mirror(
         state.log(format!("Already mirroring {}", iphone.name));
         return;
     }
-    match Imb::resolve().and_then(|imb| imb.spawn_mirror(&iphone.udid, height, title)) {
+    match Imb::resolve()
+        .and_then(|imb| imb.spawn_mirror(&iphone.udid, height, title, side_by_side_gap))
+    {
         Ok(mut child) => {
             state.log(format!("Mirroring {} (pid {})", iphone.name, child.id()));
             if let Some(out) = child.stdout.take() {

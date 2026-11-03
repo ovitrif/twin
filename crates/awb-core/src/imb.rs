@@ -9,6 +9,9 @@ use serde::Deserialize;
 
 use crate::command_path::resolve_program;
 
+/// The group the Android and iPhone mirrors share when side by side.
+pub const MIRROR_GROUP: &str = "awb";
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Iphone {
     pub udid: String,
@@ -50,8 +53,15 @@ impl Imb {
     /// The mirror for this iPhone; imb stays running while it is open and the
     /// mirror quits when imb ends, so killing the child closes the window.
     /// `height` is the window height in points, as for scrcpy; 0 or an empty
-    /// title leaves imb's default.
-    pub fn spawn_mirror(&self, udid: &str, height: u32, title: &str) -> Result<Child> {
+    /// title leaves imb's default. With `side_by_side_gap` the mirror sits
+    /// right of the Android one and moves with it.
+    pub fn spawn_mirror(
+        &self,
+        udid: &str,
+        height: u32,
+        title: &str,
+        side_by_side_gap: Option<u32>,
+    ) -> Result<Child> {
         let mut command = Command::new(&self.path);
         command.args(["mirror", "--wait", "--udid", udid]);
         if height > 0 {
@@ -59,6 +69,16 @@ impl Imb {
         }
         if !title.is_empty() {
             command.args(["--title", title]);
+        }
+        if let Some(gap) = side_by_side_gap {
+            command.args([
+                "--group",
+                MIRROR_GROUP,
+                "--side",
+                "right",
+                "--gap",
+                &gap.to_string(),
+            ]);
         }
         command
             .stdin(Stdio::null())
