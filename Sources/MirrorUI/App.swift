@@ -17,6 +17,9 @@ import IMBCore
 //   --no-input            show the phone only
 //   --parent <pid>        quit when this process ends (imb mirror --wait)
 //   --log <file>          append diagnostics here instead of stderr
+//   --group <id>          move with the mirror of the same group (awb's Side by side)
+//   --side left|right     this mirror's side in the group (default right)
+//   --gap <points>        space between the two (default 12)
 
 public struct Options {
     var name: String?
@@ -30,6 +33,9 @@ public struct Options {
     var noInput = false
     var parent: pid_t?
     var log: String?
+    var group: String?
+    var side = "right"
+    var gap: CGFloat = 12
 
     public init(_ args: [String]) {
         var it = args.makeIterator()
@@ -46,6 +52,9 @@ public struct Options {
             case "--no-input": noInput = true
             case "--parent": parent = it.next().flatMap { pid_t($0) }
             case "--log": log = it.next()
+            case "--group": group = it.next()
+            case "--side": side = it.next() ?? side
+            case "--gap": gap = it.next().flatMap { Double($0) }.map { CGFloat($0) } ?? gap
             default: break
             }
         }
@@ -64,6 +73,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hid: HIDInput?
     private var videoSize = CGSize.zero
     private var parentWatch: DispatchSourceProcess?
+    private var group: MirrorGroup?
 
     public init(options: Options) { self.options = options }
 
@@ -97,6 +107,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         styler = WindowStyler(window: window, title: title, cornerRatio: Screen.cornerRatio(productType: options.product))
         window.makeKeyAndOrderFront(nil)
         styler.applyStyle()  // places the resize ring now the window is on screen
+        if let id = options.group {
+            group = MirrorGroup(window: window, group: id, side: MirrorGroup.Side(rawValue: options.side) ?? .right,
+                                gap: options.gap)
+        }
         window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -169,6 +183,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         videoSize = size
         view.setStatus(nil)
         guard size.width > 0, size.height > 0, !window.styleMask.contains(.fullScreen) else { return }
+        defer { if old == .zero { group?.placeInitially() } }
         var frame = window.frame
         let turned = old != .zero && (old.width > old.height) != (size.width > size.height)
         let long = max(frame.width, frame.height)
