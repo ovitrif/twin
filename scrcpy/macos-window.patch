@@ -88,7 +88,7 @@ diff -ruN a/app/src/sys/macos/window.h b/app/src/sys/macos/window.h
 diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 --- a/app/src/sys/macos/window.m
 +++ b/app/src/sys/macos/window.m
-@@ -0,0 +1,796 @@
+@@ -0,0 +1,819 @@
 +#include "sys/macos/window.h"
 +
 +#import <AppKit/AppKit.h>
@@ -117,6 +117,29 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +- (BOOL)acceptsFirstMouse:(NSEvent *)event {
 +    (void) event;
 +    return YES;
++}
++
++// The bar is chrome you click, so it keeps macOS's arrow, never the touch
++// pointer
++- (void)resetCursorRects {
++    [self addCursorRect:self.bounds cursor:NSCursor.arrowCursor];
++}
++
++- (void)updateTrackingAreas {
++    for (NSTrackingArea *area in self.trackingAreas) {
++        [self removeTrackingArea:area];
++    }
++    [self addTrackingArea:[[NSTrackingArea alloc]
++        initWithRect:self.bounds
++             options:NSTrackingCursorUpdate | NSTrackingActiveAlways
++                   | NSTrackingInVisibleRect
++               owner:self
++            userInfo:nil]];
++}
++
++- (void)cursorUpdate:(NSEvent *)event {
++    (void) event;
++    [NSCursor.arrowCursor set];
 +}
 +
 +// Drag from anywhere but the buttons, the title label included
@@ -335,7 +358,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +sc_touch_cursor(CGFloat fill) {
 +    SDL_Surface *images[2] = {NULL, NULL};
 +    for (int scale = 1; scale <= 2; ++scale) {
-+        int size = 22 * scale;
++        int size = 18 * scale;
 +        SDL_Surface *surface = SDL_CreateSurface(size, size, SDL_PIXELFORMAT_ARGB8888);
 +        if (!surface) {
 +            break;
@@ -348,14 +371,14 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +        memset(surface->pixels, 0, surface->pitch * size);
 +        CGContextScaleCTM(ctx, scale, scale);
 +        CGContextSetRGBFillColor(ctx, 0.5, 0.5, 0.5, fill);
-+        CGContextFillEllipseInRect(ctx, CGRectMake(2.5, 2.5, 17, 17));
++        CGContextFillEllipseInRect(ctx, CGRectMake(2, 2, 14, 14));
 +        CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 0.9);
 +        CGContextSetLineWidth(ctx, 1.5);
-+        CGContextStrokeEllipseInRect(ctx, CGRectMake(2.5, 2.5, 17, 17));
++        CGContextStrokeEllipseInRect(ctx, CGRectMake(2, 2, 14, 14));
 +        // A faint dark rim keeps it visible on white
 +        CGContextSetRGBStrokeColor(ctx, 0, 0, 0, 0.22);
 +        CGContextSetLineWidth(ctx, 1);
-+        CGContextStrokeEllipseInRect(ctx, CGRectMake(1, 1, 20, 20));
++        CGContextStrokeEllipseInRect(ctx, CGRectMake(1, 1, 16, 16));
 +        CGContextRelease(ctx);
 +        images[scale - 1] = surface;
 +    }
@@ -366,7 +389,7 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +        SDL_AddSurfaceAlternateImage(images[0], images[1]);
 +        SDL_DestroySurface(images[1]);
 +    }
-+    SDL_Cursor *cursor = SDL_CreateColorCursor(images[0], 11, 11);
++    SDL_Cursor *cursor = SDL_CreateColorCursor(images[0], 9, 9);
 +    SDL_DestroySurface(images[0]);
 +    return cursor;
 +}
