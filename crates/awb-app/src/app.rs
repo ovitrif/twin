@@ -1995,14 +1995,16 @@ impl App {
             ui.horizontal(|ui| {
                 let total = ui.available_width();
                 // The width follows each phone's shape, so only the height is set
-                let title_width = (total - 64.0 - 2.0 * 8.0) / 2.0;
+                let title_width = (total - 2.0 * 56.0 - 3.0 * 8.0) / 2.0;
                 changed |=
                     labeled_input(ui, "Android", title_width, &mut self.settings.window_title);
                 ui.add_space(8.0);
                 changed |=
                     labeled_input(ui, "iPhone", title_width, &mut self.settings.iphone_title);
                 ui.add_space(8.0);
-                changed |= labeled_input(ui, "H", 64.0, &mut self.height_text);
+                changed |= labeled_input(ui, "H", 56.0, &mut self.height_text);
+                ui.add_space(8.0);
+                changed |= labeled_input(ui, "Gap", 56.0, &mut self.gap_text);
             });
 
             ui.add_space(10.0);
