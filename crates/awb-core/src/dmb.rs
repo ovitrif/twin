@@ -7,7 +7,11 @@ use std::process::{Child, Command, Stdio};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::bundle;
 use crate::command_path::resolve_program;
+
+/// dmb inside Twin.app, beside the mirror windows it opens
+const BUNDLED_DMB: &str = "Contents/Helpers/Twin Mirror.app/Contents/MacOS/dmb";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Iphone {
@@ -26,10 +30,13 @@ pub struct Dmb {
 }
 
 impl Dmb {
+    /// The dmb inside Twin.app's mirror, else one on PATH (a dev build)
     pub fn resolve() -> Result<Self> {
-        Ok(Self {
-            path: resolve_program("dmb", None)?,
-        })
+        let path = match bundle::find(BUNDLED_DMB) {
+            Some(path) => path,
+            None => resolve_program("dmb", None)?,
+        };
+        Ok(Self { path })
     }
 
     pub fn iphones(&self) -> Result<Vec<Iphone>> {

@@ -1,17 +1,15 @@
 #!/bin/sh
-# Wraps the awb-app binary into Android Wifi Bridge.app (menu bar agent, no Dock icon).
-# Usage: scripts/bundle-app.sh [app-binary] [output-dir] [icon-renderer]
-#
-# Bundles the patched scrcpy from scripts/build-scrcpy.sh when it has been
-# built (target/scrcpy, or $SCRCPY_DIR); otherwise awb uses scrcpy from PATH.
-#
-# icon-renderer defaults to app-binary, but can be a host-architecture build so
-# a cross-compiled release binary is never executed on the packaging runner.
+# Wraps the menu bar app binary into Twin.app (menu bar agent, no Dock icon),
+# with its mirrors under Contents/Helpers: Twin Mirror.app (the iPhone and
+# side by side windows, dmb, dmb-hid; built from apple/) and Android Mirror.app
+# (the patched scrcpy from scripts/build-scrcpy.sh, when built in target/scrcpy
+# or $SCRCPY_DIR; otherwise the app uses scrcpy from PATH).
+# Usage: scripts/bundle-app.sh [app-binary] [output-dir]
+# TWIN_SKIP_MIRROR=1 leaves Twin Mirror.app out, for a cross-compiled build.
 set -eu
 
 APP_BIN="${1:-target/release/awb-app}"
 OUT_DIR="${2:-target/bundle}"
-ICON_BIN="${3:-$APP_BIN}"
 SCRCPY_DIR="${SCRCPY_DIR:-target/scrcpy}"
 VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
 
@@ -20,14 +18,10 @@ if [ ! -x "$APP_BIN" ]; then
   exit 1
 fi
 
-if [ ! -x "$ICON_BIN" ]; then
-  echo "icon renderer not found at ${ICON_BIN}" >&2
-  exit 1
-fi
 
-APP="${OUT_DIR}/Android Wifi Bridge.app"
-LEGACY_APP="${OUT_DIR}/AWB.app"
-rm -rf "$APP" "$LEGACY_APP"
+APP="${OUT_DIR}/Twin.app"
+# Bundles of earlier releases, so a rebuild leaves one app for Spotlight
+rm -rf "$APP" "${OUT_DIR}/Android Wifi Bridge.app" "${OUT_DIR}/AWB.app"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
 cp "$APP_BIN" "${APP}/Contents/MacOS/awb-app"
@@ -35,29 +29,16 @@ cp "$APP_BIN" "${APP}/Contents/MacOS/awb-app"
 # Liquid Glass icon: actool compiles the Icon Composer bundle into Assets.car
 # (light, dark, clear and tinted variants) plus AppIcon.icns for older macOS.
 # Without an actool that understands .icon files, fall back to the flat icon.
-ICON_SOURCE="$(dirname "$0")/../crates/awb-app/assets/AppIcon.icon"
-ICON_NAME="AppIcon"
-ICON_PLIST_KEYS="<key>CFBundleIconName</key><string>AppIcon</string>"
-if ! xcrun actool "$ICON_SOURCE" --compile "${APP}/Contents/Resources" \
-  --platform macosx --minimum-deployment-target 11.0 --app-icon AppIcon \
-  --output-partial-info-plist "$(mktemp -d)/icon.plist" >/dev/null 2>&1 \
-  || [ ! -f "${APP}/Contents/Resources/Assets.car" ] \
-  || [ ! -f "${APP}/Contents/Resources/AppIcon.icns" ]; then
-  echo "actool could not compile ${ICON_SOURCE}; using the flat icon" >&2
-  rm -f "${APP}/Contents/Resources/Assets.car" "${APP}/Contents/Resources/AppIcon.icns"
-  ICON_NAME="awb"
-  ICON_PLIST_KEYS=""
-  iconset="$(mktemp -d)/awb.iconset"
-  mkdir -p "$iconset"
-  for size in 16 32 128 256 512; do
-    "$ICON_BIN" --render-icon "${iconset}/icon_${size}x${size}.png" "$size" >/dev/null
-    "$ICON_BIN" --render-icon "${iconset}/icon_${size}x${size}@2x.png" "$((size * 2))" >/dev/null
-  done
-  iconutil -c icns "$iconset" -o "${APP}/Contents/Resources/awb.icns"
+# Made with apple/scripts/make-icon.swift cast
+cp "$(dirname "$0")/../apple/assets/Twin.icns" "${APP}/Contents/Resources/AppIcon.icns"
+
+# The mirror windows, the dmb CLI and dmb-hid (macOS only, built with Swift)
+if [ "${TWIN_SKIP_MIRROR:-}" != 1 ]; then
+  mkdir -p "${APP}/Contents/Helpers"
+  helpers="$(cd "${APP}/Contents/Helpers" && pwd)"
+  (cd "$(dirname "$0")/../apple" && scripts/bundle-app.sh "$helpers") >/dev/null
 fi
 
-# The patched scrcpy runs as its own app, so the mirror window belongs to a
-# process with a bundle id that window managers (Raycast layouts) can target
 if [ -x "${SCRCPY_DIR}/scrcpy" ] \
   && [ "$(lipo -archs "${SCRCPY_DIR}/scrcpy")" != "$(lipo -archs "$APP_BIN")" ]; then
   echo "skipping ${SCRCPY_DIR}/scrcpy: not built for the app's architecture" >&2
@@ -104,7 +85,7 @@ LAUNCHER
 <dict>
   <key>CFBundleExecutable</key><string>Android Mirror</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>tech.masivo.awb.mirror</string>
+  <key>CFBundleIdentifier</key><string>tech.masivo.twin.android</string>
   <key>CFBundleName</key><string>Android Mirror</string>
   <key>CFBundleDisplayName</key><string>Android Mirror</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -125,11 +106,10 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>awb-app</string>
-  <key>CFBundleIconFile</key><string>${ICON_NAME}</string>
-  ${ICON_PLIST_KEYS}
-  <key>CFBundleIdentifier</key><string>tech.masivo.awb</string>
-  <key>CFBundleName</key><string>Android Wifi Bridge</string>
-  <key>CFBundleDisplayName</key><string>Android Wifi Bridge</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIdentifier</key><string>tech.masivo.twin</string>
+  <key>CFBundleName</key><string>Twin</string>
+  <key>CFBundleDisplayName</key><string>Twin</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>

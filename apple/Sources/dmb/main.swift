@@ -44,11 +44,11 @@ func twinBinary() -> String? {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let candidates: [String?] = [
         ProcessInfo.processInfo.environment["DMB_TWIN"],
-        exe.appendingPathComponent("Twin.app/Contents/MacOS/Twin").path,
-        exe.appendingPathComponent("../Twin.app/Contents/MacOS/Twin").standardized.path,
-        "/Applications/Twin.app/Contents/MacOS/Twin",
-        "\(home)/Applications/Twin.app/Contents/MacOS/Twin",
+        // Inside Twin Mirror.app, beside the mirror; then a dev build's bundle
         exe.appendingPathComponent("Twin").path,
+        exe.appendingPathComponent("Twin Mirror.app/Contents/MacOS/Twin").path,
+        "/Applications/Twin.app/Contents/Helpers/Twin Mirror.app/Contents/MacOS/Twin",
+        "\(home)/Applications/Twin.app/Contents/Helpers/Twin Mirror.app/Contents/MacOS/Twin",
     ]
     return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
 }

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/awb-core", "crates/awb", "crates/awb-app", "crates/menu-icon"]
+# The iPhone helper builds on its own, with apple/ (macOS only)
+exclude = ["apple/hid"]
 
 [workspace.package]
 version = "2.1.0"

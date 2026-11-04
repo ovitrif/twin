@@ -1,7 +1,9 @@
 #!/bin/sh
-# Bundle the release build as `Twin.app` next to the `dmb` CLI in OUT (default
-# build/): dmb finds the app beside itself. Twin is every mirror dmb opens, one
-# iPhone or an Android phone beside it, so macOS asks camera access once.
+# Bundle the release build as `Twin Mirror.app` in OUT (default build/), the
+# mirror windows Twin's menu bar app opens: one iPhone, or an Android phone
+# beside it. The `dmb` CLI and `dmb-hid` ride inside it, and dmb opens the
+# mirror beside itself. Every mirror is this one app, so macOS asks camera
+# access (the capture fallback before iOS 27) once.
 # It runs scrcpy's own server on the Android phone (scrcpy-server 5.0.1,
 # Apache-2.0), pinned as awb pins it.
 set -eu
@@ -11,7 +13,6 @@ swift build -c release --product dmb >/dev/null
 (cd hid && cargo build --release --quiet)
 bin=$(swift build -c release --show-bin-path)
 version=$("$bin/dmb" --version | awk '{print $2}')
-cp "$bin/dmb" "$out/dmb"
 
 SERVER_SHA256="764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536"
 cache="${HOME}/.cache/dmb"
@@ -23,10 +24,11 @@ if ! echo "${SERVER_SHA256}  ${server}" | shasum -a 256 -c - >/dev/null 2>&1; th
 fi
 [ -f "${cache}/scrcpy-LICENSE" ] || curl -fsSL "https://raw.githubusercontent.com/Genymobile/scrcpy/v5.0.1/LICENSE" -o "${cache}/scrcpy-LICENSE"
 
-app="$out/Twin.app"
+app="$out/Twin Mirror.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Twin" "$app/Contents/MacOS/Twin"
+cp "$bin/dmb" "$app/Contents/MacOS/dmb"
 cp hid/target/release/dmb-hid "$app/Contents/MacOS/dmb-hid"
 cp "$server" "$app/Contents/Resources/scrcpy-server"
 cp "${cache}/scrcpy-LICENSE" "$app/Contents/Resources/scrcpy-LICENSE"
@@ -38,8 +40,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>Twin</string>
-  <key>CFBundleIdentifier</key><string>tech.masivo.twin</string>
+  <key>CFBundleIdentifier</key><string>tech.masivo.twin.mirror</string>
   <key>CFBundleName</key><string>Twin</string>
+  <key>CFBundleDisplayName</key><string>Twin</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
@@ -52,5 +55,6 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 codesign --force --sign - "$app/Contents/MacOS/dmb-hid" >/dev/null 2>&1
+codesign --force --sign - "$app/Contents/MacOS/dmb" >/dev/null 2>&1
 codesign --force --sign - "$app" >/dev/null 2>&1
 echo "$app"

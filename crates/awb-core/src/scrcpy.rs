@@ -7,16 +7,16 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::adb::Adb;
+use crate::bundle;
 use crate::command_path::{is_executable_file, path_env_with_tool_dirs, resolve_program};
 
 pub const DEFAULT_WINDOW_WIDTH: u32 = 480;
 pub const DEFAULT_WINDOW_HEIGHT: u32 = 1_071;
 const RECOMMENDED_SCRCPY_VERSION: ScrcpyVersion = ScrcpyVersion::new(4, 0, 0);
 const SCRCPY_METADATA_TIMEOUT: Duration = Duration::from_secs(5);
-/// The launcher of the patched scrcpy app inside Android Wifi Bridge.app
+/// The launcher of the patched scrcpy app inside Twin.app
 /// (scripts/build-scrcpy.sh, scripts/bundle-app.sh).
 const BUNDLED_SCRCPY: &str = "Contents/Helpers/Android Mirror.app/Contents/MacOS/Android Mirror";
-const APP_BUNDLE_PATH: &str = "/Applications/Android Wifi Bridge.app";
 
 #[derive(Debug, Clone)]
 pub struct Scrcpy {
@@ -347,16 +347,7 @@ fn bundled_scrcpy() -> Option<PathBuf> {
 }
 
 fn bundled_scrcpy_candidates(exe: Option<&Path>) -> Vec<PathBuf> {
-    // The menu bar app runs from <bundle>/Contents/MacOS/awb-app
-    let running_bundle = exe
-        .and_then(|exe| exe.parent()?.parent()?.parent())
-        .filter(|bundle| bundle.extension().is_some_and(|ext| ext == "app"));
-
-    running_bundle
-        .into_iter()
-        .map(|bundle| bundle.join(BUNDLED_SCRCPY))
-        .chain([Path::new(APP_BUNDLE_PATH).join(BUNDLED_SCRCPY)])
-        .collect()
+    bundle::candidates(exe, BUNDLED_SCRCPY)
 }
 
 fn first_executable(candidates: Vec<PathBuf>) -> Option<PathBuf> {
@@ -491,6 +482,7 @@ fn parse_number_prefix(value: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundle::APP_BUNDLE_PATH;
 
     #[test]
     fn builds_raycast_equivalent_scrcpy_args() {

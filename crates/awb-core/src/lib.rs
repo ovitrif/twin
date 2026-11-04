@@ -1,4 +1,5 @@
 pub mod adb;
+pub mod bundle;
 pub mod command_path;
 pub mod dmb;
 pub mod dnssd;
