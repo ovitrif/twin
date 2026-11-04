@@ -1,5 +1,10 @@
 # Repository Instructions
 
+## Support
+- Twin supports Apple silicon Macs on current macOS, and the `twin` CLI on Linux
+  (Android only). No Intel Macs and no workarounds for outdated systems: build,
+  test and release for arm64 macOS only.
+
 ## Workflow
 - After every separable unit of work, commit the completed changes directly.
 - Keep commits scoped to the completed unit of work.

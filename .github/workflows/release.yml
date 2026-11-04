@@ -20,9 +20,6 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             build_kind: zig
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            build_kind: native
           - target: aarch64-apple-darwin
             os: macos-latest
             build_kind: native
@@ -67,8 +64,6 @@ jobs:
           swift --version
 
       - name: Build the patched scrcpy
-        # Native arm64 only: the runner is arm64 and the scrcpy build links
-        # Homebrew's arm64 libraries, so the x86_64 app ships without it
         if: matrix.target == 'aarch64-apple-darwin'
         # Without it the app ships without Android Mirror.app and uses PATH
         continue-on-error: true
@@ -86,9 +81,6 @@ jobs:
           mkdir "$staging"
           cp "target/${target}/release/twin" "$staging/"
           if [[ "$target" == *apple-darwin ]]; then
-            # Twin Mirror (Swift and dmb-hid) builds for the runner's arm64;
-            # the x86_64 app ships with the Android mirror only
-            if [[ "$target" == x86_64-* ]]; then export TWIN_SKIP_MIRROR=1; fi
             scripts/bundle-app.sh "target/${target}/release/twin-app" "$staging"
           fi
           tar czf "${staging}.tar.gz" "$staging"

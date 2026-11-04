@@ -6,7 +6,7 @@ mirror and drive them with your mouse and keyboard, and launch Android Virtual D
 without remembering SDK commands. Nothing is installed on either phone.
 
 <p align="center">
-  <img src="assets/popover.webp" alt="Twin's menu bar popover moving between its device list, settings and QR pairing pages" width="412">
+  <img src="assets/popover.webp" alt="Twin's menu bar popover moving between its device list, settings and QR pairing pages" width="380">
 </p>
 
 - **Android:** Twin wraps Android's wireless debugging flow behind a QR code. Scan it
@@ -18,8 +18,9 @@ without remembering SDK commands. Nothing is installed on either phone.
 - **Side by side:** with both connected, one play button shows the two phones in one
   window that moves as one; each phone can also open or hide on its own.
 
-Twin was called awb (Android Wifi Bridge) up to 2.1. Its settings carry over, and `awb`
-still runs the `twin` CLI.
+Twin is the successor of [awb](https://github.com/ovitrif/awb) (Android Wifi Bridge). Its
+settings carry over, and `awb` still runs the `twin` CLI. Twin runs on Apple silicon Macs;
+the `twin` CLI also runs on Linux, for Android.
 
 ## Install
 

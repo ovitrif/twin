@@ -5,7 +5,7 @@
 # (the patched scrcpy from scripts/build-scrcpy.sh, when built in target/scrcpy
 # or $SCRCPY_DIR; otherwise the app uses scrcpy from PATH).
 # Usage: scripts/bundle-app.sh [app-binary] [output-dir]
-# TWIN_SKIP_MIRROR=1 leaves Twin Mirror.app out, for a cross-compiled build.
+# TWIN_SKIP_MIRROR=1 leaves Twin Mirror.app out (a quick tray-only build).
 set -eu
 
 APP_BIN="${1:-target/release/twin-app}"

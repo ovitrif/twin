@@ -181,7 +181,7 @@ case "android-probe": androidProbe(Array(args.dropFirst()))
 case "devices": devices(Array(args.dropFirst()))
 case "pane": pane(Array(args.dropFirst()))
 case "iphone-probe": iphoneProbe(Array(args.dropFirst()))
-case "--version", "-V": print("dmb 0.1.0")
+case "--version", "-V": print("dmb 1.0.0")
 case nil, "-h", "--help", "help": print(usage)
 default: fail("unknown command \(args[0])\n\n\(usage)")
 }
