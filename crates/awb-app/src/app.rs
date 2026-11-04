@@ -2826,7 +2826,7 @@ enum PairClick {
 
 /// Two device rows that act as one, as the phones Side by side opens
 /// together: one hover, a link between their icons, each phone's own button
-/// and one button centered on both. `actions` are the top phone's, the
+/// while the pointer is on its row, and one button centered on both. `actions` are the top phone's, the
 /// bottom phone's and the pair's.
 fn pair_rows(
     ui: &mut Ui,
@@ -2860,25 +2860,27 @@ fn pair_rows(
         bottom_rect,
         link,
     );
-    let own = |rect: Rect| rect.with_max_x(rect.right() - ROW_ACTION_SIZE - ROW_ACTION_GAP);
-    if row_actions(
-        ui,
-        own(top_rect),
-        top.key,
-        std::slice::from_ref(&actions[0]),
-    )
-    .is_some()
-    {
+    // Each phone's own button shows only while the pointer is on its row
+    let own = |ui: &mut Ui, row_rect: Rect, row: &Row<'_>, action: &RowAction| {
+        let shown = ui.ctx().animate_bool_with_time(
+            ui.id().with(("own-button", row.key)),
+            ui.is_enabled() && ui.rect_contains_pointer(row_rect),
+            CONTROL_HOVER_TRANSITION,
+        );
+        if shown == 0.0 {
+            return false;
+        }
+        let rect = row_rect.with_max_x(row_rect.right() - ROW_ACTION_SIZE - ROW_ACTION_GAP);
+        ui.scope(|ui| {
+            ui.set_opacity(shown);
+            row_actions(ui, rect, row.key, std::slice::from_ref(action)).is_some()
+        })
+        .inner
+    };
+    if own(ui, top_rect, top, &actions[0]) {
         return Some(PairClick::Android);
     }
-    if row_actions(
-        ui,
-        own(bottom_rect),
-        bottom.key,
-        std::slice::from_ref(&actions[1]),
-    )
-    .is_some()
-    {
+    if own(ui, bottom_rect, bottom, &actions[1]) {
         return Some(PairClick::IPhone);
     }
     row_actions(
