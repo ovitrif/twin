@@ -1,9 +1,9 @@
 import AppKit
 import CoreImage
-import IMBCore
+import DMBCore
 import VideoToolbox
 
-/// `imb android-probe --serial S --server PATH [--png OUT] [--swipe X1 Y1 X2 Y2]`:
+/// `dmb android-probe --serial S --server PATH [--png OUT] [--swipe X1 Y1 X2 Y2]`:
 /// checks the scrcpy client headless. Counts frames for three seconds, saves
 /// the first decoded key frame and, with --swipe (0 to 1 across the screen),
 /// drags a finger the way the mirror does.

@@ -1,6 +1,6 @@
 import AppKit
 import AVFoundation
-import IMBCore
+import DMBCore
 
 // Twin's two-phone window: an Android phone and an iPhone side by
 // side, a gap apart and the same height. One window is one app to macOS, so
@@ -17,7 +17,7 @@ import IMBCore
 //   --iphone-title <text>    default iPhone
 //   --cursor touch|system    the round touch pointer (default) or macOS's own
 //   --server <file>          scrcpy-server 5.0.1 (default: the one in this app)
-//   --parent <pid>           quit when this process ends (imb devices --wait)
+//   --parent <pid>           quit when this process ends (dmb devices --wait)
 //   --log <file>             append diagnostics here instead of stderr
 
 public struct PairOptions {
@@ -116,7 +116,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
 
     public init(options: PairOptions) { self.options = options }
 
-    private func log(_ text: String) { FileHandle.standardError.write(Data("imb: \(text)\n".utf8)) }
+    private func log(_ text: String) { FileHandle.standardError.write(Data("dmb: \(text)\n".utf8)) }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         if let log = options.log { freopen(log, "a", stderr) }
@@ -194,7 +194,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { if size != self.iphoneSize { self.resized(iphone: size) } }
         }
         if let udid = options.udid,
-           let helper = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("imb-hid"),
+           let helper = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid"),
            FileManager.default.isExecutableFile(atPath: helper.path) {
             let hid = HIDInput(helper: helper, udid: udid)
             hid.onError = { [weak self] in self?.log($0) }
@@ -217,7 +217,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         if iphoneSize == .zero {
             pair.iphone.setStatus(nil)
             // The phone reconnects its USB once capture starts, so input waits for it
-            do { try hid?.start() } catch { log("cannot start imb-hid: \(error)") }
+            do { try hid?.start() } catch { log("cannot start dmb-hid: \(error)") }
         }
         iphoneSize = size
         pair.iphoneAspect = size.width / size.height

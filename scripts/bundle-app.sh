@@ -1,20 +1,20 @@
 #!/bin/sh
-# Bundle the release build as `Twin.app` next to the `imb` CLI in OUT (default
-# build/): imb finds the app beside itself. Twin is every mirror imb opens, one
+# Bundle the release build as `Twin.app` next to the `dmb` CLI in OUT (default
+# build/): dmb finds the app beside itself. Twin is every mirror dmb opens, one
 # iPhone or an Android phone beside it, so macOS asks camera access once.
 # It runs scrcpy's own server on the Android phone (scrcpy-server 5.0.1,
 # Apache-2.0), pinned as awb pins it.
 set -eu
 out=${1:-build}
 swift build -c release --product Twin >/dev/null
-swift build -c release --product imb >/dev/null
+swift build -c release --product dmb >/dev/null
 (cd hid && cargo build --release --quiet)
 bin=$(swift build -c release --show-bin-path)
-version=$("$bin/imb" --version | awk '{print $2}')
-cp "$bin/imb" "$out/imb"
+version=$("$bin/dmb" --version | awk '{print $2}')
+cp "$bin/dmb" "$out/dmb"
 
 SERVER_SHA256="764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536"
-cache="${HOME}/.cache/imb"
+cache="${HOME}/.cache/dmb"
 server="${cache}/scrcpy-server-v5.0.1"
 mkdir -p "$cache"
 if ! echo "${SERVER_SHA256}  ${server}" | shasum -a 256 -c - >/dev/null 2>&1; then
@@ -27,7 +27,7 @@ app="$out/Twin.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Twin" "$app/Contents/MacOS/Twin"
-cp hid/target/release/imb-hid "$app/Contents/MacOS/imb-hid"
+cp hid/target/release/dmb-hid "$app/Contents/MacOS/dmb-hid"
 cp "$server" "$app/Contents/Resources/scrcpy-server"
 cp "${cache}/scrcpy-LICENSE" "$app/Contents/Resources/scrcpy-LICENSE"
 # Made with scripts/make-icon.swift pair
@@ -51,6 +51,6 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$app/Contents/MacOS/imb-hid" >/dev/null 2>&1
+codesign --force --sign - "$app/Contents/MacOS/dmb-hid" >/dev/null 2>&1
 codesign --force --sign - "$app" >/dev/null 2>&1
 echo "$app"

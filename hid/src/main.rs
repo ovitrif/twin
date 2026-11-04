@@ -1,8 +1,8 @@
-//! imb-hid: live touch, typing and buttons for one iPhone over USB, through
+//! dmb-hid: live touch, typing and buttons for one iPhone over USB, through
 //! the CoreDevice HID service Xcode's Device Hub uses (iOS 27 and later).
 //! Nothing is installed on the phone.
 //!
-//! Usage: `imb-hid <udid>`, then one JSON command per line on stdin:
+//! Usage: `dmb-hid <udid>`, then one JSON command per line on stdin:
 //!   {"touch":"down"|"move"|"up","x":0.5,"y":0.25}   x and y from 0 to 1 across the screen
 //!   {"text":"hello"}
 //!   {"key":79}                                     a HID keyboard usage (79 is right arrow)
@@ -77,7 +77,7 @@ fn scaled(v: f64) -> u16 {
 #[tokio::main]
 async fn main() {
     let Some(udid) = std::env::args().nth(1) else {
-        eprintln!("usage: imb-hid <udid>");
+        eprintln!("usage: dmb-hid <udid>");
         std::process::exit(2);
     };
     if let Err(e) = run(&udid).await {
@@ -89,7 +89,7 @@ async fn main() {
 async fn run(udid: &str) -> Result<(), String> {
     let mut usbmuxd = UsbmuxdConnection::default().await.map_err(|e| format!("usbmuxd: {e:?}"))?;
     let device = usbmuxd.get_device(udid).await.map_err(|e| format!("no iPhone {udid} on USB: {e:?}"))?;
-    let provider = device.to_provider(UsbmuxdAddr::default(), "imb");
+    let provider = device.to_provider(UsbmuxdAddr::default(), "dmb");
     let proxy = CoreDeviceProxy::connect(&provider).await.map_err(|e| format!("CoreDevice: {e:?}"))?;
     let rsd_port = proxy.tunnel_info().server_rsd_port;
     let mut adapter = proxy.create_software_tunnel().map_err(|e| format!("tunnel: {e:?}"))?.to_async_handle();

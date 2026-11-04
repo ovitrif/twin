@@ -113,7 +113,7 @@ public final class ScrcpySession {
     private var port: Int = 0
     private var videoFD: Int32 = -1
     private var controlFD: Int32 = -1
-    private let writeQueue = DispatchQueue(label: "imb.scrcpy.control")
+    private let writeQueue = DispatchQueue(label: "dmb.scrcpy.control")
     private var format: CMVideoFormatDescription?
     private var pendingConfig: [Data] = []
     private var stopped = false
@@ -152,7 +152,7 @@ public final class ScrcpySession {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard p.terminationStatus == 0 else { throw IMBError("adb \(args.first ?? ""): \(text)") }
+        guard p.terminationStatus == 0 else { throw DMBError("adb \(args.first ?? ""): \(text)") }
         return text
     }
 
@@ -161,11 +161,11 @@ public final class ScrcpySession {
     public func start() throws {
         try run(["push", server, ScrcpyProtocol.devicePath])
         let scid = String(format: "%08x", UInt32.random(in: 1..<0x7FFF_FFFF))
-        // IMB_SCRCPY_PORT fixes the port, for tests that tunnel it
-        let fixed = ProcessInfo.processInfo.environment["IMB_SCRCPY_PORT"]
+        // DMB_SCRCPY_PORT fixes the port, for tests that tunnel it
+        let fixed = ProcessInfo.processInfo.environment["DMB_SCRCPY_PORT"]
         let portText = try run(["forward", "tcp:\(fixed ?? "0")", "localabstract:scrcpy_\(scid)"])
         guard let port = fixed.flatMap(Int.init) ?? Int(portText.split(separator: "\n").last ?? "") else {
-            throw IMBError("adb forward: \(portText)")
+            throw DMBError("adb forward: \(portText)")
         }
         self.port = port
         let shell = Process()
@@ -192,10 +192,10 @@ public final class ScrcpySession {
             }
             usleep(100_000)
         }
-        guard video >= 0 else { stop(); throw IMBError("scrcpy server did not answer on \(serial)") }
+        guard video >= 0 else { stop(); throw DMBError("scrcpy server did not answer on \(serial)") }
         videoFD = video
         controlFD = Self.connect(port: port)
-        guard controlFD >= 0 else { stop(); throw IMBError("no scrcpy control socket") }
+        guard controlFD >= 0 else { stop(); throw DMBError("no scrcpy control socket") }
         let name = try readExactly(videoFD, 64)
         deviceName = String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
         Thread.detachNewThread { [weak self] in self?.readVideo() }
@@ -249,7 +249,7 @@ public final class ScrcpySession {
         try data.withUnsafeMutableBytes { buffer in
             while offset < count {
                 let n = recv(fd, buffer.baseAddress! + offset, count - offset, 0)
-                if n <= 0 { throw IMBError("scrcpy stream ended") }
+                if n <= 0 { throw DMBError("scrcpy stream ended") }
                 offset += n
             }
         }
@@ -259,7 +259,7 @@ public final class ScrcpySession {
     private func readVideo() {
         do {
             let codec = try readExactly(videoFD, 4).be32(0)
-            guard codec == ScrcpyProtocol.codecH264 else { throw IMBError("unexpected codec \(codec)") }
+            guard codec == ScrcpyProtocol.codecH264 else { throw DMBError("unexpected codec \(codec)") }
             while !stopped {
                 let header = try readExactly(videoFD, 12)
                 if header[0] & 0x80 != 0 {

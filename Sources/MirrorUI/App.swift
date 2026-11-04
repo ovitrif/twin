@@ -1,21 +1,21 @@
 import AppKit
 import AVFoundation
-import IMBCore
+import DMBCore
 
-// Twin's one-phone window: one iPhone. `imb mirror` starts it with the phone
+// Twin's one-phone window: one iPhone. `dmb mirror` starts it with the phone
 // to show.
 //
 //   --name <phone name>   the capture device to show (default: the first iPhone)
-//   --udid <udid>         the phone's UDID, for the title and `imb status`
+//   --udid <udid>         the phone's UDID, for the title and `dmb status`
 //   --title <text>        window title (default: iPhone)
 //   --product <type>      productType such as iPhone18,4, for the corner radius
 //   --height <points>     initial window height
 //   --replay <files>      play comma-separated videos in turn instead of a phone, for testing
 //   --mjpeg <url>         show a Motion JPEG stream instead of a phone
 //   --wda <url>           send input to WebDriverAgent at this URL instead of
-//                         imb-hid, for phones before iOS 27
+//                         dmb-hid, for phones before iOS 27
 //   --no-input            show the phone only
-//   --parent <pid>        quit when this process ends (imb mirror --wait)
+//   --parent <pid>        quit when this process ends (dmb mirror --wait)
 //   --log <file>          append diagnostics here instead of stderr
 //   --cursor touch|system the round touch pointer (default) or macOS's own
 
@@ -119,17 +119,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         connectInput()
     }
 
-    /// imb-hid sits next to this binary in the app bundle
+    /// dmb-hid sits next to this binary in the app bundle
     private var hidHelper: URL? {
-        let candidates = [ProcessInfo.processInfo.environment["IMB_HID"],
-                          Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("imb-hid").path]
+        let candidates = [ProcessInfo.processInfo.environment["DMB_HID"],
+                          Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid").path]
         return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
             .map { URL(fileURLWithPath: $0) }
     }
 
     private func connectInput() {
         guard !options.noInput else { return }
-        let log: (String) -> Void = { FileHandle.standardError.write(Data("imb: \($0)\n".utf8)) }
+        let log: (String) -> Void = { FileHandle.standardError.write(Data("dmb: \($0)\n".utf8)) }
         if let wda = options.wda.flatMap(URL.init(string:)) {
             let input = WDAInput(client: WDAClient(base: wda))
             input.onError = log
@@ -157,7 +157,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// center, so the phone stays the same size on screen.
     private func resize(to size: CGSize) {
         if videoSize == .zero, let hid {
-            do { try hid.start() } catch { FileHandle.standardError.write(Data("imb: cannot start imb-hid: \(error)\n".utf8)) }
+            do { try hid.start() } catch { FileHandle.standardError.write(Data("dmb: cannot start dmb-hid: \(error)\n".utf8)) }
         }
         let old = videoSize
         videoSize = size

@@ -1,6 +1,6 @@
 // Starting the displayservice screen media stream, after idevice's
 // `tools/src/coredevice_stream.rs` (MIT, Jackson Coxson). The device drops
-// synthetic HID events unless such a stream is active, so imb-hid holds one
+// synthetic HID events unless such a stream is active, so dmb-hid holds one
 // open for as long as it runs and discards its packets.
 
 use idevice::{

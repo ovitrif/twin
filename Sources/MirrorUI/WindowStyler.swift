@@ -249,7 +249,7 @@ final class WindowStyler: NSObject {
 
     /// Keeps the bar shown and its lights lit, for screenshots in a test VM
     /// with no pointer
-    private let forceBar = ProcessInfo.processInfo.environment["IMB_SHOW_BAR"] != nil
+    private let forceBar = ProcessInfo.processInfo.environment["DMB_SHOW_BAR"] != nil
 
     private func tick() {
         let canShow = window.isVisible && !window.isMiniaturized && !isFullscreen

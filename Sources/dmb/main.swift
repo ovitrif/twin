@@ -1,24 +1,24 @@
 import AppKit
-import IMBCore
+import DMBCore
 
 let usage = """
-imb: mirror a USB-connected iPhone in a QuickTime-style window
+dmb: mirror a USB-connected iPhone in a QuickTime-style window
 
-  imb status [--json]          list iPhones on USB and whether each is mirrored
-  imb mirror [--udid UDID]     open the mirror (the first iPhone without --udid)
+  dmb status [--json]          list iPhones on USB and whether each is mirrored
+  dmb mirror [--udid UDID]     open the mirror (the first iPhone without --udid)
              [--wda URL]       send clicks and typing to WebDriverAgent instead
-             [--wait]          stay running while the mirror is open; ending imb
+             [--wait]          stay running while the mirror is open; ending dmb
                                closes it, for apps that track it (awb)
-  imb devices --serial SERIAL  show this Android phone beside the iPhone in one
+  dmb devices --serial SERIAL  show this Android phone beside the iPhone in one
               [--udid UDID]    Twin window; --wait as for mirror
-  imb --version
+  dmb --version
 """
 
 let stateDir = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".local/state/imb", isDirectory: true)
+    .appendingPathComponent(".local/state/dmb", isDirectory: true)
 
 func fail(_ message: String) -> Never {
-    FileHandle.standardError.write(Data("imb: \(message)\n".utf8))
+    FileHandle.standardError.write(Data("dmb: \(message)\n".utf8))
     exit(1)
 }
 
@@ -40,7 +40,7 @@ func twinBinary() -> String? {
     let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent()
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let candidates: [String?] = [
-        ProcessInfo.processInfo.environment["IMB_TWIN"],
+        ProcessInfo.processInfo.environment["DMB_TWIN"],
         exe.appendingPathComponent("Twin.app/Contents/MacOS/Twin").path,
         exe.appendingPathComponent("../Twin.app/Contents/MacOS/Twin").standardized.path,
         "/Applications/Twin.app/Contents/MacOS/Twin",
@@ -51,7 +51,7 @@ func twinBinary() -> String? {
 }
 
 /// Starts Twin through LaunchServices when it is an app bundle, so macOS asks
-/// camera access for Twin itself rather than for whoever ran imb.
+/// camera access for Twin itself rather than for whoever ran dmb.
 func launch(_ binary: String, _ arguments: [String]) throws -> pid_t {
     let app = URL(fileURLWithPath: binary).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     guard app.pathExtension == "app" else {
@@ -66,7 +66,7 @@ func launch(_ binary: String, _ arguments: [String]) throws -> pid_t {
     config.createsNewApplicationInstance = true
     config.activates = true
     let done = DispatchSemaphore(value: 0)
-    var result: Result<pid_t, Error> = .failure(IMBError("LaunchServices did not answer"))
+    var result: Result<pid_t, Error> = .failure(DMBError("LaunchServices did not answer"))
     NSWorkspace.shared.openApplication(at: app, configuration: config) { running, error in
         if let running { result = .success(running.processIdentifier) } else if let error { result = .failure(error) }
         done.signal()
@@ -94,7 +94,7 @@ func devices(_ args: [String]) {
     guard let iphone = udid.map({ u in phones.first { $0.udid == u } }) ?? phones.first else {
         fail("no iPhone on USB; plug one in and tap Trust on it")
     }
-    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall imb") }
+    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall dmb") }
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     var arguments = ["--serial", serial, "--udid", iphone.udid, "--name", iphone.name, "--product", iphone.productType,
                      "--log", stateDir.appendingPathComponent("devices.log").path] + passthrough
@@ -146,7 +146,7 @@ func mirror(_ args: [String]) {
         if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
         return
     }
-    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall imb") }
+    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall dmb") }
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     let log = stateDir.appendingPathComponent("mirror-\(device.udid).log")
     var arguments = ["--name", device.name, "--udid", device.udid, "--product", device.productType,
@@ -169,7 +169,7 @@ case "status", "list": status(json: args.contains("--json"))
 case "mirror": mirror(Array(args.dropFirst()))
 case "android-probe": androidProbe(Array(args.dropFirst()))
 case "devices": devices(Array(args.dropFirst()))
-case "--version", "-V": print("imb 0.1.0")
+case "--version", "-V": print("dmb 0.1.0")
 case nil, "-h", "--help", "help": print(usage)
 default: fail("unknown command \(args[0])\n\n\(usage)")
 }

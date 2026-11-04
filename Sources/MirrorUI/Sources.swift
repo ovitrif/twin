@@ -16,7 +16,7 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
     var onStatus: ((String) -> Void)?
     private let name: String?
     private let session = AVCaptureSession()
-    private let queue = DispatchQueue(label: "imb.capture", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "dmb.capture", qos: .userInteractive)
     private var observer: NSObjectProtocol?
 
     /// `name` is the phone's name as `devicectl` reports it; nil takes the first iPhone.
@@ -103,7 +103,7 @@ final class ReplaySource: FrameSource {
     var onFrame: ((CMSampleBuffer) -> Void)?
     var onStatus: ((String) -> Void)?
     private let urls: [URL]
-    private let queue = DispatchQueue(label: "imb.replay", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "dmb.replay", qos: .userInteractive)
     private var running = false
 
     init(urls: [URL]) { self.urls = urls }

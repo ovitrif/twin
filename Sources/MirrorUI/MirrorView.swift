@@ -1,6 +1,6 @@
 import AppKit
 import AVFoundation
-import IMBCore
+import DMBCore
 
 /// Shows the phone's screen and turns mouse and keyboard input into touches.
 /// While Cmd is held, a press moves the window and nothing reaches the phone.

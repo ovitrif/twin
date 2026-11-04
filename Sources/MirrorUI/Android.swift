@@ -1,6 +1,6 @@
 import AppKit
 import AVFoundation
-import IMBCore
+import DMBCore
 
 /// An Android phone's screen through the scrcpy client.
 final class ScrcpySource: FrameSource {

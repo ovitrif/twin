@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import IMBCore
+@testable import DMBCore
 
 // Byte layouts from scrcpy 5.0.1's app/tests/test_control_msg_serialize.c,
 // with this client's pointer id, buttons and meta state

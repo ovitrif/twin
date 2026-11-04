@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import IMBCore
+@testable import DMBCore
 
 @Test func parsesWiredPhonesAndSkipsSimulators() throws {
     let json = """

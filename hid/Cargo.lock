@@ -141,6 +141,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dmb-hid"
+version = "0.1.0"
+dependencies = [
+ "idevice",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -329,17 +340,6 @@ dependencies = [
  "tracing",
  "uuid",
  "web-time",
-]
-
-[[package]]
-name = "imb-hid"
-version = "0.1.0"
-dependencies = [
- "idevice",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
 ]
 
 [[package]]

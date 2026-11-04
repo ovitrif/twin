@@ -13,7 +13,7 @@ public enum Devices {
     /// The physical iOS devices CoreDevice knows, wired or not.
     public static func list() throws -> [Device] {
         let out = FileManager.default.temporaryDirectory
-            .appendingPathComponent("imb-devicectl-\(getpid()).json")
+            .appendingPathComponent("dmb-devicectl-\(getpid()).json")
         defer { try? FileManager.default.removeItem(at: out) }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
@@ -23,7 +23,7 @@ public enum Devices {
         try task.run()
         task.waitUntilExit()
         guard task.terminationStatus == 0 else {
-            throw IMBError("devicectl failed (exit \(task.terminationStatus)); is Xcode installed?")
+            throw DMBError("devicectl failed (exit \(task.terminationStatus)); is Xcode installed?")
         }
         return try parse(Data(contentsOf: out))
     }
@@ -34,7 +34,7 @@ public enum Devices {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = root["result"] as? [String: Any],
               let devices = result["devices"] as? [[String: Any]]
-        else { throw IMBError("unexpected devicectl output") }
+        else { throw DMBError("unexpected devicectl output") }
         return devices.compactMap { entry in
             let props = entry["properties"] as? [String: Any] ?? [:]
             let hardware = props["hardware"] as? [String: Any]
@@ -58,7 +58,7 @@ public enum Devices {
     }
 }
 
-public struct IMBError: Error, CustomStringConvertible {
+public struct DMBError: Error, CustomStringConvertible {
     public var description: String
     public init(_ description: String) { self.description = description }
 }

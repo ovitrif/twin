@@ -47,7 +47,7 @@ public final class WDAClient {
         let created = try await call("POST", "session", ["capabilities": ["alwaysMatch": [:]]])
         guard let id = created["sessionId"] as? String
             ?? (created["value"] as? [String: Any])?["sessionId"] as? String
-        else { throw IMBError("WebDriverAgent returned no session") }
+        else { throw DMBError("WebDriverAgent returned no session") }
         sessionID = id
         let size = try await call("GET", "session/\(id)/window/size", nil)
         if let value = size["value"] as? [String: Any],
@@ -69,7 +69,7 @@ public final class WDAClient {
     }
 
     private func session() throws -> String {
-        guard let sessionID else { throw IMBError("not connected to WebDriverAgent") }
+        guard let sessionID else { throw DMBError("not connected to WebDriverAgent") }
         return sessionID
     }
 
@@ -86,7 +86,7 @@ public final class WDAClient {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         if let status = (response as? HTTPURLResponse)?.statusCode, status >= 400 {
             let message = ((json["value"] as? [String: Any])?["message"] as? String) ?? "HTTP \(status)"
-            throw IMBError("WebDriverAgent \(path): \(message)")
+            throw DMBError("WebDriverAgent \(path): \(message)")
         }
         return json
     }

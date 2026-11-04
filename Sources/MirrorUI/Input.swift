@@ -1,5 +1,5 @@
 import AppKit
-import IMBCore
+import DMBCore
 
 enum TouchPhase: String { case down, move, up }
 
@@ -15,7 +15,7 @@ protocol InputSink: AnyObject {
     func button(_ name: String)
 }
 
-/// Live touch through `imb-hid` and the CoreDevice HID service (iOS 27 and
+/// Live touch through `dmb-hid` and the CoreDevice HID service (iOS 27 and
 /// later): every pointer move reaches the phone as it happens. A session that
 /// drops, as when the phone replugs, starts again by itself.
 final class HIDInput: InputSink {
@@ -63,7 +63,7 @@ final class HIDInput: InputSink {
         self.stdin = stdin
     }
 
-    /// Closing stdin lets imb-hid end the media stream, which the phone needs
+    /// Closing stdin lets dmb-hid end the media stream, which the phone needs
     /// to accept the next session; terminate only if it hangs
     func stop() {
         stopping = true

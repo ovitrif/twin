@@ -1,12 +1,12 @@
 import Foundation
 import Testing
-@testable import IMBCore
+@testable import DMBCore
 @testable import MirrorUI
 
 /// scripts/fake-wda.py on a loopback port, logging each request it gets
 private func fakeWDA() throws -> (Process, URL, URL) {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../..").standardized
-    let log = FileManager.default.temporaryDirectory.appendingPathComponent("imb-wda-\(UUID()).log")
+    let log = FileManager.default.temporaryDirectory.appendingPathComponent("dmb-wda-\(UUID()).log")
     let port = Int.random(in: 20000...40000)
     let server = Process()
     server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")

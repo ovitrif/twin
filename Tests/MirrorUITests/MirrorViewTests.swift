@@ -61,9 +61,9 @@ private func key(_ chars: String, code: UInt16, flags: NSEvent.ModifierFlags = [
     #expect(recorder.typed == ["a", "\u{8}", "\n", "key 82"])
 }
 
-/// imb-hid stand-in that records the JSON lines HIDInput writes
+/// dmb-hid stand-in that records the JSON lines HIDInput writes
 @MainActor @Test func aNudgeOfTheTrackpadNeverTapsThePhone() throws {
-    let script = FileManager.default.temporaryDirectory.appendingPathComponent("imb-hid-\(UUID()).sh")
+    let script = FileManager.default.temporaryDirectory.appendingPathComponent("dmb-hid-\(UUID()).sh")
     let log = script.appendingPathExtension("log")
     try "#!/bin/sh\necho ready\ncat > '\(log.path)'\n".write(to: script, atomically: true, encoding: .utf8)
     chmod(script.path, 0o755)
