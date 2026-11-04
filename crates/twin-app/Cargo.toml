@@ -1,6 +1,6 @@
 [package]
 name = "twin-app"
-description = "awb (Android Wifi Bridge) macOS menu bar app."
+description = "Twin macOS menu bar app."
 version.workspace = true
 edition.workspace = true
 rust-version = "1.92"

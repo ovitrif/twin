@@ -74,7 +74,7 @@ impl Dmb {
         Self::spawn(command)
     }
 
-    /// Android v iOS: this Android phone and this iPhone side by side in one
+    /// Side by side: this Android phone and this iPhone side by side in one
     /// window, `gap` points apart, through dmb's own scrcpy client.
     pub fn spawn_pair(&self, serial: &str, udid: &str, options: &PairOptions) -> Result<Child> {
         let mut command = Command::new(&self.path);
@@ -128,7 +128,7 @@ impl Dmb {
     }
 }
 
-/// The window of Android v iOS, as awb's Settings set it.
+/// The side by side window, as Twin's Settings set it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairOptions {
     pub height: u32,

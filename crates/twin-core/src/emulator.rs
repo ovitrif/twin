@@ -164,7 +164,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let script = std::env::temp_dir().join(format!(
-            "awb-avdmanager-remove-{}-{unique}.sh",
+            "twin-avdmanager-remove-{}-{unique}.sh",
             std::process::id()
         ));
         fs::write(&script, "#!/bin/sh\n[ \"$#\" = 4 ] && [ \"$1\" = delete ] && [ \"$2\" = avd ] && [ \"$3\" = --name ] || exit 9\n[ \"$4\" = 'test avd' ] && exit 0\necho 'AVD is busy' >&2\nexit 1\n").unwrap();
@@ -217,7 +217,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let script = std::env::temp_dir().join(format!(
-            "awb-emulator-timeout-{}-{unique}.sh",
+            "twin-emulator-timeout-{}-{unique}.sh",
             std::process::id()
         ));
         fs::write(&script, "#!/bin/sh\nwhile :; do :; done\n").unwrap();

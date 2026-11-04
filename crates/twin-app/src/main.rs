@@ -16,20 +16,6 @@ use eframe::egui;
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
-    if let Some(index) = args.iter().position(|arg| arg == "--render-icon") {
-        let path = args
-            .get(index + 1)
-            .map(String::as_str)
-            .unwrap_or("icon.png");
-        let size = args
-            .get(index + 2)
-            .and_then(|raw| raw.parse().ok())
-            .unwrap_or(1024);
-        std::fs::write(path, glyph::app_icon_png(size)).expect("write icon");
-        println!("wrote {path} ({size}x{size})");
-        return Ok(());
-    }
-
     #[cfg(feature = "drive")]
     {
         if let [_, flag, socket] = args.as_slice()
@@ -111,6 +97,6 @@ fn main() -> eframe::Result {
 
 #[cfg(feature = "drive")]
 fn drive_error(error: anyhow::Error) -> eframe::Error {
-    eprintln!("awb drive: {error:#}");
+    eprintln!("twin drive: {error:#}");
     std::process::exit(1)
 }

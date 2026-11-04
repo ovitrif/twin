@@ -351,20 +351,20 @@ impl App {
         let appearance = resolved_appearance(settings.theme, ctx.system_theme());
         theme::apply(&ctx, appearance);
 
-        let logo_raster = glyph::window_logo(26, 36.0, -5.0, 4);
+        let logo_raster = glyph::window_logo(26, 4);
         let logo_image = egui::ColorImage::from_rgba_premultiplied(
             [logo_raster.width as usize, logo_raster.height as usize],
             &logo_raster.rgba,
         );
-        let logo = ctx.load_texture("awb-logo", logo_image, TextureOptions::LINEAR);
+        let logo = ctx.load_texture("twin-logo", logo_image, TextureOptions::LINEAR);
 
         let (day_shell, night_shell, shell) = load_shells(&ctx, settings.gradients);
 
         let menu = Menu::new();
-        let show_item = MenuItem::new("Show awb", true, None);
+        let show_item = MenuItem::new("Show Twin", true, None);
         let pair_item = MenuItem::new("Pair new device", true, None);
         let refresh_item = MenuItem::new("Refresh status", true, None);
-        let quit_item = MenuItem::new("Quit awb", true, None);
+        let quit_item = MenuItem::new("Quit Twin", true, None);
         menu.append_items(&[
             &show_item,
             &PredefinedMenuItem::separator(),
@@ -469,7 +469,7 @@ impl App {
         });
         self.shown_at = Instant::now();
         self.focus_hidden_at = None;
-        self.show_item.set_text("Hide awb");
+        self.show_item.set_text("Hide Twin");
         backend::refresh_status(self.shared.clone(), ctx.clone());
     }
 
@@ -483,7 +483,7 @@ impl App {
             phase: PopoverTransitionPhase::Disappearing,
             started_at: Instant::now(),
         });
-        self.show_item.set_text("Show awb");
+        self.show_item.set_text("Show Twin");
         ctx.request_repaint();
     }
 
@@ -901,7 +901,7 @@ impl MenuBar {
         let builder = MenuBarIconBuilder::new()
             .with_icon(icon)
             .with_icon_as_template(true)
-            .with_tooltip("awb - Android Wifi Bridge");
+            .with_tooltip("Twin");
         #[cfg(not(target_os = "macos"))]
         let builder = builder
             .with_menu(Box::new(menu.clone()))
@@ -960,9 +960,9 @@ fn load_shells(
     gradients: bool,
 ) -> (TextureHandle, TextureHandle, Arc<ShellSampler>) {
     let (day, day_raster) =
-        load_shell_texture(ctx, "awb-shell-day", theme::Appearance::Day, gradients);
+        load_shell_texture(ctx, "twin-shell-day", theme::Appearance::Day, gradients);
     let (night, night_raster) =
-        load_shell_texture(ctx, "awb-shell-night", theme::Appearance::Night, gradients);
+        load_shell_texture(ctx, "twin-shell-night", theme::Appearance::Night, gradients);
     (
         day,
         night,
@@ -2742,7 +2742,7 @@ fn paint_edge_fade(
 /// Whether focus last moved by keyboard, so focus highlights show for Tab
 /// navigation but not after a click.
 fn keyboard_focus_id() -> egui::Id {
-    egui::Id::new("awb-keyboard-focus")
+    egui::Id::new("twin-keyboard-focus")
 }
 
 fn keyboard_focused(ui: &Ui, id: egui::Id) -> bool {
@@ -2755,7 +2755,7 @@ fn keyboard_focused(ui: &Ui, id: egui::Id) -> bool {
 
 fn screen_title(screen: Screen) -> &'static str {
     match screen {
-        Screen::Main => "Android Wifi Bridge",
+        Screen::Main => "Twin",
         Screen::Settings => "Settings",
         Screen::Pair => "Pair device",
     }

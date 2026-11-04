@@ -22,7 +22,7 @@ pub struct Ivars {
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "AwbStatusClickTarget"]
+    #[name = "TwinStatusClickTarget"]
     #[ivars = Ivars]
     pub struct StatusClickTarget;
 

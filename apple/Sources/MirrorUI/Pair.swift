@@ -187,7 +187,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         listenForPanes()
     }
 
-    /// `dmb pane` hides or shows one phone of this pair, so awb can stop or
+    /// `dmb pane` hides or shows one phone of this pair, so the menu bar app can stop or
     /// start one side without closing the other
     private func listenForPanes() {
         DistributedNotificationCenter.default().addObserver(

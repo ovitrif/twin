@@ -281,13 +281,13 @@ impl Adb {
                 "shell",
                 "uiautomator",
                 "dump",
-                "/sdcard/awb-window.xml",
+                "/sdcard/twin-window.xml",
             ])?,
         )?;
 
         let cat_output = ensure_success(
-            "adb exec-out cat /sdcard/awb-window.xml",
-            self.run(["-s", serial, "exec-out", "cat", "/sdcard/awb-window.xml"])?,
+            "adb exec-out cat /sdcard/twin-window.xml",
+            self.run(["-s", serial, "exec-out", "cat", "/sdcard/twin-window.xml"])?,
         )?;
 
         Ok(cat_output.combined_output())
@@ -366,10 +366,10 @@ fn timeout_hint(stderr: &str) -> String {
     let stderr = stderr.trim();
 
     if stderr.is_empty() {
-        ". Try `awb --reset-adb` or `adb kill-server` if ADB is wedged.".to_string()
+        ". Try `twin --reset-adb` or `adb kill-server` if ADB is wedged.".to_string()
     } else {
         format!(
-            ": {}. Try `awb --reset-adb` or `adb kill-server` if ADB is wedged.",
+            ": {}. Try `twin --reset-adb` or `adb kill-server` if ADB is wedged.",
             fallback_message(stderr)
         )
     }

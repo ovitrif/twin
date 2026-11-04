@@ -68,14 +68,14 @@ pub fn serve(socket: &Path) -> anyhow::Result<()> {
         pointer: None,
         recording: None,
     };
-    println!("awb drive: listening on {}", socket.display());
+    println!("twin drive: listening on {}", socket.display());
 
     let result = loop {
         match listener.accept() {
             Ok((stream, _)) => match driver.session(stream) {
                 Ok(Flow::Quit) => break Ok(()),
                 Ok(Flow::Continue) => {}
-                Err(error) => eprintln!("awb drive: {error:#}"),
+                Err(error) => eprintln!("twin drive: {error:#}"),
             },
             Err(error) if error.kind() == ErrorKind::WouldBlock => driver.frame()?,
             Err(error) => break Err(error.into()),

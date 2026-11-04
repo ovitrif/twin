@@ -1,7 +1,7 @@
 import AppKit
 import QuartzCore
 
-// Style the borderless mirror window like QuickTime's iPhone mirror, as awb's
+// Style the borderless mirror window like QuickTime's iPhone mirror, as the menu bar app's
 // Android mirror does: rounded corners, a shadow, and a title bar with traffic
 // lights over the top of the screen while Cmd is held over the window, so the
 // top edge stays the phone's for pull-downs. Dragging that bar, or Cmd +

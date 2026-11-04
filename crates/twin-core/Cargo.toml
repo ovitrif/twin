@@ -1,6 +1,6 @@
 [package]
 name = "twin-core"
-description = "Shared ADB, Android emulator, scrcpy, and QR pairing logic for awb."
+description = "Shared ADB, Android emulator, scrcpy, and QR pairing logic for Twin."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

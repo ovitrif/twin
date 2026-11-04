@@ -9,7 +9,7 @@ version = "2.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/ovitrif/awb"
+repository = "https://github.com/ovitrif/twin"
 
 [workspace.dependencies]
 twin-core = { path = "crates/twin-core" }

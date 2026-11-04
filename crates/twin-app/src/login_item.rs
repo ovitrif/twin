@@ -49,7 +49,7 @@ mod imp {
             return;
         };
 
-        // Remove only AWB's own entry, matched by the exact registered path, so
+        // Remove only Twin's own entry, matched by the exact registered path, so
         // toggling never deletes an unrelated login item.
         let _ = osascript(&format!(
             "tell application \"System Events\" to delete (every login item whose path is \"{path}\")"

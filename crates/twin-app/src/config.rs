@@ -28,7 +28,7 @@ pub struct Settings {
     /// Auto-start mirroring when a physical phone connects (never emulators).
     pub auto_mirror: bool,
     /// Mirroring a physical phone with an iPhone also on USB opens both in
-    /// one window, Android v iOS, `gap` points apart.
+    /// one window, `gap` points apart.
     pub side_by_side: bool,
     pub gap: u32,
     /// A round touch pointer over the phones instead of macOS's.

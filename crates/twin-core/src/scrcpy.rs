@@ -112,7 +112,7 @@ impl Scrcpy {
 
         match version_line.as_deref().and_then(parse_scrcpy_version) {
             Some(version) if version < RECOMMENDED_SCRCPY_VERSION => warnings.push(format!(
-                "scrcpy {version} detected at {}. AWB works best with scrcpy {RECOMMENDED_SCRCPY_VERSION} or newer; {} if mirroring fails.",
+                "scrcpy {version} detected at {}. Twin works best with scrcpy {RECOMMENDED_SCRCPY_VERSION} or newer; {} if mirroring fails.",
                 self.path.display(),
                 self.update_hint()
             )),
@@ -133,7 +133,7 @@ impl Scrcpy {
                 for flag in compatibility_flags(options) {
                     if !help.contains(flag) {
                         warnings.push(format!(
-                            "scrcpy at {} does not advertise `{flag}` in `scrcpy --help`; {} or disable the related AWB setting.",
+                            "scrcpy at {} does not advertise `{flag}` in `scrcpy --help`; {} or disable the related Twin setting.",
                             self.path.display(),
                             self.update_hint()
                         ));
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn bundled_scrcpy_falls_back_to_the_installed_app_outside_a_bundle() {
-        let exe = Path::new("/Users/me/.local/bin/awb");
+        let exe = Path::new("/Users/me/.local/bin/twin");
 
         assert_eq!(
             bundled_scrcpy_candidates(Some(exe)),
@@ -685,7 +685,7 @@ mod tests {
             .expect("system clock should follow the Unix epoch")
             .as_nanos();
         let script = std::env::temp_dir().join(format!(
-            "awb-scrcpy-timeout-{}-{unique}.sh",
+            "twin-scrcpy-timeout-{}-{unique}.sh",
             std::process::id()
         ));
         fs::write(&script, "#!/bin/sh\nwhile :; do :; done\n")

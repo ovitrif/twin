@@ -2,9 +2,9 @@ import CoreMedia
 import Foundation
 
 // A scrcpy client for one Android phone: it runs scrcpy's own server on the
-// phone (scrcpy-server 5.0.1, Apache-2.0, the build awb bundles), reads its
+// phone (scrcpy-server 5.0.1, Apache-2.0, the build Twin bundles), reads its
 // H.264 video and sends touch and keys over its control socket. This is the
-// part of scrcpy's desktop app Android v iOS needs, ported from its C client
+// part of scrcpy's desktop app Twin needs, ported from its C client
 // (app/src/server.c, demuxer.c, control_msg.c).
 
 public enum ScrcpyProtocol {

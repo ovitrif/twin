@@ -72,7 +72,7 @@ fn standard_dirs() -> Vec<PathBuf> {
     ];
 
     if let Some(home) = env::var_os("HOME") {
-        // Where awb and dmb install themselves
+        // Where twin installs itself
         dirs.push(PathBuf::from(&home).join(".local/bin"));
         dirs.extend(android_sdk_tool_dirs(
             &PathBuf::from(home).join("Library/Android/sdk"),

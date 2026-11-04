@@ -1,24 +1,45 @@
-//! Rasterizes the awb glyph (bugdroid dome + Wi-Fi waves) and the popover
-//! shell (beak + gradient) from the SVG path geometry in DESIGN.pen.
+//! Rasterizes Twin's cast mark (the menu bar icon and the popover's logo)
+//! and the popover shell (beak + gradient) from the SVG path geometry in
+//! DESIGN.pen.
 
 use kurbo::{BezPath, PathEl};
 use tiny_skia::{
     Color, FillRule, GradientStop, LinearGradient, Mask, Paint, PathBuilder, Pixmap, PixmapPaint,
-    Point, PremultipliedColorU8, RadialGradient, Shader, SpreadMode, Stroke, Transform,
+    Point, PremultipliedColorU8, Shader, SpreadMode, Stroke, Transform,
 };
 
 use crate::theme::Appearance;
 
-/// Visual bounds of the glyph inside the 100-unit viewBox: [x, y, w, h]. The
-/// dome bottom sits at y=75 and the outer Wi-Fi wave peaks at y=24.
-const GLYPH_BOUNDS: [f32; 4] = [9.81, 24.0, 80.38, 51.0];
+/// Twin's cast mark, theSVG's Cast icon (thesvg.org/ui/cast, MIT) on its
+/// 24-unit grid: a screen open at the bottom left, two waves rising into it.
+/// Stroked, not filled, 2.4 units wide with round ends.
+const CAST: [&str; 3] = [
+    "M3 8L3 6.5A1.5 1.5 0 0 1 4.5 5L17 5A4 4 0 0 1 21 9L21 15.5A3.5 3.5 0 0 1 17.5 19L14 19",
+    "M3 12.5C6.59 12.5 9.5 15.41 9.5 19",
+    "M3 16.5C4.381 16.5 5.5 17.619 5.5 19",
+];
+const CAST_STROKE: f32 = 2.4;
+/// The mark's ink with its stroke: [x, y, w, h] on the 24-unit grid
+const CAST_BOUNDS: [f32; 4] = [1.8, 3.8, 20.4, 16.4];
 
-/// Colored logo: green head with punched eyes, blue Wi-Fi waves.
-const LOGO_HEAD: &str = "M25 75a25 25 0 0 1 50 0z m13.5-12a3.5 3.5 0 1 0 7 0 3.5 3.5 0 1 0-7 0z m16 0a3.5 3.5 0 1 0 7 0 3.5 3.5 0 1 0-7 0z";
-const LOGO_WAVE_1: &str = "M20.06 51.6a38 38 0 0 1 59.88 0l-5.51 4.31a31 31 0 0 0-48.86 0z";
-const LOGO_WAVE_2: &str = "M9.81 43.6a51 51 0 0 1 80.38 0l-5.52 4.31a44 44 0 0 0-69.34 0z";
-const DISCONNECTED_WAVE_1: &str = "M20.06 51.6a38 38 0 0 1 59.88 0l-3.94 3.08a33 33 0 0 0-52.02 0z";
-const DISCONNECTED_WAVE_2: &str = "M9.81 43.6a51 51 0 0 1 80.38 0l-3.94 3.08a46 46 0 0 0-72.5 0z";
+fn stroke_cast(pixmap: &mut Pixmap, shader: Shader<'static>, width: f32, transform: Transform) {
+    let paint = Paint {
+        shader,
+        anti_alias: true,
+        ..Default::default()
+    };
+    let stroke = Stroke {
+        width,
+        line_cap: tiny_skia::LineCap::Round,
+        line_join: tiny_skia::LineJoin::Round,
+        ..Default::default()
+    };
+    for part in CAST {
+        if let Some(path) = skia_path(part) {
+            pixmap.stroke_path(&path, &paint, &stroke, transform, None);
+        }
+    }
+}
 
 /// Popover shell: a 380-wide rounded body with a beak pointing up at the menu
 /// bar icon. Coordinates match the `Shell Shape` path in DESIGN.pen; the body
@@ -32,9 +53,6 @@ fn shell_path(height: f32) -> String {
     )
 }
 
-const VIEWBOX: f32 = 100.0;
-const APP_ICON_GLYPH_SCALE: f32 = 0.98;
-
 pub struct Raster {
     pub width: u32,
     pub height: u32,
@@ -47,26 +65,27 @@ pub struct Raster {
 /// uses narrower, fully opaque Wi-Fi arcs while the connected state retains the
 /// original wave weight, making connection state readable without a faint icon.
 pub fn menubar_icon(height: u32, connected: bool) -> Raster {
-    let [gx, gy, gw, gh] = GLYPH_BOUNDS;
+    let [gx, gy, gw, gh] = CAST_BOUNDS;
     let h = height as f32;
     let pad = h * 0.12;
     let scale = (h - 2.0 * pad) / gh;
     let width = (gw * scale + 2.0 * pad).ceil() as u32;
 
-    // Fill only (no stroke), matching the design's light Wi-Fi arcs. Rendered
-    // larger than its slot so macOS downscales it into a crisp template rather
-    // than the upscaled gray a small bitmap would produce.
+    // A phone connected draws the mark at its full weight; none, lighter
     let mut pixmap = Pixmap::new(width, height).expect("menu bar icon pixmap");
     let transform =
         Transform::from_scale(scale, scale).post_translate(pad - gx * scale, pad - gy * scale);
-    fill_path(&mut pixmap, LOGO_HEAD, Color::BLACK, transform);
-    let (wave_1, wave_2) = if connected {
-        (LOGO_WAVE_1, LOGO_WAVE_2)
+    let weight = if connected {
+        CAST_STROKE
     } else {
-        (DISCONNECTED_WAVE_1, DISCONNECTED_WAVE_2)
+        CAST_STROKE * 0.8
     };
-    fill_path(&mut pixmap, wave_1, Color::BLACK, transform);
-    fill_path(&mut pixmap, wave_2, Color::BLACK, transform);
+    stroke_cast(
+        &mut pixmap,
+        Shader::SolidColor(Color::BLACK),
+        weight,
+        transform,
+    );
 
     Raster {
         width,
@@ -153,21 +172,25 @@ fn fill_cell(pixmap: &mut Pixmap, x: f32, w: f32, h: f32, hex: &str) {
     }
 }
 
-/// Window logo as drawn in DESIGN.pen: a 100-unit viewBox scaled to
-/// `glyph_size` and offset by `offset` inside a `frame_size` square.
-pub fn window_logo(frame_size: u32, glyph_size: f32, offset: f32, oversample: u32) -> Raster {
+/// The popover's logo: the cast mark fading from the iPhone's blue to the
+/// Android green, filling a `frame_size` square.
+pub fn window_logo(frame_size: u32, oversample: u32) -> Raster {
     let px = frame_size * oversample;
     let mut pixmap = Pixmap::new(px, px).expect("logo pixmap");
-    let scale = glyph_size * oversample as f32 / VIEWBOX;
-    let shift = offset * oversample as f32;
-    let transform = Transform::from_scale(scale, scale).post_translate(shift, shift);
-
-    let green = Color::from_rgba8(0x3D, 0xDC, 0x84, 0xFF);
-    let blue = Color::from_rgba8(0x4D, 0x9F, 0xF5, 0xFF);
-
-    fill_path(&mut pixmap, LOGO_HEAD, green, transform);
-    fill_path(&mut pixmap, LOGO_WAVE_1, blue, transform);
-    fill_path(&mut pixmap, LOGO_WAVE_2, blue, transform);
+    let scale = px as f32 / 24.0;
+    let transform = Transform::from_scale(scale, scale);
+    let gradient = LinearGradient::new(
+        Point::from_xy(0.0, CAST_BOUNDS[1]),
+        Point::from_xy(0.0, CAST_BOUNDS[1] + CAST_BOUNDS[3]),
+        vec![
+            GradientStop::new(0.0, Color::from_rgba8(0x7F, 0xD3, 0xFF, 0xFF)),
+            GradientStop::new(1.0, Color::from_rgba8(0x3D, 0xDC, 0x84, 0xFF)),
+        ],
+        SpreadMode::Pad,
+        Transform::identity(),
+    )
+    .expect("logo gradient");
+    stroke_cast(&mut pixmap, gradient, CAST_STROKE, transform);
 
     Raster {
         width: px,
@@ -408,100 +431,6 @@ pub fn shell_background_png(oversample: u32, appearance: Appearance, height: f32
         .expect("shell png encoding")
 }
 
-/// App icon for the macOS bundle: the "Neon Glow" tile from DESIGN.pen, a deep
-/// purple gradient with a lime glow behind the colored glyph.
-pub fn app_icon_png(size: u32) -> Vec<u8> {
-    let mut pixmap = Pixmap::new(size, size).expect("icon pixmap");
-    let tile = size as f32;
-    let radius = tile * 0.2237;
-
-    let mut builder = PathBuilder::new();
-    builder.push_circle(radius, radius, radius);
-    builder.push_circle(tile - radius, radius, radius);
-    builder.push_circle(radius, tile - radius, radius);
-    builder.push_circle(tile - radius, tile - radius, radius);
-    builder.push_rect(tiny_skia::Rect::from_ltrb(radius, 0.0, tile - radius, tile).unwrap());
-    builder.push_rect(tiny_skia::Rect::from_ltrb(0.0, radius, tile, tile - radius).unwrap());
-    let rounded_tile = builder.finish().expect("tile path");
-
-    // Deep-space purple gradient tile.
-    let mut paint = Paint {
-        anti_alias: true,
-        ..Default::default()
-    };
-    paint.shader = LinearGradient::new(
-        Point::from_xy(tile * 0.15, 0.0),
-        Point::from_xy(tile * 0.85, tile),
-        vec![
-            GradientStop::new(0.0, Color::from_rgba8(0x2E, 0x16, 0x6A, 0xFF)),
-            GradientStop::new(1.0, Color::from_rgba8(0x69, 0x0B, 0xAA, 0xFF)),
-        ],
-        SpreadMode::Pad,
-        Transform::identity(),
-    )
-    .expect("tile gradient");
-    pixmap.fill_path(
-        &rounded_tile,
-        &paint,
-        FillRule::Winding,
-        Transform::identity(),
-        None,
-    );
-
-    // Lime glow behind the glyph.
-    let glow_center = Point::from_xy(tile * 0.5, tile * 0.46);
-    paint.shader = RadialGradient::new(
-        glow_center,
-        0.0,
-        glow_center,
-        tile * 0.42,
-        vec![
-            GradientStop::new(0.0, Color::from_rgba8(0x8B, 0xEC, 0xB7, 0x66)),
-            GradientStop::new(1.0, Color::from_rgba8(0x8B, 0xEC, 0xB7, 0x00)),
-        ],
-        SpreadMode::Pad,
-        Transform::identity(),
-    )
-    .expect("glow gradient");
-    pixmap.fill_path(
-        &rounded_tile,
-        &paint,
-        FillRule::Winding,
-        Transform::identity(),
-        None,
-    );
-
-    // Glyph: 100-unit viewBox (content spans x 10-90, y 24-75) optically
-    // centered around the glow.
-    let glyph_scale = tile * APP_ICON_GLYPH_SCALE / VIEWBOX;
-    let offset_x = tile * 0.5 - 50.0 * glyph_scale;
-    let offset_y = tile * 0.46 - 49.5 * glyph_scale;
-    let transform =
-        Transform::from_scale(glyph_scale, glyph_scale).post_translate(offset_x, offset_y);
-
-    let glyph_top = offset_y + 24.0 * glyph_scale;
-    let glyph_bottom = offset_y + 75.0 * glyph_scale;
-    let head = LinearGradient::new(
-        Point::from_xy(tile * 0.5, glyph_top),
-        Point::from_xy(tile * 0.5, glyph_bottom),
-        vec![
-            GradientStop::new(0.0, Color::from_rgba8(0x8B, 0xEC, 0xB7, 0xFF)),
-            GradientStop::new(1.0, Color::from_rgba8(0x49, 0x7B, 0x60, 0xFF)),
-        ],
-        SpreadMode::Pad,
-        Transform::identity(),
-    )
-    .expect("head gradient");
-    fill_path_shader(&mut pixmap, LOGO_HEAD, head, transform);
-
-    let wave1 = Color::from_rgba8(0x4B, 0xD0, 0x98, 0xFF);
-    let wave2 = Color::from_rgba8(0x4D, 0x9F, 0xF5, 0xFF);
-    fill_path(&mut pixmap, LOGO_WAVE_1, wave1, transform);
-    fill_path(&mut pixmap, LOGO_WAVE_2, wave2, transform);
-
-    pixmap.encode_png().expect("png encoding")
-}
-
 fn skia_path(svg_path: &str) -> Option<tiny_skia::Path> {
     let bez = BezPath::from_svg(svg_path).expect("valid design path");
     let mut builder = PathBuilder::new();
@@ -526,41 +455,9 @@ fn skia_path(svg_path: &str) -> Option<tiny_skia::Path> {
     builder.finish()
 }
 
-fn fill_path(pixmap: &mut Pixmap, svg_path: &str, color: Color, transform: Transform) {
-    let mut paint = Paint::default();
-    paint.set_color(color);
-    paint.anti_alias = true;
-    fill_with_paint(pixmap, svg_path, &paint, transform);
-}
-
-fn fill_path_shader(pixmap: &mut Pixmap, svg_path: &str, shader: Shader, transform: Transform) {
-    let paint = Paint {
-        shader,
-        anti_alias: true,
-        ..Default::default()
-    };
-    fill_with_paint(pixmap, svg_path, &paint, transform);
-}
-
-fn fill_with_paint(pixmap: &mut Pixmap, svg_path: &str, paint: &Paint, transform: Transform) {
-    let Some(path) = skia_path(svg_path) else {
-        return;
-    };
-    pixmap.fill_path(&path, paint, FillRule::EvenOdd, transform, None);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn app_icon_glyph_uses_the_tile_footprint() {
-        let width_fraction = GLYPH_BOUNDS[2] * APP_ICON_GLYPH_SCALE / VIEWBOX;
-        let height_fraction = GLYPH_BOUNDS[3] * APP_ICON_GLYPH_SCALE / VIEWBOX;
-
-        assert!(width_fraction >= 0.75);
-        assert!(height_fraction >= 0.48);
-    }
 
     #[test]
     fn day_and_night_shells_share_geometry_but_not_pixels() {

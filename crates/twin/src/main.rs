@@ -478,13 +478,13 @@ fn launch_app() -> Result<()> {
         .spawn()
         .with_context(|| {
             format!(
-                "could not launch {}. Install it next to awb or put it on PATH",
+                "could not launch {}. Install it next to twin or put it on PATH",
                 app_path.display()
             )
         })?;
 
     ui::success(format!(
-        "Launched the awb menu bar app (pid {}).",
+        "Launched the Twin menu bar app (pid {}).",
         child.id()
     ));
     Ok(())
@@ -774,7 +774,7 @@ fn connected_phone_action(args: &Args) -> Result<ConnectedAction> {
     let background_label = if args.watch_enabled() {
         "Start scrcpy and keep watching ADB"
     } else {
-        "Start scrcpy and close awb"
+        "Start scrcpy and close Twin"
     };
 
     match ui::menu_with_default(
@@ -813,7 +813,7 @@ fn connect_only_phone(adb: &Adb, timeout: Duration) -> Result<Option<ConnectedPh
 fn start_scrcpy_background(adb: &Adb, phone: &ConnectedPhone, args: &Args) -> Result<()> {
     let scrcpy = resolve_scrcpy(args, adb)?;
     let pid = scrcpy.launch_background(&phone.serial, &args.scrcpy_options())?;
-    ui::success(format!("Started scrcpy (pid {pid}); awb can close now."));
+    ui::success(format!("Started scrcpy (pid {pid}); Twin can close now."));
     Ok(())
 }
 
@@ -832,7 +832,7 @@ fn watch_connected_phone(
         "Watch mode",
         [
             "Sending ADB keepalives to detect stale wireless transports.",
-            "When the device drops, awb tries adb reconnect and mDNS endpoints.",
+            "When the device drops, Twin tries adb reconnect and mDNS endpoints.",
             "Press either ⌃ + C, ESC, C or X to stop watching.",
         ],
     );

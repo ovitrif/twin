@@ -1,7 +1,7 @@
 // Draws the mirror apps' icons on a dark squircle: a phone with its screen
 // lit, or the cast mark.
 // Usage: swift scripts/make-icon.swift iphone|android|pair|cast OUT.icns
-// awb's Android Mirror uses `android` and Twin `cast`: theSVG's Cast icon in
+// Twin's Android Mirror uses `android` and Twin `cast`: theSVG's Cast icon in
 // its glass look (thesvg.org/ui/cast?v=glass, MIT), tinted from the iPhone's
 // blue to the Android green. `iphone` and `pair` are the earlier phone icons.
 import AppKit

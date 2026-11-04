@@ -131,7 +131,7 @@ pub struct Shared {
     pub logged_tool_warnings: HashSet<String>,
     pub pairing: Option<PairingSession>,
     pub mirrors: HashMap<String, Child>,
-    /// Android v iOS: one window for an Android phone and an iPhone
+    /// Side by side: one window for an Android phone and an iPhone
     pub pair: Option<PairMirror>,
     pub starting_mirrors: HashSet<String>,
     pub starting_avds: HashSet<String>,
@@ -495,7 +495,7 @@ impl Shared {
             && let Ok(Some(_)) = pair.child.try_wait()
         {
             self.pair = None;
-            self.log("Android v iOS ended");
+            self.log("Side by side ended");
         }
     }
 }
@@ -607,7 +607,7 @@ pub fn start_iphone_mirror(
     ctx.request_repaint();
 }
 
-/// Opens Android v iOS for this Android phone and this iPhone.
+/// Opens side by side for this Android phone and this iPhone.
 pub fn start_pair(
     shared: Arc<Mutex<Shared>>,
     ctx: Context,
@@ -617,7 +617,7 @@ pub fn start_pair(
 ) {
     let mut state = shared.lock().unwrap();
     if state.pair.is_some() {
-        state.log("Android v iOS is already open");
+        state.log("Side by side is already open");
         return;
     }
     match Dmb::resolve().and_then(|dmb| dmb.spawn_pair(&device.serial, &iphone.udid, &options)) {
@@ -641,7 +641,7 @@ pub fn start_pair(
                 child,
             });
         }
-        Err(error) => state.log(format!("Android v iOS failed: {error:#}")),
+        Err(error) => state.log(format!("Side by side failed: {error:#}")),
     }
     drop(state);
     ctx.request_repaint();
@@ -652,7 +652,7 @@ pub fn stop_pair(shared: &Arc<Mutex<Shared>>) {
     if let Some(mut pair) = state.pair.take() {
         let _ = pair.child.kill();
         let _ = pair.child.wait();
-        state.log("Closed Android v iOS");
+        state.log("Closed side by side");
     }
 }
 
@@ -986,7 +986,7 @@ fn run_mock_pairing(
         cancel,
     };
     delegate.on_event(PairingEvent::QrReady(PairingQr::with_instance(
-        "awb-mock".to_string(),
+        "twin-mock".to_string(),
     )))?;
     delegate.sleep(mock.scan_after)?;
 
