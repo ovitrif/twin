@@ -432,8 +432,8 @@ diff -ruN a/app/src/sys/macos/window.m b/app/src/sys/macos/window.m
 +    window = ns;
 +    bar = [self makeBarWithTitle:title];
 +    [self makeRing];
-+    // AWB_CURSOR=system keeps macOS's own pointer over the phone
-+    const char *cursor_env = getenv("AWB_CURSOR");
++    // TWIN_CURSOR=system keeps macOS's own pointer over the phone
++    const char *cursor_env = getenv("TWIN_CURSOR");
 +    BOOL touch = !cursor_env || strcmp(cursor_env, "system");
 +    touch_cursor = touch ? sc_touch_cursor(0.42) : SDL_GetDefaultCursor();
 +    pressed_cursor = touch ? sc_touch_cursor(0.62) : SDL_GetDefaultCursor();

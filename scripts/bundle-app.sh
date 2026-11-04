@@ -8,13 +8,13 @@
 # TWIN_SKIP_MIRROR=1 leaves Twin Mirror.app out, for a cross-compiled build.
 set -eu
 
-APP_BIN="${1:-target/release/awb-app}"
+APP_BIN="${1:-target/release/twin-app}"
 OUT_DIR="${2:-target/bundle}"
 SCRCPY_DIR="${SCRCPY_DIR:-target/scrcpy}"
 VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
 
 if [ ! -x "$APP_BIN" ]; then
-  echo "app binary not found at ${APP_BIN}; build it with: cargo build --release -p awb-app" >&2
+  echo "app binary not found at ${APP_BIN}; build it with: cargo build --release -p twin-app" >&2
   exit 1
 fi
 
@@ -24,7 +24,7 @@ APP="${OUT_DIR}/Twin.app"
 rm -rf "$APP" "${OUT_DIR}/Android Wifi Bridge.app" "${OUT_DIR}/AWB.app"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
-cp "$APP_BIN" "${APP}/Contents/MacOS/awb-app"
+cp "$APP_BIN" "${APP}/Contents/MacOS/twin-app"
 
 # Liquid Glass icon: actool compiles the Icon Composer bundle into Assets.car
 # (light, dark, clear and tinted variants) plus AppIcon.icns for older macOS.
@@ -105,7 +105,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleExecutable</key><string>awb-app</string>
+  <key>CFBundleExecutable</key><string>twin-app</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>tech.masivo.twin</string>
   <key>CFBundleName</key><string>Twin</string>

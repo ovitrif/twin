@@ -3039,7 +3039,7 @@ fn android_row(device: &backend::DeviceInfo, mirroring: bool) -> Row<'_> {
 }
 
 /// An iPhone's row
-fn iphone_row<'a>(iphone: &'a awb_core::dmb::Iphone, key: &'a str, mirroring: bool) -> Row<'a> {
+fn iphone_row<'a>(iphone: &'a twin_core::dmb::Iphone, key: &'a str, mirroring: bool) -> Row<'a> {
     Row {
         key,
         icon: ph::APPLE_LOGO,
@@ -3079,7 +3079,7 @@ fn list_row(
     list_row_with(ui, &row, actions)
 }
 
-fn paint_qr_card(ui: &Ui, rect: Rect, modules: &awb_core::qr::QrModules) {
+fn paint_qr_card(ui: &Ui, rect: Rect, modules: &twin_core::qr::QrModules) {
     let painter = ui.painter();
     painter.rect_filled(rect, 14.0, theme::qr_card());
     painter.rect_stroke(

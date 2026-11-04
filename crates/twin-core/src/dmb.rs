@@ -13,7 +13,7 @@ use crate::command_path::resolve_program;
 /// dmb inside Twin.app, beside the mirror windows it opens
 const BUNDLED_DMB: &str = "Contents/Helpers/Twin Mirror.app/Contents/MacOS/dmb";
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
 pub struct Iphone {
     pub udid: String,
     pub name: String,
@@ -88,6 +88,14 @@ impl Dmb {
             command.args(["--iphone-title", &options.iphone_title]);
         }
         Self::spawn(command)
+    }
+
+    /// Runs dmb with these arguments in this terminal, for `twin iphone`
+    pub fn run(&self, args: &[String]) -> Result<std::process::ExitStatus> {
+        Command::new(&self.path)
+            .args(args)
+            .status()
+            .context("running dmb")
     }
 
     /// Shows or hides one phone of the Twin pair showing iPhone `udid`

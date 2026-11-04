@@ -9,24 +9,25 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use awb_core::adb::{self, Adb};
-use awb_core::pairing_flow::{self, AlreadyConnectedChoice, PairingEvent, PairingFlowDelegate};
-use awb_core::scrcpy::{
-    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, Scrcpy, ScrcpyOptions, ScrcpyRunMode,
-};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use serde::Serialize;
+use twin_core::adb::{self, Adb};
+use twin_core::dmb::{Dmb, Iphone};
+use twin_core::pairing_flow::{self, AlreadyConnectedChoice, PairingEvent, PairingFlowDelegate};
+use twin_core::scrcpy::{
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, Scrcpy, ScrcpyOptions, ScrcpyRunMode,
+};
 
-const BINARY_NAME: &str = "awb";
-const APP_BINARY_NAME: &str = "awb-app";
-use awb_core::bundle::APP_BUNDLE_PATH;
+const BINARY_NAME: &str = "twin";
+const APP_BINARY_NAME: &str = "twin-app";
+use twin_core::bundle::APP_BUNDLE_PATH;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "awb",
+    name = "twin",
     version,
-    about = "awb (Android Wifi Bridge): interactive QR pairing for Android wireless debugging."
+    about = "Twin: pair Android phones over Wi-Fi with a QR code, and mirror Android phones and iPhones."
 )]
 struct Args {
     #[command(subcommand)]
@@ -162,8 +163,19 @@ enum CliCommand {
     #[command(about = "Print shell completions")]
     Completions(CompletionArgs),
 
-    #[command(about = "Launch the awb menu bar app")]
+    #[command(about = "Launch the Twin menu bar app")]
     App,
+
+    /// iPhones on USB (macOS): `status`, `mirror [--udid UDID]`, `devices
+    /// --serial SERIAL` (that Android phone beside the iPhone), `pane`
+    #[command(
+        about = "Mirror iPhones on USB (macOS): status, mirror, devices, pane",
+        disable_help_flag = true
+    )]
+    Iphone {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -217,10 +229,12 @@ impl ConnectedAction {
 
 #[derive(Debug, Serialize)]
 struct StatusSnapshot {
-    awb_version: &'static str,
+    twin_version: &'static str,
     adb: AdbStatus,
     scrcpy: ToolStatus,
     devices: Vec<DeviceStatus>,
+    /// iPhones on USB, through Twin.app's dmb; empty without it
+    iphones: Vec<Iphone>,
 }
 
 #[derive(Debug, Serialize)]
@@ -319,7 +333,7 @@ fn run() -> Result<()> {
 
     let timeout = Duration::from_secs(args.timeout);
 
-    ui::title("awb", "Android Wifi Bridge");
+    ui::title("twin", "Twin");
     ui::status("Checking ADB...");
     let adb = Adb::resolve(args.adb.clone())?;
 
@@ -423,6 +437,14 @@ fn handle_cli_command(command: &CliCommand, args: &Args) -> Result<()> {
         }
         CliCommand::Completions(args) => print_completions(args),
         CliCommand::App => launch_app(),
+        CliCommand::Iphone { args } => {
+            let dmb = Dmb::resolve().context("iPhone mirroring needs Twin.app on macOS")?;
+            let status = dmb.run(args)?;
+            if !status.success() {
+                std::process::exit(status.code().unwrap_or(1));
+            }
+            Ok(())
+        }
     }
 }
 
@@ -476,7 +498,7 @@ fn print_status(args: &Args, status_args: &StatusArgs) -> Result<()> {
         return Ok(());
     }
 
-    ui::title("awb", "Local status");
+    ui::title("twin", "Local status");
     print_tool_status(
         "ADB",
         &snapshot.adb.path,
@@ -516,6 +538,13 @@ fn print_status(args: &Args, status_args: &StatusArgs) -> Result<()> {
 
     if let Some(error) = &snapshot.adb.devices_error {
         ui::warn(format!("could not list devices: {error}"));
+    }
+
+    if !snapshot.iphones.is_empty() {
+        ui::status("iPhones on USB:");
+        for iphone in &snapshot.iphones {
+            println!("  {} ({})", iphone.name, iphone.model);
+        }
     }
 
     Ok(())
@@ -585,10 +614,13 @@ fn collect_status(args: &Args) -> StatusSnapshot {
     }
 
     StatusSnapshot {
-        awb_version: env!("CARGO_PKG_VERSION"),
+        twin_version: env!("CARGO_PKG_VERSION"),
         adb: adb_status,
         scrcpy: collect_scrcpy_status(args, scrcpy_adb),
         devices,
+        iphones: Dmb::resolve()
+            .and_then(|dmb| dmb.iphones())
+            .unwrap_or_default(),
     }
 }
 
@@ -1559,16 +1591,16 @@ mod tests {
 
     #[test]
     fn parses_scrcpy_launch_flags() {
-        let default_args = Args::try_parse_from(["awb"]).unwrap();
+        let default_args = Args::try_parse_from(["twin"]).unwrap();
         assert_eq!(default_args.scrcpy_launch_mode(), ScrcpyLaunchMode::Menu);
 
-        let background_args = Args::try_parse_from(["awb", "--background"]).unwrap();
+        let background_args = Args::try_parse_from(["twin", "--background"]).unwrap();
         assert_eq!(
             background_args.scrcpy_launch_mode(),
             ScrcpyLaunchMode::Background
         );
 
-        let foreground_args = Args::try_parse_from(["awb", "--foreground"]).unwrap();
+        let foreground_args = Args::try_parse_from(["twin", "--foreground"]).unwrap();
         assert_eq!(
             foreground_args.scrcpy_launch_mode(),
             ScrcpyLaunchMode::Foreground
@@ -1577,7 +1609,7 @@ mod tests {
 
     #[test]
     fn stable_mode_enables_supervision_defaults() {
-        let args = Args::try_parse_from(["awb", "--stable"]).unwrap();
+        let args = Args::try_parse_from(["twin", "--stable"]).unwrap();
 
         assert_eq!(args.scrcpy_launch_mode(), ScrcpyLaunchMode::Background);
         assert!(args.watch_enabled());
@@ -1673,20 +1705,20 @@ mod tests {
 
     #[test]
     fn connect_only_closes_without_scrcpy_menu() {
-        let args = Args::try_parse_from(["awb", "--connect-only"]).unwrap();
+        let args = Args::try_parse_from(["twin", "--connect-only"]).unwrap();
 
         assert_eq!(args.scrcpy_launch_mode(), ScrcpyLaunchMode::Menu);
         assert_eq!(
             connected_phone_action(&args).unwrap(),
             ConnectedAction::Close
         );
-        assert!(Args::try_parse_from(["awb", "--connect-only", "--background"]).is_err());
-        assert!(Args::try_parse_from(["awb", "--connect-only", "--stable"]).is_err());
+        assert!(Args::try_parse_from(["twin", "--connect-only", "--background"]).is_err());
+        assert!(Args::try_parse_from(["twin", "--connect-only", "--stable"]).is_err());
     }
 
     #[test]
     fn scrcpy_actions_request_stay_awake_by_default() {
-        let args = Args::try_parse_from(["awb"]).unwrap();
+        let args = Args::try_parse_from(["twin"]).unwrap();
 
         assert!(should_request_stay_awake(
             &args,
@@ -1720,7 +1752,7 @@ mod tests {
 
     #[test]
     fn explicit_keep_screen_awake_applies_without_scrcpy() {
-        let args = Args::try_parse_from(["awb", "--keep-screen-awake"]).unwrap();
+        let args = Args::try_parse_from(["twin", "--keep-screen-awake"]).unwrap();
 
         assert!(should_request_stay_awake(&args, ConnectedAction::Close));
     }
@@ -1728,7 +1760,7 @@ mod tests {
     #[test]
     fn normalizes_keepalive_settings() {
         let args = Args::try_parse_from([
-            "awb",
+            "twin",
             "--watch",
             "--keepalive-interval",
             "0",
@@ -1743,11 +1775,11 @@ mod tests {
 
     #[test]
     fn builds_scrcpy_options_from_args() {
-        let default_args = Args::try_parse_from(["awb"]).unwrap();
+        let default_args = Args::try_parse_from(["twin"]).unwrap();
         assert_eq!(default_args.scrcpy_options(), ScrcpyOptions::default());
 
         let custom_args = Args::try_parse_from([
-            "awb",
+            "twin",
             "--plain-window",
             "--always-on-top",
             "--window-title",
@@ -1774,8 +1806,8 @@ mod tests {
 
     #[test]
     fn parses_explicit_device_serial() {
-        let args =
-            Args::try_parse_from(["awb", "--device-serial", "R5CT123ABC", "--background"]).unwrap();
+        let args = Args::try_parse_from(["twin", "--device-serial", "R5CT123ABC", "--background"])
+            .unwrap();
 
         assert_eq!(args.device_serial.as_deref(), Some("R5CT123ABC"));
         assert_eq!(args.scrcpy_launch_mode(), ScrcpyLaunchMode::Background);
@@ -1783,12 +1815,12 @@ mod tests {
 
     #[test]
     fn rejects_conflicting_scrcpy_launch_flags() {
-        assert!(Args::try_parse_from(["awb", "--background", "--foreground"]).is_err());
+        assert!(Args::try_parse_from(["twin", "--background", "--foreground"]).is_err());
     }
 
     #[test]
     fn parses_completions_command() {
-        let args = Args::try_parse_from(["awb", "completions", "zsh"]).unwrap();
+        let args = Args::try_parse_from(["twin", "completions", "zsh"]).unwrap();
 
         match args.command {
             Some(CliCommand::Completions(args)) => {
@@ -1800,7 +1832,7 @@ mod tests {
 
     #[test]
     fn parses_app_command() {
-        let args = Args::try_parse_from(["awb", "app"]).unwrap();
+        let args = Args::try_parse_from(["twin", "app"]).unwrap();
         assert!(matches!(args.command, Some(CliCommand::App)));
     }
 

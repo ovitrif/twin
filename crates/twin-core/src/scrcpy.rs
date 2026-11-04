@@ -227,7 +227,7 @@ impl Scrcpy {
         command.args(default_args(serial, options));
         self.configure_adb_env(&mut command);
         if !options.touch_pointer {
-            command.env("AWB_CURSOR", "system");
+            command.env("TWIN_CURSOR", "system");
         }
         command
     }
@@ -319,7 +319,7 @@ pub struct ScrcpyOptions {
     pub window_title: String,
     pub window_width: u32,
     pub window_height: u32,
-    /// The round touch pointer over the phone; off keeps macOS's (AWB_CURSOR).
+    /// The round touch pointer over the phone; off keeps macOS's (TWIN_CURSOR).
     pub touch_pointer: bool,
 }
 
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn bundled_scrcpy_prefers_the_running_app_bundle() {
-        let exe = Path::new("/tmp/Dev Build.app/Contents/MacOS/awb-app");
+        let exe = Path::new("/tmp/Dev Build.app/Contents/MacOS/twin-app");
 
         assert_eq!(
             bundled_scrcpy_candidates(Some(exe)),

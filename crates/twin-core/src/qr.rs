@@ -66,7 +66,7 @@ fn pairing_instance_name() -> String {
     let base = machine_name_candidates()
         .into_iter()
         .find_map(|candidate| sanitize_pairing_instance(&candidate))
-        .unwrap_or_else(|| "awb".to_string());
+        .unwrap_or_else(|| "twin".to_string());
     let base: String = base.chars().take(56).collect();
     format!("{base}-{suffix}")
 }

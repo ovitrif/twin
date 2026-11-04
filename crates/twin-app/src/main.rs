@@ -73,7 +73,7 @@ fn main() -> eframe::Result {
     }
 
     let viewport = egui::ViewportBuilder::default()
-        .with_title("awb")
+        .with_title("Twin")
         .with_inner_size([theme::WINDOW_WIDTH, theme::WINDOW_FULL_HEIGHT])
         .with_decorations(false)
         .with_resizable(false)
@@ -97,13 +97,13 @@ fn main() -> eframe::Result {
     }
 
     eframe::run_native(
-        "awb",
+        "Twin",
         native_options,
         Box::new(|cc| {
             app::App::new(cc)
                 .map(|app| Box::new(app) as Box<dyn eframe::App>)
                 .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> {
-                    format!("failed to start awb-app: {error:#}").into()
+                    format!("failed to start twin-app: {error:#}").into()
                 })
         }),
     )

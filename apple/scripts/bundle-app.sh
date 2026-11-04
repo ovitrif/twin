@@ -15,7 +15,7 @@ bin=$(swift build -c release --show-bin-path)
 version=$("$bin/dmb" --version | awk '{print $2}')
 
 SERVER_SHA256="764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536"
-cache="${HOME}/.cache/dmb"
+cache="${HOME}/.cache/twin"
 server="${cache}/scrcpy-server-v5.0.1"
 mkdir -p "$cache"
 if ! echo "${SERVER_SHA256}  ${server}" | shasum -a 256 -c - >/dev/null 2>&1; then

@@ -57,7 +57,7 @@ jobs:
 
       - name: Build CLI and menu bar app (native)
         if: matrix.build_kind == 'native'
-        run: cargo build --release -p awb -p awb-app --target ${{ matrix.target }}
+        run: cargo build --release -p awb -p twin-app --target ${{ matrix.target }}
 
       - name: Select Xcode 26 for the Liquid Glass icon
         if: contains(matrix.target, 'apple-darwin')
@@ -90,9 +90,9 @@ jobs:
           if [[ "$target" == *apple-darwin ]]; then
             # Render icons with a host-arch build so the cross-compiled target
             # binary is never executed on this (arm64) runner.
-            cargo build --release -p awb-app
-            cp "target/${target}/release/awb-app" "$staging/"
-            scripts/bundle-app.sh "target/${target}/release/awb-app" "$staging" "target/release/awb-app"
+            cargo build --release -p twin-app
+            cp "target/${target}/release/twin-app" "$staging/"
+            scripts/bundle-app.sh "target/${target}/release/twin-app" "$staging" "target/release/twin-app"
           fi
           tar czf "${staging}.tar.gz" "$staging"
           echo "ARCHIVE=${staging}.tar.gz" >> "$GITHUB_ENV"

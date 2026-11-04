@@ -8,8 +8,8 @@
 mod imp {
     use std::process::Command;
 
-    /// Display name for the login item AWB registers.
-    const ITEM_NAME: &str = "awb";
+    /// Display name for the login item Twin registers.
+    const ITEM_NAME: &str = "Twin";
 
     /// The enclosing `.app` bundle when present, otherwise the bare executable.
     /// Login Items shows whichever path is registered.

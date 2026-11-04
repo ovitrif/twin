@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/awb-core", "crates/awb", "crates/awb-app", "crates/menu-icon"]
+members = ["crates/twin-core", "crates/twin", "crates/twin-app", "crates/menu-icon"]
 # The iPhone helper builds on its own, with apple/ (macOS only)
 exclude = ["apple/hid"]
 
@@ -12,7 +12,7 @@ license = "MIT"
 repository = "https://github.com/ovitrif/awb"
 
 [workspace.dependencies]
-awb-core = { path = "crates/awb-core" }
+twin-core = { path = "crates/twin-core" }
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"

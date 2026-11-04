@@ -2,8 +2,8 @@
 //! a Unix socket, so agents and scripts can check every screen without a
 //! window, a menu bar item, or the user's mouse and keyboard.
 //!
-//! Start a server with `awb-app --drive <socket>` (build with
-//! `--features drive`), then send commands with `awb-app drive <socket>
+//! Start a server with `twin-app --drive <socket>` (build with
+//! `--features drive`), then send commands with `twin-app drive <socket>
 //! <command>`. One command per line; each gets one reply line, `ok ...` or
 //! `error ...`. Coordinates are window points (380 wide, 0 at the top edge
 //! including the beak). Commands:
@@ -20,7 +20,7 @@
 //! - `quit`.
 //!
 //! The UI runs in real time, so animations and backend work (adb, emulators,
-//! `AWB_MOCK_PAIRING`) behave as in the app.
+//! `TWIN_MOCK_PAIRING`) behave as in the app.
 
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -41,12 +41,12 @@ const PIXELS_PER_POINT: f32 = 2.0;
 /// Runs the headless app and serves commands on `socket` until `quit`.
 pub fn serve(socket: &Path) -> anyhow::Result<()> {
     // Driven settings changes never reach the user's config: always use a
-    // throwaway config folder, seeded from `AWB_DRIVE_CONFIG` when given.
-    let config_home = std::env::temp_dir().join(format!("awb-drive-{}", std::process::id()));
-    std::fs::create_dir_all(config_home.join("awb"))?;
-    if let Some(seed) = std::env::var_os("AWB_DRIVE_CONFIG") {
-        std::fs::copy(&seed, config_home.join("awb/config.toml"))
-            .context("failed to copy AWB_DRIVE_CONFIG")?;
+    // throwaway config folder, seeded from `TWIN_DRIVE_CONFIG` when given.
+    let config_home = std::env::temp_dir().join(format!("twin-drive-{}", std::process::id()));
+    std::fs::create_dir_all(config_home.join("twin"))?;
+    if let Some(seed) = std::env::var_os("TWIN_DRIVE_CONFIG") {
+        std::fs::copy(&seed, config_home.join("twin/config.toml"))
+            .context("failed to copy TWIN_DRIVE_CONFIG")?;
     }
     // SAFETY: set on the main thread before the app or any worker thread
     // exists.

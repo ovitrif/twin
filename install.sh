@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-REPO="${AWB_INSTALL_REPO:-ovitrif/awb}"
+REPO="${TWIN_INSTALL_REPO:-ovitrif/awb}"
 BINARY="awb"
-GITHUB_URL="${AWB_INSTALL_GITHUB_URL:-https://github.com}"
+GITHUB_URL="${TWIN_INSTALL_GITHUB_URL:-https://github.com}"
 
 main() {
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -64,9 +64,9 @@ main() {
   install -m 755 "${dir}/${BINARY}" "${install_dir}/${BINARY}"
   echo "Installed ${install_dir}/${BINARY}"
 
-  if [ -f "${dir}/awb-app" ]; then
-    install -m 755 "${dir}/awb-app" "${install_dir}/awb-app"
-    echo "Installed ${install_dir}/awb-app (run 'awb app' for the menu bar app)"
+  if [ -f "${dir}/twin-app" ]; then
+    install -m 755 "${dir}/twin-app" "${install_dir}/twin-app"
+    echo "Installed ${install_dir}/twin-app (run 'awb app' for the menu bar app)"
   fi
 
   echo "Run '${BINARY}' to get started."
@@ -74,14 +74,14 @@ main() {
 }
 
 resolve_install_dir() {
-  if [ -n "${AWB_INSTALL_DIR:-}" ]; then
-    mkdir -p "$AWB_INSTALL_DIR" 2>/dev/null || true
-    if [ -w "$AWB_INSTALL_DIR" ]; then
-      printf '%s\n' "$AWB_INSTALL_DIR"
+  if [ -n "${TWIN_INSTALL_DIR:-}" ]; then
+    mkdir -p "$TWIN_INSTALL_DIR" 2>/dev/null || true
+    if [ -w "$TWIN_INSTALL_DIR" ]; then
+      printf '%s\n' "$TWIN_INSTALL_DIR"
       return
     fi
 
-    echo "AWB_INSTALL_DIR is not writable: ${AWB_INSTALL_DIR}" >&2
+    echo "TWIN_INSTALL_DIR is not writable: ${TWIN_INSTALL_DIR}" >&2
     exit 1
   fi
 
@@ -91,7 +91,7 @@ resolve_install_dir() {
     printf '%s\n' "$HOME/.local/bin"
   else
     echo "Cannot find writable install directory." >&2
-    echo "Run with sudo, set AWB_INSTALL_DIR, or create ~/.local/bin" >&2
+    echo "Run with sudo, set TWIN_INSTALL_DIR, or create ~/.local/bin" >&2
     exit 1
   fi
 }
@@ -99,8 +99,8 @@ resolve_install_dir() {
 resolve_tag() {
   latest_url="$1"
 
-  if [ -n "${AWB_INSTALL_TAG:-}" ]; then
-    printf '%s\n' "$AWB_INSTALL_TAG"
+  if [ -n "${TWIN_INSTALL_TAG:-}" ]; then
+    printf '%s\n' "$TWIN_INSTALL_TAG"
     return
   fi
 

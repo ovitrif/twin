@@ -9,23 +9,23 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use awb_core::adb::{self, Adb};
-use awb_core::dmb::{Dmb, Iphone, PairOptions};
-use awb_core::emulator::{self, Emulator};
-use awb_core::pairing_flow::{
+use eframe::egui::Context;
+use twin_core::adb::{self, Adb};
+use twin_core::dmb::{Dmb, Iphone, PairOptions};
+use twin_core::emulator::{self, Emulator};
+use twin_core::pairing_flow::{
     self, AlreadyConnectedChoice, PairingEvent, PairingFlowDelegate, PairingProgressKind,
 };
-use awb_core::qr::{PairingQr, QrModules};
-use awb_core::scrcpy::Scrcpy;
-use awb_core::wifi;
-use eframe::egui::Context;
+use twin_core::qr::{PairingQr, QrModules};
+use twin_core::scrcpy::Scrcpy;
+use twin_core::wifi;
 
 use crate::mock;
 
 const PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
 static ADB_WORK_LOCK: Mutex<()> = Mutex::new(());
 
-pub use awb_core::pairing_flow::PairingProgress;
+pub use twin_core::pairing_flow::PairingProgress;
 
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
@@ -504,7 +504,7 @@ pub fn start_mirror(
     shared: Arc<Mutex<Shared>>,
     ctx: Context,
     device: DeviceInfo,
-    options: awb_core::scrcpy::ScrcpyOptions,
+    options: twin_core::scrcpy::ScrcpyOptions,
 ) {
     let mirror_key = device.mirror_key.clone();
     {

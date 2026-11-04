@@ -1,5 +1,5 @@
 [package]
-name = "awb-core"
+name = "twin-core"
 description = "Shared ADB, Android emulator, scrcpy, and QR pairing logic for awb."
 version.workspace = true
 edition.workspace = true

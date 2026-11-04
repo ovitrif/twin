@@ -1,5 +1,5 @@
 [package]
-name = "awb"
+name = "twin"
 description = "Interactive Android wireless debugging pairing for macOS."
 version.workspace = true
 edition.workspace = true
@@ -9,11 +9,11 @@ repository.workspace = true
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "awb"
+name = "twin"
 path = "src/main.rs"
 
 [dependencies]
-awb-core.workspace = true
+twin-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true

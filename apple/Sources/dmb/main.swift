@@ -2,23 +2,22 @@ import AppKit
 import DMBCore
 
 let usage = """
-dmb: mirror a USB-connected iPhone in a QuickTime-style window
+twin iphone: mirror a USB-connected iPhone in Twin
 
-  dmb status [--json]          list iPhones on USB and whether each is mirrored
-  dmb mirror [--udid UDID]     open the mirror (the first iPhone without --udid)
-             [--wda URL]       send clicks and typing to WebDriverAgent instead
-             [--wait]          stay running while the mirror is open; ending dmb
-                               closes it, for apps that track it (awb)
-  dmb devices --serial SERIAL  show this Android phone beside the iPhone in one
-              [--udid UDID]    Twin window; --wait as for mirror
-  dmb pane android|iphone show|hide --udid UDID
-                               show or hide one phone of the Twin pair showing
-                               that iPhone; hiding both closes the window
-  dmb --version
+  twin iphone status [--json]          list iPhones on USB and whether each is mirrored
+  twin iphone mirror [--udid UDID]     open the mirror (the first iPhone without --udid)
+                     [--wda URL]       send clicks and typing to WebDriverAgent instead
+                     [--wait]          stay running while the mirror is open; ending
+                                       this command closes it, for the menu bar app
+  twin iphone devices --serial SERIAL  show this Android phone beside the iPhone in one
+                      [--udid UDID]    window; --wait as for mirror
+  twin iphone pane android|iphone show|hide --udid UDID
+                                       show or hide one phone of that pair; hiding both
+                                       closes the window
 """
 
 let stateDir = FileManager.default.homeDirectoryForCurrentUser
-    .appendingPathComponent(".local/state/dmb", isDirectory: true)
+    .appendingPathComponent(".local/state/twin", isDirectory: true)
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("dmb: \(message)\n".utf8))
@@ -97,7 +96,7 @@ func devices(_ args: [String]) {
     guard let iphone = udid.map({ u in phones.first { $0.udid == u } }) ?? phones.first else {
         fail("no iPhone on USB; plug one in and tap Trust on it")
     }
-    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall dmb") }
+    guard let binary = twinBinary() else { fail("Twin Mirror not found; reinstall Twin") }
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     var arguments = ["--serial", serial, "--udid", iphone.udid, "--name", iphone.name, "--product", iphone.productType,
                      "--log", stateDir.appendingPathComponent("devices.log").path] + passthrough
@@ -149,7 +148,7 @@ func mirror(_ args: [String]) {
         if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
         return
     }
-    guard let binary = twinBinary() else { fail("Twin.app not found; reinstall dmb") }
+    guard let binary = twinBinary() else { fail("Twin Mirror not found; reinstall Twin") }
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     let log = stateDir.appendingPathComponent("mirror-\(device.udid).log")
     var arguments = ["--name", device.name, "--udid", device.udid, "--product", device.productType,

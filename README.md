@@ -22,7 +22,7 @@ Pin a release or choose the install directory:
 
 ```sh
 curl -fsSL https://github.com/ovitrif/awb/releases/latest/download/install.sh | \
-  AWB_INSTALL_TAG=v2.1.0 AWB_INSTALL_DIR="$HOME/.local/bin" sh
+  TWIN_INSTALL_TAG=v2.1.0 TWIN_INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 Requirements: `adb` on your PATH (Android SDK platform-tools). `scrcpy` is optional and
@@ -100,13 +100,13 @@ uses `scrcpy` from your PATH.
 ```sh
 git clone https://github.com/ovitrif/awb.git
 cd awb
-cargo build --release            # target/release/awb and target/release/awb-app
+cargo build --release            # target/release/awb and target/release/twin-app
 scripts/build-scrcpy.sh          # optional: patched scrcpy into target/scrcpy (needs meson, ninja, Homebrew ffmpeg, sdl3, libusb)
-scripts/bundle-app.sh            # optional: wraps awb-app (and target/scrcpy) into target/bundle/Android Wifi Bridge.app
+scripts/bundle-app.sh            # optional: wraps twin-app (and target/scrcpy) into target/bundle/Android Wifi Bridge.app
 ```
 
-The workspace has three crates: `awb-core` (ADB, scrcpy, QR, and Bonjour logic), `awb`
-(the CLI), and `awb-app` (the menu bar app, built from the design in `DESIGN.pen`).
+The workspace has three crates: `twin-core` (ADB, scrcpy, QR, and Bonjour logic), `awb`
+(the CLI), and `twin-app` (the menu bar app, built from the design in `DESIGN.pen`).
 `scrcpy/macos-window.patch` holds the mirror window patch; `scripts/build-scrcpy.sh` pins the
 scrcpy version and says how to move the patch to a new release.
 

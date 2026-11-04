@@ -30,14 +30,14 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Lint headless drive mode
-        run: cargo clippy -p awb-app --all-targets --features drive -- -D warnings
+        run: cargo clippy -p twin-app --all-targets --features drive -- -D warnings
 
       - name: Unit tests
         run: cargo test
 
       - name: Bundle Android Wifi Bridge.app
         run: |
-          cargo build --release -p awb-app
+          cargo build --release -p twin-app
           scripts/bundle-app.sh
 
   check-linux-cli:
@@ -53,7 +53,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Lint CLI crates
-        run: cargo clippy -p awb-core -p awb --all-targets -- -D warnings
+        run: cargo clippy -p twin-core -p awb --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test -p awb-core -p awb
+        run: cargo test -p twin-core -p awb

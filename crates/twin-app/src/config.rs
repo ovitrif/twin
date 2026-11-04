@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use awb_core::dmb::PairOptions;
-use awb_core::scrcpy::ScrcpyOptions;
 use serde::{Deserialize, Serialize};
+use twin_core::dmb::PairOptions;
+use twin_core::scrcpy::ScrcpyOptions;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -115,7 +115,14 @@ fn config_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
 
-    Some(base.join("awb").join("config.toml"))
+    let path = base.join("twin").join("config.toml");
+    // Twin was awb up to 2.1: its settings carry over on the first run
+    let legacy = base.join("awb").join("config.toml");
+    if !path.exists() && legacy.exists() {
+        let _ = fs::create_dir_all(base.join("twin"));
+        let _ = fs::copy(&legacy, &path);
+    }
+    Some(path)
 }
 
 #[cfg(test)]

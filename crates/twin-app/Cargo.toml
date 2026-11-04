@@ -1,5 +1,5 @@
 [package]
-name = "awb-app"
+name = "twin-app"
 description = "awb (Android Wifi Bridge) macOS menu bar app."
 version.workspace = true
 edition.workspace = true
@@ -8,11 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "awb-app"
+name = "twin-app"
 path = "src/main.rs"
 
 [dependencies]
-awb-core.workspace = true
+twin-core.workspace = true
 anyhow.workspace = true
 eframe = "0.34"
 egui-phosphor = "0.12"

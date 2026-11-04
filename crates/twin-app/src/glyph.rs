@@ -76,7 +76,7 @@ pub fn menubar_icon(height: u32, connected: bool) -> Raster {
 }
 
 /// Preview of the disconnected (top) and connected (bottom) weights as macOS
-/// template images on dark and light menu bars. For `awb-app --render-menubar`.
+/// template images on dark and light menu bars. For `twin-app --render-menubar`.
 pub fn menubar_preview_png() -> Vec<u8> {
     let disconnected = menubar_icon(44, false);
     let connected = menubar_icon(44, true);
@@ -401,7 +401,7 @@ pub fn shell_background(
     }
 }
 
-/// The shell as a PNG, for offline preview via `awb-app --render-shell`.
+/// The shell as a PNG, for offline preview via `twin-app --render-shell`.
 pub fn shell_background_png(oversample: u32, appearance: Appearance, height: f32) -> Vec<u8> {
     render_shell(oversample, appearance, height, true)
         .encode_png()
