@@ -52,6 +52,8 @@ const ROW_ACTION_SIZE: f32 = 22.0;
 const ROW_ACTION_GAP: f32 = 4.0;
 const STATUS_COLUMN_WIDTH: f32 = 66.0;
 const ROW_ICON_SIZE: f32 = 16.0;
+/// Where a row's name starts, past its icon
+const ROW_TEXT_INSET: f32 = 26.0;
 /// How far a row's hover highlight reaches past the content column.
 const ROW_HOVER_BLEED: f32 = 7.0;
 /// How far pages may draw above the body, into the gap under the header.
@@ -1742,32 +1744,75 @@ impl App {
         let shared = &self.shared;
         let pending_avd_delete = &mut self.pending_avd_delete;
         chrome_scroll(ui, "devices-scroll", &shell, day_weight, false, |ui| {
-            let devices = snapshot.devices.iter().filter(|device| !device.is_emulator);
             let has_phones = snapshot.devices.iter().any(|device| !device.is_emulator)
                 || !snapshot.iphones.is_empty();
-            // Side by side: dots link the Android phone and the iPhone it opens with
-            let link_android = settings.side_by_side.then(|| {
-                snapshot
-                    .devices
-                    .iter()
-                    .find(|device| device.ready && !device.is_emulator)
-            });
-            let mut link_ends: Vec<egui::Pos2> = Vec::new();
+            // Side by side: the first ready Android phone and the first
+            // iPhone open together, so they show as one unit with one button
+            let pair = settings
+                .side_by_side
+                .then(|| {
+                    let android = snapshot
+                        .devices
+                        .iter()
+                        .find(|device| device.ready && !device.is_emulator)?;
+                    Some((android, snapshot.iphones.first()?))
+                })
+                .flatten();
             if has_phones {
                 section_header(ui, "Physical");
             }
             let mut first = true;
+            if let Some((android, iphone)) = pair {
+                first = false;
+                let iphone_key = backend::iphone_mirror_key(iphone);
+                let paired = pair_keys.contains(&android.mirror_key);
+                let android_mirroring = mirrors.contains(&android.mirror_key);
+                let iphone_mirroring = mirrors.contains(&iphone_key);
+                let action = if android_mirroring || iphone_mirroring {
+                    RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
+                } else if scrcpy_ok {
+                    RowAction::enabled(ph::PLAY, theme::text_bright())
+                        .with_tooltip("Mirror both side by side")
+                } else {
+                    RowAction::disabled(ph::PLAY)
+                };
+                let top = android_row(android, android_mirroring);
+                let bottom = iphone_row(iphone, &iphone_key, iphone_mirroring);
+                let link = if paired {
+                    theme::green()
+                } else {
+                    theme::text_faint()
+                };
+                if pair_rows(ui, &top, &bottom, &action, link) {
+                    if paired {
+                        backend::stop_pair(shared);
+                    } else if android_mirroring || iphone_mirroring {
+                        if android_mirroring {
+                            backend::stop_mirror(shared, &android.mirror_key);
+                        }
+                        if iphone_mirroring {
+                            backend::stop_mirror(shared, &iphone_key);
+                        }
+                    } else {
+                        backend::start_pair(
+                            shared.clone(),
+                            ctx.clone(),
+                            android.clone(),
+                            iphone.clone(),
+                            settings.pair_options(),
+                        );
+                    }
+                }
+            }
+
+            let paired_android = pair.map(|(android, _)| android.mirror_key.as_str());
+            let devices = snapshot.devices.iter().filter(|device| {
+                !device.is_emulator && Some(device.mirror_key.as_str()) != paired_android
+            });
             for device in devices {
                 if !std::mem::take(&mut first) {
-                    divider(ui);
+                    row_divider(ui);
                 }
-                if link_android
-                    .flatten()
-                    .is_some_and(|linked| linked.mirror_key == device.mirror_key)
-                {
-                    link_ends.push(row_icon_center(ui));
-                }
-
                 let mirroring = mirrors.contains(&device.mirror_key);
                 let action = if mirroring {
                     RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
@@ -1776,50 +1821,11 @@ impl App {
                 } else {
                     RowAction::disabled(ph::PLAY)
                 };
-                let status = if mirroring {
-                    "Mirroring"
-                } else if device.ready {
-                    "Ready"
-                } else {
-                    device.state.as_str()
-                };
-
-                let row = Row {
-                    key: &device.mirror_key,
-                    icon: ph::DEVICE_MOBILE,
-                    icon_color: if mirroring {
-                        theme::green()
-                    } else {
-                        theme::text_label()
-                    },
-                    name: &device.name,
-                    tooltip: &device.serial,
-                    status,
-                    status_color: if mirroring {
-                        theme::green()
-                    } else {
-                        theme::text_faint()
-                    },
-                };
-                if list_row_with(ui, &row, &[action]).is_some() {
+                if list_row_with(ui, &android_row(device, mirroring), &[action]).is_some() {
                     if pair_keys.contains(&device.mirror_key) {
                         backend::stop_pair(shared);
                     } else if mirroring {
                         backend::stop_mirror(shared, &device.mirror_key);
-                    } else if settings.side_by_side
-                        && let Some(iphone) = snapshot
-                            .iphones
-                            .iter()
-                            .find(|iphone| !mirrors.contains(&backend::iphone_mirror_key(iphone)))
-                    {
-                        // Side by side: this phone and the first free iPhone in one window
-                        backend::start_pair(
-                            shared.clone(),
-                            ctx.clone(),
-                            device.clone(),
-                            iphone.clone(),
-                            settings.pair_options(),
-                        );
                     } else {
                         backend::start_mirror(
                             shared.clone(),
@@ -1831,14 +1837,11 @@ impl App {
                 }
             }
 
-            for (index, iphone) in snapshot.iphones.iter().enumerate() {
+            let iphones = snapshot.iphones.iter().skip(usize::from(pair.is_some()));
+            for iphone in iphones {
                 if !std::mem::take(&mut first) {
-                    divider(ui);
+                    row_divider(ui);
                 }
-                if index == 0 && link_ends.len() == 1 {
-                    link_ends.push(row_icon_center(ui));
-                }
-
                 let key = backend::iphone_mirror_key(iphone);
                 let mirroring = mirrors.contains(&key);
                 let action = if mirroring {
@@ -1846,43 +1849,11 @@ impl App {
                 } else {
                     RowAction::enabled(ph::PLAY, theme::text_bright()).with_tooltip("Mirror screen")
                 };
-                let row = Row {
-                    key: &key,
-                    icon: ph::APPLE_LOGO,
-                    icon_color: if mirroring {
-                        theme::green()
-                    } else {
-                        theme::text_label()
-                    },
-                    name: &iphone.name,
-                    tooltip: &iphone.model,
-                    status: if mirroring { "Mirroring" } else { "Ready" },
-                    status_color: if mirroring {
-                        theme::green()
-                    } else {
-                        theme::text_faint()
-                    },
-                };
-                if list_row_with(ui, &row, &[action]).is_some() {
+                if list_row_with(ui, &iphone_row(iphone, &key, mirroring), &[action]).is_some() {
                     if pair_keys.contains(&key) {
                         backend::stop_pair(shared);
                     } else if mirroring {
                         backend::stop_mirror(shared, &key);
-                    } else if settings.side_by_side
-                        && let Some(device) = snapshot.devices.iter().find(|device| {
-                            device.ready
-                                && !device.is_emulator
-                                && !mirrors.contains(&device.mirror_key)
-                        })
-                    {
-                        // Side by side: the first free Android phone and this one in one window
-                        backend::start_pair(
-                            shared.clone(),
-                            ctx.clone(),
-                            device.clone(),
-                            iphone.clone(),
-                            settings.pair_options(),
-                        );
                     } else {
                         backend::start_iphone_mirror(
                             shared.clone(),
@@ -1896,20 +1867,6 @@ impl App {
                 }
             }
 
-            if let [android, iphone] = link_ends[..] {
-                let paired = !pair_keys.is_empty();
-                link_dots(
-                    ui,
-                    android,
-                    iphone,
-                    if paired {
-                        theme::green()
-                    } else {
-                        theme::text_faint()
-                    },
-                );
-            }
-
             if !snapshot.avds.is_empty() {
                 if has_phones {
                     ui.add_space(14.0);
@@ -1919,7 +1876,7 @@ impl App {
             }
             for avd in &snapshot.avds {
                 if !std::mem::take(&mut first) {
-                    divider(ui);
+                    row_divider(ui);
                 }
 
                 let starting = starting_avds.contains(&avd.name);
@@ -2408,26 +2365,26 @@ fn section_header(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-/// Where the next row's icon will sit
-fn row_icon_center(ui: &Ui) -> egui::Pos2 {
-    let top_left = ui.cursor().min;
-    egui::pos2(
-        top_left.x + ROW_ICON_SIZE / 2.0,
-        top_left.y + ROW_HEIGHT / 2.0,
-    )
+/// A dot, a line and a dot from one row's icon down to another's, linking
+/// the two phones Side by side opens together
+fn link_line(ui: &Ui, x: f32, from_y: f32, to_y: f32, color: Color32) {
+    let start = egui::pos2(x, from_y + ROW_ICON_SIZE / 2.0 + 4.0);
+    let end = egui::pos2(x, to_y - ROW_ICON_SIZE / 2.0 - 4.0);
+    let painter = ui.painter();
+    painter.circle_filled(start, 1.6, color);
+    painter.circle_filled(end, 1.6, color);
+    painter.line_segment([start, end], Stroke::new(1.0_f32, color));
 }
 
-/// Dots from one row's icon down to another's, linking the two phones
-/// Side by side opens together
-fn link_dots(ui: &Ui, from: egui::Pos2, to: egui::Pos2, color: egui::Color32) {
-    let start = from.y + ROW_ICON_SIZE / 2.0 + 5.0;
-    let end = to.y - ROW_ICON_SIZE / 2.0 - 5.0;
-    let mut y = start;
-    while y <= end + 0.5 {
-        ui.painter()
-            .circle_filled(egui::pos2(from.x, y), 1.4, color);
-        y += 5.0;
-    }
+/// A separator between device rows, starting where their names start so it
+/// stays clear of the icons and the pair's link
+fn row_divider(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    let rect = Rect::from_min_max(
+        egui::pos2(rect.left() + ROW_TEXT_INSET, rect.top()),
+        rect.max,
+    );
+    ui.painter().rect_filled(rect, 0.0, theme::hairline());
 }
 
 fn divider(ui: &mut Ui) {
@@ -2791,8 +2748,54 @@ struct Row<'a> {
 /// statuses line up, then the action buttons on the right edge.
 fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<usize> {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+    paint_row_hover(ui, rect, row.key);
+    paint_row(ui, rect, row, actions_width(actions.len()));
+    row_actions(ui, rect, row.key, actions)
+}
+
+/// Two device rows that act as one, as the phones Side by side opens
+/// together: one hover, a link between their icons and one action button
+/// centered on both
+fn pair_rows(
+    ui: &mut Ui,
+    top: &Row<'_>,
+    bottom: &Row<'_>,
+    action: &RowAction,
+    link: Color32,
+) -> bool {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 2.0 * ROW_HEIGHT + 1.0), Sense::hover());
+    paint_row_hover(ui, rect, top.key);
+    let top_rect = Rect::from_min_size(rect.min, vec2(width, ROW_HEIGHT));
+    let bottom_rect = Rect::from_min_size(
+        egui::pos2(rect.left(), top_rect.bottom() + 1.0),
+        vec2(width, ROW_HEIGHT),
+    );
+    let reserved = actions_width(1);
+    paint_row(ui, top_rect, top, reserved);
+    paint_row(ui, bottom_rect, bottom, reserved);
+    let divider = Rect::from_min_max(
+        egui::pos2(rect.left() + ROW_TEXT_INSET, top_rect.bottom()),
+        egui::pos2(rect.right() - reserved - 12.0, top_rect.bottom() + 1.0),
+    );
+    ui.painter().rect_filled(divider, 0.0, theme::hairline());
+    link_line(
+        ui,
+        rect.left() + ROW_ICON_SIZE / 2.0,
+        top_rect.center().y,
+        bottom_rect.center().y,
+        link,
+    );
+    row_actions(ui, rect, top.key, std::slice::from_ref(action)).is_some()
+}
+
+fn actions_width(count: usize) -> f32 {
+    count as f32 * ROW_ACTION_SIZE + count.saturating_sub(1) as f32 * ROW_ACTION_GAP
+}
+
+fn paint_row_hover(ui: &Ui, rect: Rect, key: &str) {
     let hover = ui.ctx().animate_bool_with_time(
-        ui.id().with(("row-hover", row.key)),
+        ui.id().with(("row-hover", key)),
         ui.is_enabled() && ui.rect_contains_pointer(rect),
         CONTROL_HOVER_TRANSITION,
     );
@@ -2803,6 +2806,10 @@ fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<us
             theme::control_hover().gamma_multiply(hover),
         );
     }
+}
+
+/// The icon, name and status of a row, leaving `actions_width` on the right
+fn paint_row(ui: &mut Ui, rect: Rect, row: &Row<'_>, actions_width: f32) {
     let center_y = rect.center().y;
     ui.painter().text(
         egui::pos2(rect.left() + ROW_ICON_SIZE / 2.0, center_y),
@@ -2812,11 +2819,9 @@ fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<us
         row.icon_color,
     );
 
-    let actions_width = actions.len() as f32 * ROW_ACTION_SIZE
-        + actions.len().saturating_sub(1) as f32 * ROW_ACTION_GAP;
     let status_left = rect.right() - actions_width - 12.0 - STATUS_COLUMN_WIDTH;
     let name_rect = Rect::from_min_max(
-        egui::pos2(rect.left() + 26.0, rect.top()),
+        egui::pos2(rect.left() + ROW_TEXT_INSET, rect.top()),
         egui::pos2(status_left - 10.0, rect.bottom()),
     );
     let status_rect = Rect::from_min_max(
@@ -2843,7 +2848,12 @@ fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<us
                 .selectable(false),
         );
     });
+}
 
+/// The action buttons on the right edge of `rect`, vertically centered;
+/// returns the one clicked
+fn row_actions(ui: &mut Ui, rect: Rect, key: &str, actions: &[RowAction]) -> Option<usize> {
+    let center_y = rect.center().y;
     let mut clicked = None;
     let mut right = rect.right();
     for (index, action) in actions.iter().enumerate().rev() {
@@ -2854,7 +2864,7 @@ fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<us
         right -= ROW_ACTION_SIZE + ROW_ACTION_GAP;
         let response = ui.interact(
             action_rect,
-            ui.id().with((row.key, index)),
+            ui.id().with((key, index)),
             if action.enabled {
                 Sense::click()
             } else {
@@ -2891,6 +2901,54 @@ fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<us
         }
     }
     clicked
+}
+
+/// A physical Android phone's row
+fn android_row(device: &backend::DeviceInfo, mirroring: bool) -> Row<'_> {
+    Row {
+        key: &device.mirror_key,
+        icon: ph::DEVICE_MOBILE,
+        icon_color: if mirroring {
+            theme::green()
+        } else {
+            theme::text_label()
+        },
+        name: &device.name,
+        tooltip: &device.serial,
+        status: if mirroring {
+            "Mirroring"
+        } else if device.ready {
+            "Ready"
+        } else {
+            device.state.as_str()
+        },
+        status_color: if mirroring {
+            theme::green()
+        } else {
+            theme::text_faint()
+        },
+    }
+}
+
+/// An iPhone's row
+fn iphone_row<'a>(iphone: &'a awb_core::dmb::Iphone, key: &'a str, mirroring: bool) -> Row<'a> {
+    Row {
+        key,
+        icon: ph::APPLE_LOGO,
+        icon_color: if mirroring {
+            theme::green()
+        } else {
+            theme::text_label()
+        },
+        name: &iphone.name,
+        tooltip: &iphone.model,
+        status: if mirroring { "Mirroring" } else { "Ready" },
+        status_color: if mirroring {
+            theme::green()
+        } else {
+            theme::text_faint()
+        },
+    }
 }
 
 #[cfg(test)]
