@@ -191,7 +191,7 @@ fn shell_style(appearance: Appearance) -> ShellStyle {
         Appearance::Night => ShellStyle {
             base: [
                 Color::from_rgba8(0x2C, 0x2C, 0x2E, 0xFF),
-                Color::from_rgba8(0x24, 0x24, 0x26, 0xFF),
+                Color::from_rgba8(0x20, 0x20, 0x22, 0xFF),
                 Color::from_rgba8(0x1C, 0x1C, 0x1E, 0xFF),
             ],
             lift: Color::from_rgba8(0xC8, 0xC8, 0xCC, 0x1C),
@@ -217,24 +217,6 @@ fn transparent(color: Color) -> Color {
     let mut color = color;
     color.set_alpha(0.0);
     color
-}
-
-/// An elliptical radial fade centered on `(cx, cy)` with radii `rx`/`ry`,
-/// opaque at the center and transparent from `reach` (0-1) outward.
-fn ellipse_glow(cx: f32, cy: f32, rx: f32, ry: f32, color: Color, reach: f32) -> Shader<'static> {
-    RadialGradient::new(
-        Point::from_xy(0.0, 0.0),
-        0.0,
-        Point::from_xy(0.0, 0.0),
-        rx,
-        vec![
-            GradientStop::new(0.0, color),
-            GradientStop::new(reach, transparent(color)),
-        ],
-        SpreadMode::Pad,
-        Transform::from_translate(cx, cy).pre_scale(1.0, ry / rx),
-    )
-    .expect("shell glow gradient")
 }
 
 /// A horizontal line brightest in the middle and fading out toward both sides.
@@ -271,56 +253,25 @@ fn render_shell(oversample: u32, appearance: Appearance, height: f32, gradients:
 
     let style = shell_style(appearance);
     let body_top = 9.0;
-    let body_height = height - body_top;
-    let center = SHELL_W / 2.0;
-
-    let base = LinearGradient::new(
-        Point::from_xy(center, 0.0),
-        Point::from_xy(center, height),
-        vec![
-            GradientStop::new(0.0, style.base[0]),
-            GradientStop::new(0.5, style.base[1]),
-            GradientStop::new(1.0, style.base[2]),
-        ],
-        SpreadMode::Pad,
-        Transform::identity(),
-    )
-    .expect("shell base gradient");
-
     let mut paint = Paint {
         anti_alias: true,
         ..Default::default()
     };
-    let full = tiny_skia::Rect::from_xywh(0.0, 0.0, SHELL_W, height).expect("shell rect");
-    let mut fill = |shader: Shader<'static>, rect: tiny_skia::Rect| {
-        paint.shader = shader;
-        pixmap.fill_rect(rect, &paint, transform, Some(&clip));
-    };
 
     if !gradients {
         // Plain surface: one flat color under the hairline border.
+        let full = tiny_skia::Rect::from_xywh(0.0, 0.0, SHELL_W, height).expect("shell rect");
         paint.set_color(style.base[1]);
         pixmap.fill_rect(full, &paint, transform, Some(&clip));
         stroke_border(&mut pixmap, &path, style.border, transform);
         return pixmap;
     }
 
-    fill(base, full);
-    fill(
-        ellipse_glow(
-            center,
-            height,
-            SHELL_W * 0.8,
-            body_height * 1.1,
-            style.lift,
-            0.78,
-        ),
-        full,
-    );
-    fill(
-        ellipse_glow(center, height, SHELL_W * 0.6, 34.0, style.glow, 0.72),
-        full,
-    );
+    smooth_fill(&mut pixmap, &clip, &style, height, oversample as f32);
+    let mut fill = |shader: Shader<'static>, rect: tiny_skia::Rect| {
+        paint.shader = shader;
+        pixmap.fill_rect(rect, &paint, transform, Some(&clip));
+    };
     fill(
         edge_line(style.glow.with_alpha_scaled(2.4)),
         tiny_skia::Rect::from_xywh(0.0, height - 1.5, SHELL_W, 1.5).expect("glow line"),
@@ -329,14 +280,86 @@ fn render_shell(oversample: u32, appearance: Appearance, height: f32, gradients:
         edge_line(style.highlight),
         tiny_skia::Rect::from_xywh(0.0, body_top, SHELL_W, 1.2).expect("highlight line"),
     );
-    // A faint lift under the beak keeps the anchor point readable.
-    fill(
-        ellipse_glow(center, body_top, 70.0, 18.0, style.highlight, 1.0),
-        full,
-    );
 
     stroke_border(&mut pixmap, &path, style.border, transform);
     pixmap
+}
+
+/// The base gradient, the light rising from the bottom edge and the lift
+/// under the beak, computed in floating point and dithered once while
+/// rounding to 8 bits: their shallow ramps span only a few levels, and plain
+/// rounding shows each level as a band.
+fn smooth_fill(pixmap: &mut Pixmap, clip: &Mask, style: &ShellStyle, height: f32, oversample: f32) {
+    let width = pixmap.width() as usize;
+    let center = SHELL_W / 2.0;
+    let body_height = height - 9.0;
+    let rgb = |color: Color| [color.red(), color.green(), color.blue()].map(|v| v * 255.0);
+    let base = style.base.map(rgb);
+    let glows = [
+        (
+            style.lift,
+            center,
+            height,
+            SHELL_W * 0.8,
+            body_height * 1.1,
+            0.78,
+        ),
+        (style.glow, center, height, SHELL_W * 0.6, 34.0, 0.72),
+        // A faint lift under the beak keeps the anchor point readable.
+        (style.highlight, center, 9.0, 70.0, 18.0, 1.0),
+    ];
+    let coverage = clip.data();
+    for (index, pixel) in pixmap
+        .data_mut()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
+        let cover = coverage[index];
+        if cover == 0 {
+            continue;
+        }
+        let x = ((index % width) as f32 + 0.5) / oversample;
+        let y = ((index / width) as f32 + 0.5) / oversample;
+        let t = (y / height).clamp(0.0, 1.0);
+        let (from, to, mix) = if t < 0.5 {
+            (base[0], base[1], t * 2.0)
+        } else {
+            (base[1], base[2], t * 2.0 - 1.0)
+        };
+        let mut color = [0, 1, 2].map(|c| from[c] + (to[c] - from[c]) * mix);
+        for (glow, cx, cy, rx, ry, reach) in glows {
+            let distance = (((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2)).sqrt();
+            if distance < reach {
+                let alpha = glow.alpha() * (1.0 - distance / reach);
+                let glow = rgb(glow);
+                for c in 0..3 {
+                    color[c] += (glow[c] - color[c]) * alpha;
+                }
+            }
+        }
+        // Triangular noise of up to one level, the same on every channel so
+        // it adds no color speckle
+        let noise =
+            noise_unit(index as u32, 0x68E3_1DA4) + noise_unit(index as u32, 0xB529_7A4D) - 1.0;
+        let alpha = f32::from(cover) / 255.0;
+        for c in 0..3 {
+            pixel[c] = ((color[c] + noise).clamp(0.0, 255.0) * alpha).round() as u8;
+        }
+        pixel[3] = cover;
+    }
+}
+
+/// A repeatable pseudo-random value in 0..1 for a pixel index and a seed
+fn noise_unit(index: u32, seed: u32) -> f32 {
+    let mut hash = index.wrapping_mul(0x9E37_79B1) ^ seed;
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x7FEB_352D);
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(0x846C_A68B);
+    hash ^= hash >> 16;
+    (hash >> 8) as f32 / (1 << 24) as f32
 }
 
 fn stroke_border(pixmap: &mut Pixmap, path: &tiny_skia::Path, color: Color, transform: Transform) {
