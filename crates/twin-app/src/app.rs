@@ -47,7 +47,12 @@ const HEADER_BUTTON_SIZE: f32 = 26.0;
 const HEADER_LEADING_WIDTH: f32 = 32.0;
 const HEADER_BUTTON_GAP: f32 = 6.0;
 const SHELL_OVERSAMPLE: u32 = 3;
+/// The spacing unit: layouts space things in its steps (½, 1, 1.5, 2, 2.5
+/// and 3 times it), never in other values; see AGENTS.md
+const SPACE: f32 = 8.0;
 const ROW_HEIGHT: f32 = 38.0;
+/// A Setup row in Settings: a name and a check or a button
+const SETUP_ROW_HEIGHT: f32 = SPACE * 4.0;
 const ROW_ACTION_SIZE: f32 = 22.0;
 const ROW_ACTION_GAP: f32 = 4.0;
 const STATUS_COLUMN_WIDTH: f32 = 66.0;
@@ -2073,46 +2078,46 @@ impl App {
                 Label::new(semibold("Screen Mirroring", 12.5, theme::text_bright()))
                     .selectable(false),
             );
-            ui.add_space(10.0);
+            ui.add_space(SPACE);
 
             let mut changed = false;
             ui.horizontal(|ui| {
                 let total = ui.available_width();
                 // The width follows each phone's shape, so only the height is set
-                let title_width = (total - 2.0 * 56.0 - 3.0 * 8.0) / 2.0;
+                let title_width = (total - 2.0 * 56.0 - 3.0 * SPACE) / 2.0;
                 changed |=
                     labeled_input(ui, "Android", title_width, &mut self.settings.window_title);
-                ui.add_space(8.0);
+                ui.add_space(SPACE);
                 changed |=
                     labeled_input(ui, "iPhone", title_width, &mut self.settings.iphone_title);
-                ui.add_space(8.0);
+                ui.add_space(SPACE);
                 changed |= labeled_input(ui, "H", 56.0, &mut self.height_text);
-                ui.add_space(8.0);
+                ui.add_space(SPACE);
                 changed |= labeled_input(ui, "Gap", 56.0, &mut self.gap_text);
             });
 
-            ui.add_space(10.0);
+            ui.add_space(SPACE * 1.5);
             // The second row's columns line up with the first's
             let mut second_column = 0.0;
             ui.horizontal(|ui| {
                 changed |= check_item(ui, "Always on top", &mut self.settings.always_on_top);
-                ui.add_space(20.0);
+                ui.add_space(SPACE * 2.5);
                 second_column = ui.cursor().min.x;
                 changed |= check_item(ui, "Auto mirror", &mut self.settings.auto_mirror);
             });
-            ui.add_space(8.0);
+            ui.add_space(SPACE);
             ui.horizontal(|ui| {
                 changed |= check_item(ui, "Side by side", &mut self.settings.side_by_side);
-                ui.add_space((second_column - ui.cursor().min.x).max(20.0));
+                ui.add_space((second_column - ui.cursor().min.x).max(SPACE * 2.5));
                 changed |= check_item(ui, "Touch pointer", &mut self.settings.touch_pointer);
             });
 
-            ui.add_space(12.0);
+            ui.add_space(SPACE * 2.0);
             divider(ui);
-            ui.add_space(12.0);
+            ui.add_space(SPACE * 2.0);
 
             ui.add(Label::new(semibold("General", 12.5, theme::text_bright())).selectable(false));
-            ui.add_space(10.0);
+            ui.add_space(SPACE);
 
             let mut theme_changed = false;
             ui.allocate_ui_with_layout(
@@ -2132,10 +2137,9 @@ impl App {
             );
             changed |= theme_changed;
 
-            ui.add_space(10.0);
-            // Queried lazily: the System Events lookup prompts for Automation
-            // access the first time, so we defer it until Settings is opened.
-            // It runs off the UI thread so opening Settings never stutters.
+            ui.add_space(SPACE * 1.5);
+            // Queried when Settings opens, off the UI thread, so opening it
+            // never stutters.
             if self.open_at_login.is_none() && self.login_query.is_none() {
                 let (sender, receiver) = std::sync::mpsc::channel();
                 let repaint = ctx.clone();
@@ -2164,7 +2168,7 @@ impl App {
                     self.open_at_login = Some(open_at_login);
                     self.login_query = None;
                 }
-                ui.add_space(20.0);
+                ui.add_space(SPACE * 2.5);
                 gradients_changed = check_item(ui, "Gradients", &mut self.settings.gradients);
             });
             if gradients_changed {
@@ -2180,11 +2184,12 @@ impl App {
                 ctx.request_repaint();
             }
 
-            ui.add_space(12.0);
+            ui.add_space(SPACE * 2.0);
             divider(ui);
-            ui.add_space(12.0);
+            ui.add_space(SPACE * 2.0);
 
             ui.add(Label::new(semibold("Setup", 12.5, theme::text_bright())).selectable(false));
+            ui.add_space(SPACE * 0.5);
 
             let snapshot = self.shared.lock().unwrap().snapshot.clone();
             let (adb, xcode, emulator) = match &snapshot {
@@ -2482,16 +2487,16 @@ fn dependency_row(
     get: Option<(&str, &str)>,
 ) {
     ui.horizontal(|ui| {
-        ui.set_height(ROW_HEIGHT);
+        ui.set_height(SETUP_ROW_HEIGHT);
         ui.add(Label::new(icon(row_icon, 14.0, theme::text_label())).selectable(false));
-        ui.add_space(10.0);
+        ui.add_space(SPACE * 1.5);
         // The version or path shows on hover; only a warning needs the space
         let name_label =
             ui.add(Label::new(medium(name, 12.5, theme::text_bright())).selectable(false));
         if let Some(tool) = info {
             name_label.on_hover_text(&tool.detail);
         }
-        ui.add_space(10.0);
+        ui.add_space(SPACE);
 
         if let Some(warning) = info.and_then(|tool| tool.warnings.first()) {
             let available_width = ui.available_width() - 50.0;

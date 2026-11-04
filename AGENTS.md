@@ -29,9 +29,16 @@ reinstall, and restart so the installed tools match the source and the running
 menu bar app is not left stale:
 - `cargo build --release`
 - `install -m 755 target/release/twin /Users/ovitrif/.local/bin/twin` and `ln -sf twin /Users/ovitrif/.local/bin/awb`
-- Rebundle the app: `scripts/bundle-app.sh`, then replace `/Applications/Twin.app` by moving `target/bundle/Twin.app` there (move, not copy: a bundle left in `target/` shows up in Spotlight as a second app).
+- Rebundle the app: `cargo build --release -p twin-app` first (the bundle script builds only Twin Mirror), then `scripts/bundle-app.sh`, then replace `/Applications/Twin.app` by moving `target/bundle/Twin.app` there (move, not copy: a bundle left in `target/` shows up in Spotlight as a second app).
 - Replace the running instance (overwriting the binary does not update an already-running process): quit it (`osascript -e 'quit app "Twin"'`), then relaunch with `open -g /Applications/Twin.app`. Quitting closes open mirrors.
 - Verify: `/Users/ovitrif/.local/bin/twin --version`.
+
+## Spacing
+- Space the menu bar app's layouts in steps of one unit, `SPACE` (8 pt,
+  `crates/twin-app/src/app.rs`): ½, 1, 1.5, 2, 2.5 and 3 times it, never other
+  values. A heading to its content and rows within a group: 1×; a field's label
+  to the field: ½×; between checkbox columns: 2.5×; around a divider between
+  sections: 2× on each side. Rows that only list (Setup) stay compact: 4× tall.
 
 ## Verify the app UI
 Check every UI change yourself before calling it done, without the user's
