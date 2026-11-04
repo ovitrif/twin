@@ -83,6 +83,26 @@ impl Dmb {
         Self::spawn(command)
     }
 
+    /// Shows or hides one phone of the Twin pair showing iPhone `udid`
+    /// (`pane` is "android" or "iphone"); Twin closes when both are hidden.
+    pub fn set_pane(&self, udid: &str, pane: &str, visible: bool) -> Result<()> {
+        let status = Command::new(&self.path)
+            .args([
+                "pane",
+                pane,
+                if visible { "show" } else { "hide" },
+                "--udid",
+                udid,
+            ])
+            .stdin(Stdio::null())
+            .status()
+            .context("running dmb pane")?;
+        if !status.success() {
+            bail!("dmb pane exited with {status}");
+        }
+        Ok(())
+    }
+
     fn spawn(mut command: Command) -> Result<Child> {
         command
             .stdin(Stdio::null())

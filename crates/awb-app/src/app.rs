@@ -54,6 +54,15 @@ const STATUS_COLUMN_WIDTH: f32 = 66.0;
 const ROW_ICON_SIZE: f32 = 16.0;
 /// Where a row's name starts, past its icon
 const ROW_TEXT_INSET: f32 = 26.0;
+/// Space above the Physical heading, under the tabs
+const PHYSICAL_TOP_SPACE: f32 = 8.0;
+/// How far the Google logo's ink reaches below its row's center, and the
+/// Apple logo's above, measured on the rendered glyphs
+const LINK_TOP_INK: f32 = 5.5;
+const LINK_BOTTOM_INK: f32 = 7.5;
+/// From each icon's ink to the center of the link's end dot: 6 points of
+/// space plus the dot's radius
+const LINK_SPACE: f32 = 7.6;
 /// How far a row's hover highlight reaches past the content column.
 const ROW_HOVER_BLEED: f32 = 7.0;
 /// How far pages may draw above the body, into the gap under the header.
@@ -1688,7 +1697,8 @@ impl App {
                 .as_ref()
                 .map(|pair| pair.keys.to_vec())
                 .unwrap_or_default();
-            mirrors.extend(pair_keys.iter().cloned());
+            // A phone hidden from the pair is not mirroring
+            mirrors.extend(state.pair.iter().flat_map(|pair| pair.shown_keys()));
             (
                 state.snapshot.clone(),
                 (mirrors, pair_keys),
@@ -1759,6 +1769,7 @@ impl App {
                 })
                 .flatten();
             if has_phones {
+                ui.add_space(PHYSICAL_TOP_SPACE);
                 section_header(ui, "Physical");
             }
             let mut first = true;
@@ -1768,8 +1779,18 @@ impl App {
                 let paired = pair_keys.contains(&android.mirror_key);
                 let android_mirroring = mirrors.contains(&android.mirror_key);
                 let iphone_mirroring = mirrors.contains(&iphone_key);
-                let action = if android_mirroring || iphone_mirroring {
-                    RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
+                let one = |mirroring: bool, ready: bool| {
+                    if mirroring {
+                        RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
+                    } else if ready {
+                        RowAction::enabled(ph::PLAY, theme::text_bright())
+                            .with_tooltip("Mirror screen")
+                    } else {
+                        RowAction::disabled(ph::PLAY)
+                    }
+                };
+                let both = if android_mirroring || iphone_mirroring {
+                    RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop both")
                 } else if scrcpy_ok {
                     RowAction::enabled(ph::PLAY, theme::text_bright())
                         .with_tooltip("Mirror both side by side")
@@ -1778,30 +1799,71 @@ impl App {
                 };
                 let top = android_row(android, android_mirroring);
                 let bottom = iphone_row(iphone, &iphone_key, iphone_mirroring);
-                let link = if paired {
+                let link = if android_mirroring && iphone_mirroring && paired {
                     theme::green()
                 } else {
                     theme::text_faint()
                 };
-                if pair_rows(ui, &top, &bottom, &action, link) {
-                    if paired {
-                        backend::stop_pair(shared);
-                    } else if android_mirroring || iphone_mirroring {
-                        if android_mirroring {
-                            backend::stop_mirror(shared, &android.mirror_key);
+                let actions = [
+                    one(android_mirroring, scrcpy_ok),
+                    one(iphone_mirroring, true),
+                    both,
+                ];
+                match pair_rows(ui, &top, &bottom, &actions, link) {
+                    // Both: stop whatever shows, or open the pair
+                    Some(PairClick::Both) => {
+                        if paired {
+                            backend::stop_pair(shared);
+                        } else if android_mirroring || iphone_mirroring {
+                            if android_mirroring {
+                                backend::stop_mirror(shared, &android.mirror_key);
+                            }
+                            if iphone_mirroring {
+                                backend::stop_mirror(shared, &iphone_key);
+                            }
+                        } else {
+                            backend::start_pair(
+                                shared.clone(),
+                                ctx.clone(),
+                                android.clone(),
+                                iphone.clone(),
+                                settings.pair_options(),
+                            );
                         }
-                        if iphone_mirroring {
-                            backend::stop_mirror(shared, &iphone_key);
-                        }
-                    } else {
-                        backend::start_pair(
-                            shared.clone(),
-                            ctx.clone(),
-                            android.clone(),
-                            iphone.clone(),
-                            settings.pair_options(),
-                        );
                     }
+                    // One phone, as with Side by side off; in an open pair it
+                    // hides or shows that phone's side of Twin
+                    Some(PairClick::Android) => {
+                        if paired {
+                            backend::set_pair_pane(shared, 0, !android_mirroring);
+                        } else if android_mirroring {
+                            backend::stop_mirror(shared, &android.mirror_key);
+                        } else {
+                            backend::start_mirror(
+                                shared.clone(),
+                                ctx.clone(),
+                                android.clone(),
+                                settings.scrcpy_options(),
+                            );
+                        }
+                    }
+                    Some(PairClick::IPhone) => {
+                        if paired {
+                            backend::set_pair_pane(shared, 1, !iphone_mirroring);
+                        } else if iphone_mirroring {
+                            backend::stop_mirror(shared, &iphone_key);
+                        } else {
+                            backend::start_iphone_mirror(
+                                shared.clone(),
+                                ctx.clone(),
+                                iphone.clone(),
+                                settings.window_height,
+                                &settings.iphone_title,
+                                settings.touch_pointer,
+                            );
+                        }
+                    }
+                    None => {}
                 }
             }
 
@@ -1899,10 +1961,11 @@ impl App {
                     .with_tooltip("Start emulator"),
                 ];
                 let name = avd.name.replace('_', " ");
-                let status = if deleting {
-                    "Deleting…"
-                } else {
-                    avd.status(starting)
+                // A stopped emulator needs no label; its play button says it
+                let status = match avd.status(starting) {
+                    _ if deleting => "Deleting…",
+                    "Stopped" => "",
+                    status => status,
                 };
                 let row = Row {
                     key: avd
@@ -2366,10 +2429,11 @@ fn section_header(ui: &mut Ui, text: &str) {
 }
 
 /// A dot, a line and a dot from one row's icon down to another's, linking
-/// the two phones Side by side opens together
-fn link_line(ui: &Ui, x: f32, from_y: f32, to_y: f32, color: Color32) {
-    let start = egui::pos2(x, from_y + ROW_ICON_SIZE / 2.0 + 4.0);
-    let end = egui::pos2(x, to_y - ROW_ICON_SIZE / 2.0 - 4.0);
+/// the two phones Side by side opens together, with the same space to each
+/// icon's ink
+fn link_line(ui: &Ui, x: f32, top: Rect, bottom: Rect, color: Color32) {
+    let start = egui::pos2(x, top.center().y + LINK_TOP_INK + LINK_SPACE);
+    let end = egui::pos2(x, bottom.center().y - LINK_BOTTOM_INK - LINK_SPACE);
     let painter = ui.painter();
     painter.circle_filled(start, 1.6, color);
     painter.circle_filled(end, 1.6, color);
@@ -2753,16 +2817,24 @@ fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<us
     row_actions(ui, rect, row.key, actions)
 }
 
+/// Which button of a pair block was clicked
+enum PairClick {
+    Android,
+    IPhone,
+    Both,
+}
+
 /// Two device rows that act as one, as the phones Side by side opens
-/// together: one hover, a link between their icons and one action button
-/// centered on both
+/// together: one hover, a link between their icons, each phone's own button
+/// and one button centered on both. `actions` are the top phone's, the
+/// bottom phone's and the pair's.
 fn pair_rows(
     ui: &mut Ui,
     top: &Row<'_>,
     bottom: &Row<'_>,
-    action: &RowAction,
+    actions: &[RowAction; 3],
     link: Color32,
-) -> bool {
+) -> Option<PairClick> {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, 2.0 * ROW_HEIGHT + 1.0), Sense::hover());
     paint_row_hover(ui, rect, top.key);
@@ -2771,7 +2843,9 @@ fn pair_rows(
         egui::pos2(rect.left(), top_rect.bottom() + 1.0),
         vec2(width, ROW_HEIGHT),
     );
-    let reserved = actions_width(1);
+    // Laid out as the two-button emulator rows, so statuses line up: each
+    // phone's button where theirs is, the pair's on the right edge
+    let reserved = actions_width(2);
     paint_row(ui, top_rect, top, reserved);
     paint_row(ui, bottom_rect, bottom, reserved);
     let divider = Rect::from_min_max(
@@ -2782,11 +2856,38 @@ fn pair_rows(
     link_line(
         ui,
         rect.left() + ROW_ICON_SIZE / 2.0,
-        top_rect.center().y,
-        bottom_rect.center().y,
+        top_rect,
+        bottom_rect,
         link,
     );
-    row_actions(ui, rect, top.key, std::slice::from_ref(action)).is_some()
+    let own = |rect: Rect| rect.with_max_x(rect.right() - ROW_ACTION_SIZE - ROW_ACTION_GAP);
+    if row_actions(
+        ui,
+        own(top_rect),
+        top.key,
+        std::slice::from_ref(&actions[0]),
+    )
+    .is_some()
+    {
+        return Some(PairClick::Android);
+    }
+    if row_actions(
+        ui,
+        own(bottom_rect),
+        bottom.key,
+        std::slice::from_ref(&actions[1]),
+    )
+    .is_some()
+    {
+        return Some(PairClick::IPhone);
+    }
+    row_actions(
+        ui,
+        rect,
+        ("pair", top.key),
+        std::slice::from_ref(&actions[2]),
+    )
+    .map(|_| PairClick::Both)
 }
 
 fn actions_width(count: usize) -> f32 {
@@ -2852,7 +2953,12 @@ fn paint_row(ui: &mut Ui, rect: Rect, row: &Row<'_>, actions_width: f32) {
 
 /// The action buttons on the right edge of `rect`, vertically centered;
 /// returns the one clicked
-fn row_actions(ui: &mut Ui, rect: Rect, key: &str, actions: &[RowAction]) -> Option<usize> {
+fn row_actions(
+    ui: &mut Ui,
+    rect: Rect,
+    key: impl std::hash::Hash + Copy,
+    actions: &[RowAction],
+) -> Option<usize> {
     let center_y = rect.center().y;
     let mut clicked = None;
     let mut right = rect.right();
@@ -2907,7 +3013,7 @@ fn row_actions(ui: &mut Ui, rect: Rect, key: &str, actions: &[RowAction]) -> Opt
 fn android_row(device: &backend::DeviceInfo, mirroring: bool) -> Row<'_> {
     Row {
         key: &device.mirror_key,
-        icon: ph::DEVICE_MOBILE,
+        icon: ph::GOOGLE_LOGO,
         icon_color: if mirroring {
             theme::green()
         } else {

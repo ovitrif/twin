@@ -287,6 +287,13 @@ pub fn install_fonts(ctx: &Context) {
         style.visuals.override_text_color = None;
         style.spacing.item_spacing = eframe::egui::vec2(0.0, 0.0);
         style.spacing.button_padding = eframe::egui::vec2(0.0, 0.0);
+        // Tooltips float on a soft, close shadow rather than egui's heavy one
+        style.visuals.popup_shadow = eframe::egui::Shadow {
+            offset: [0, 2],
+            blur: 8,
+            spread: 0,
+            color: Color32::from_black_alpha(0x38),
+        };
     });
 }
 

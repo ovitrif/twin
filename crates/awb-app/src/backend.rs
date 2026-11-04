@@ -97,9 +97,24 @@ pub enum PairingPhase {
 }
 
 pub struct PairMirror {
-    /// The two phones' mirror keys, so both rows read as mirroring
+    /// The two phones' mirror keys, Android first, so both rows read as mirroring
     pub keys: [String; 2],
+    /// Which of the two Twin shows; one stopped from its own row is hidden
+    pub shown: [bool; 2],
+    udid: String,
     child: Child,
+}
+
+impl PairMirror {
+    /// The keys of the phones Twin shows
+    pub fn shown_keys(&self) -> Vec<String> {
+        self.keys
+            .iter()
+            .zip(self.shown)
+            .filter(|(_, shown)| *shown)
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
 }
 
 pub struct PairingSession {
@@ -621,6 +636,8 @@ pub fn start_pair(
             }
             state.pair = Some(PairMirror {
                 keys: [device.mirror_key.clone(), iphone_mirror_key(&iphone)],
+                shown: [true, true],
+                udid: iphone.udid.clone(),
                 child,
             });
         }
@@ -636,6 +653,32 @@ pub fn stop_pair(shared: &Arc<Mutex<Shared>>) {
         let _ = pair.child.kill();
         let _ = pair.child.wait();
         state.log("Closed Android v iOS");
+    }
+}
+
+/// Shows or hides one phone of the open pair: 0 the Android phone, 1 the
+/// iPhone. Hiding the last one shown closes the pair.
+pub fn set_pair_pane(shared: &Arc<Mutex<Shared>>, index: usize, visible: bool) {
+    let mut state = shared.lock().unwrap();
+    let Some(pair) = state.pair.as_mut() else {
+        return;
+    };
+    let mut shown = pair.shown;
+    shown[index] = visible;
+    if !shown.contains(&true) {
+        drop(state);
+        stop_pair(shared);
+        return;
+    }
+    let udid = pair.udid.clone();
+    let pane = if index == 0 { "android" } else { "iphone" };
+    match Dmb::resolve().and_then(|dmb| dmb.set_pane(&udid, pane, visible)) {
+        Ok(()) => {
+            if let Some(pair) = state.pair.as_mut() {
+                pair.shown = shown;
+            }
+        }
+        Err(error) => state.log(format!("Twin pane failed: {error:#}")),
     }
 }
 
