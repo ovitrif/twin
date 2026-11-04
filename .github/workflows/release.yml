@@ -53,20 +53,18 @@ jobs:
 
       - name: Build CLI (zig)
         if: matrix.build_kind == 'zig'
-        run: cargo zigbuild --release -p awb --target ${{ matrix.target }}
+        run: cargo zigbuild --release -p twin --target ${{ matrix.target }}
 
       - name: Build CLI and menu bar app (native)
         if: matrix.build_kind == 'native'
-        run: cargo build --release -p awb -p twin-app --target ${{ matrix.target }}
+        run: cargo build --release -p twin -p twin-app --target ${{ matrix.target }}
 
-      - name: Select Xcode 26 for the Liquid Glass icon
+      - name: Select the newest Xcode for Twin Mirror's Swift build
         if: contains(matrix.target, 'apple-darwin')
         run: |
-          # actool compiles .icon bundles from Xcode 26 on; older ones make
-          # the bundle fall back to the flat icon.
-          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_26*.app' | sort -V | tail -1)"
+          xcode="$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)"
           if [ -n "$xcode" ]; then sudo xcode-select -s "$xcode"; fi
-          xcrun actool --version | grep -A1 short-bundle-version | tail -1
+          swift --version
 
       - name: Build the patched scrcpy
         # Native arm64 only: the runner is arm64 and the scrcpy build links
@@ -84,15 +82,14 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           target="${{ matrix.target }}"
-          staging="awb-${tag}-${target}"
+          staging="twin-${tag}-${target}"
           mkdir "$staging"
-          cp "target/${target}/release/awb" "$staging/"
+          cp "target/${target}/release/twin" "$staging/"
           if [[ "$target" == *apple-darwin ]]; then
-            # Render icons with a host-arch build so the cross-compiled target
-            # binary is never executed on this (arm64) runner.
-            cargo build --release -p twin-app
-            cp "target/${target}/release/twin-app" "$staging/"
-            scripts/bundle-app.sh "target/${target}/release/twin-app" "$staging" "target/release/twin-app"
+            # Twin Mirror (Swift and dmb-hid) builds for the runner's arm64;
+            # the x86_64 app ships with the Android mirror only
+            if [[ "$target" == x86_64-* ]]; then export TWIN_SKIP_MIRROR=1; fi
+            scripts/bundle-app.sh "target/${target}/release/twin-app" "$staging"
           fi
           tar czf "${staging}.tar.gz" "$staging"
           echo "ARCHIVE=${staging}.tar.gz" >> "$GITHUB_ENV"

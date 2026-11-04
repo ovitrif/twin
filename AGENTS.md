@@ -8,6 +8,7 @@
   - `cargo test`
   - `cargo clippy --all-targets -- -D warnings`
   - `cargo build --release`
+- Before committing changes under `apple/`, run `swift test` there and `scripts/bundle-app.sh`.
 
 ## Patch Release Shipping
 When Ovi asks to ship a patch release:
@@ -17,28 +18,30 @@ When Ovi asks to ship a patch release:
 4. Create and push the annotated `vX.Y.Z` tag at the exact merge commit, verify the remote tag resolves to that commit, then wait for the tag-triggered Release workflow. Verify the GitHub release, all expected platform archives, `install.sh`, and `checksums.sha256`, and confirm GitHub associates the stable tag with the merged pull request. Curate the release notes to the established `This release:` bullet format when generated notes do not match it.
 
 ## Reinstall after every CLI/app change (required)
-Any change to `crates/awb` (the `awb` CLI) or `crates/twin-app` (the menu bar
-app) MUST be followed by a rebuild, reinstall, and restart so the checked-out
-tools match the source and the running menu bar app is not left stale:
+Any change to `crates/twin` (the `twin` CLI), `crates/twin-app` (the menu bar
+app) or `apple/` (Twin Mirror, dmb, dmb-hid) MUST be followed by a rebuild,
+reinstall, and restart so the installed tools match the source and the running
+menu bar app is not left stale:
 - `cargo build --release`
-- `install -m 755 target/release/awb /Users/ovitrif/.local/bin/awb`
-- `install -m 755 target/release/twin-app /Users/ovitrif/.local/bin/twin-app`
-- Rebundle the app: `scripts/bundle-app.sh target/release/twin-app target/bundle`, then replace `/Applications/Android Wifi Bridge.app` by moving `target/bundle/Android Wifi Bridge.app` there (move, not copy: a bundle left in `target/` shows up in Spotlight as a second app).
-- Replace the running instance (overwriting the binary does not update an already-running process): `pkill -9 -f twin-app`, then relaunch `awb app`.
-- Verify: `/Users/ovitrif/.local/bin/awb --version`.
+- `install -m 755 target/release/twin /Users/ovitrif/.local/bin/twin` and `ln -sf twin /Users/ovitrif/.local/bin/awb`
+- Rebundle the app: `scripts/bundle-app.sh`, then replace `/Applications/Twin.app` by moving `target/bundle/Twin.app` there (move, not copy: a bundle left in `target/` shows up in Spotlight as a second app).
+- Replace the running instance (overwriting the binary does not update an already-running process): quit it (`osascript -e 'quit app "Twin"'`), then relaunch with `open -g /Applications/Twin.app`. Quitting closes open mirrors.
+- Verify: `/Users/ovitrif/.local/bin/twin --version`.
 
 ## Verify the app UI
 Check every UI change yourself before calling it done, without the user's
 screen, mouse or keyboard: drive the real popover headlessly.
 
 - Build and start the drive server (renders offscreen; no window, no menu bar
-  item, no focus stealing):
-  `cargo build --release -p twin-app --features drive`, then
-  `target/release/twin-app --drive /tmp/awbd.sock &`. Keep the socket path
+  item, no focus stealing) in its own target folder, so the drive build never
+  replaces `target/release/twin-app` (a normal build run with `--drive` starts
+  a real second menu bar app):
+  `CARGO_TARGET_DIR=~/.local/state/twin/drive-target cargo build --release -p twin-app --features drive`,
+  then `~/.local/state/twin/drive-target/release/twin-app --drive /tmp/twind.sock &`. Keep the socket path
   short (Unix sockets cap it near 100 bytes) and end the server with
-  `target/release/twin-app drive /tmp/awbd.sock quit` when done (the installed
-  `twin-app` lacks the drive feature).
-- Send commands with `target/release/twin-app drive /tmp/awbd.sock <command>`,
+  `~/.local/state/twin/drive-target/release/twin-app drive /tmp/twind.sock quit`
+  when done (the installed `twin-app` lacks the drive feature).
+- Send commands with `~/.local/state/twin/drive-target/release/twin-app drive /tmp/twind.sock <command>`,
   or pipe one per line with `-`. Each reply is one `ok ...` line carrying the
   current `screen`, `tab`, `transition`, `theme`, `gradients` and `pairing`
   phase. Commands: `state`, `click X Y`, `hover X Y`, `drag X1 Y1 X2 Y2`, `leave`, `scroll DY`,
@@ -51,10 +54,13 @@ screen, mouse or keyboard: drive the real popover headlessly.
   (seed it with `TWIN_DRIVE_CONFIG=<config.toml>`) and never touches the login
   item. Everything else is real: adb, the emulator, `avdmanager` and scrcpy,
   so confirming a delete removes a real AVD and Play starts a real emulator or
-  mirror. Run it with demo AVDs (below) unless real ones are the point.
+  mirror. Run it with demo AVDs (below) unless real ones are the point, and
+  before clicking any Play put stubs for `scrcpy` (passing `--version` and
+  `--help` through to the real one) and `dmb` first on `PATH`, so no mirror
+  opens on the user's screen.
 - Light and dark mode: `theme day` / `theme night` / `theme auto` over the
   socket. In the running app, use the Appearance control in Settings or set
-  `theme = "day"`, `"night"` or `"auto"` in `~/.config/awb/config.toml`
+  `theme = "day"`, `"night"` or `"auto"` in `~/.config/twin/config.toml`
   (honors `XDG_CONFIG_HOME`), then restart it. Check both themes, and both
   `gradients on` and `off`, for every visual change.
 - Pairing without a phone (drive builds only): `TWIN_MOCK_PAIRING=success` or `failure`, with an
@@ -63,7 +69,7 @@ screen, mouse or keyboard: drive the real popover headlessly.
 - Emulators without touching real AVDs: point `ANDROID_AVD_HOME` at a folder
   of `<Name>.ini` files whose `path=` names an existing `<Name>.avd` folder.
 - Before publishing a capture, keep private names out of it: use demo AVDs,
-  and put `scutil` and `hostname` stubs that print `awb-demo` first on `PATH`,
+  and put `scutil` and `hostname` stubs that print `twin-demo` first on `PATH`,
   since the pairing QR embeds the machine name.
 - Cover every screen and state a change can reach: Devices (checking, empty,
   phones and emulators, a scrolled list with its edge fades and scrollbar),
@@ -73,10 +79,22 @@ screen, mouse or keyboard: drive the real popover headlessly.
   slides right, and both pages stay fully drawn throughout; `record` and read
   the frames to confirm.
 
+## Verify the mirror windows
+- Check Twin Mirror changes without the user's screen: run it headless in the
+  `aivm` VM with `--replay` test videos (`apple/scripts/make-test-video.sh`), or
+  `--android-replay` and `--iphone-replay` for the side by side window, and
+  capture its windows with `screencapture -l <window id>` (wake the VM's
+  display with `caffeinate -u` first); `DMB_SHOW_BAR=1` keeps the title bar
+  shown for those captures.
+- `dmb-hid` talks to private CoreDevice services pinned to one idevice commit;
+  test input changes on a real iPhone on iOS 27+.
+
 ## Layout
-- `crates/twin-core`: shared ADB/scrcpy/QR/mDNS logic (lib).
-- `crates/awb`: the `awb` CLI.
+- `crates/twin-core`: shared ADB/scrcpy/QR/mDNS logic, and finding Twin.app's helpers (lib).
+- `crates/twin`: the `twin` CLI; `twin iphone` runs the bundled dmb.
 - `crates/twin-app`: the macOS menu bar app (`twin-app`), design source in `DESIGN.pen`.
+- `apple/`: Twin Mirror (the iPhone and side by side windows, Swift), the `dmb` helper CLI and `apple/hid` (`dmb-hid`, Rust, outside the workspace).
+- `scripts/bundle-app.sh` builds `target/bundle/Twin.app`: the menu bar app, with `Twin Mirror.app` and `Android Mirror.app` under `Contents/Helpers`.
 
 ## CI / GitHub Actions
 - GitHub Action workflow file changes only take effect on PRs opened after the merge of the PR that modifies them. Always note "(after merge)" in test plan items about verifying workflow behavior.

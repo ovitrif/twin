@@ -35,7 +35,10 @@ jobs:
       - name: Unit tests
         run: cargo test
 
-      - name: Bundle Android Wifi Bridge.app
+      - name: Mirror tests
+        run: cd apple && swift test
+
+      - name: Bundle Twin.app
         run: |
           cargo build --release -p twin-app
           scripts/bundle-app.sh
@@ -53,7 +56,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Lint CLI crates
-        run: cargo clippy -p twin-core -p awb --all-targets -- -D warnings
+        run: cargo clippy -p twin-core -p twin --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test -p twin-core -p awb
+        run: cargo test -p twin-core -p twin

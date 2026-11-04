@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-REPO="${TWIN_INSTALL_REPO:-ovitrif/awb}"
-BINARY="awb"
+REPO="${TWIN_INSTALL_REPO:-ovitrif/twin}"
+BINARY="twin"
 GITHUB_URL="${TWIN_INSTALL_GITHUB_URL:-https://github.com}"
 
 main() {
@@ -64,13 +64,20 @@ main() {
   install -m 755 "${dir}/${BINARY}" "${install_dir}/${BINARY}"
   echo "Installed ${install_dir}/${BINARY}"
 
-  if [ -f "${dir}/twin-app" ]; then
-    install -m 755 "${dir}/twin-app" "${install_dir}/twin-app"
-    echo "Installed ${install_dir}/twin-app (run 'awb app' for the menu bar app)"
+  # Twin was awb up to 2.1: keep `awb` working for old scripts
+  ln -sf "${install_dir}/${BINARY}" "${install_dir}/awb"
+
+  if [ -d "${dir}/Twin.app" ]; then
+    apps="/Applications"
+    [ -w "$apps" ] || { apps="$HOME/Applications"; mkdir -p "$apps"; }
+    rm -rf "${apps}/Twin.app" "${apps}/Android Wifi Bridge.app"
+    cp -R "${dir}/Twin.app" "${apps}/Twin.app"
+    xattr -dr com.apple.quarantine "${apps}/Twin.app" 2>/dev/null || true
+    echo "Installed ${apps}/Twin.app (run 'twin app' for the menu bar app)"
   fi
 
   echo "Run '${BINARY}' to get started."
-  echo "Optional zsh completions: ${BINARY} completions zsh > ~/.zfunc/_awb"
+  echo "Optional zsh completions: ${BINARY} completions zsh > ~/.zfunc/_twin"
 }
 
 resolve_install_dir() {
