@@ -109,13 +109,42 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             source = ReplaySource(urls: replay.split(separator: ",").map { URL(fileURLWithPath: String($0)) })
         } else if let mjpeg = options.mjpeg.flatMap(URL.init(string:)) {
             source = MJPEGSource(url: mjpeg)
+        } else if let hub = deviceHub() {
+            source = hub
         } else {
             source = CaptureSource(name: options.name)
         }
+        startSource()
+        connectInput()
+    }
+
+    private func startSource() {
         source.onStatus = { [weak self] text in DispatchQueue.main.async { self?.view.setStatus(text) } }
         source.onFrame = { [weak self] buffer in self?.show(buffer) }
         source.start()
+    }
 
+    /// The iPhone's screen and touch over one Device Hub session, which keeps
+    /// the phone's real status bar; nil for WebDriverAgent input or without
+    /// dmb-hid
+    private func deviceHub() -> DeviceHubSource? {
+        guard options.wda == nil, let udid = options.udid, let helper = hidHelper else { return nil }
+        let hid = HIDInput(helper: helper, udid: udid, video: true)
+        let hub = DeviceHubSource(hid: hid)
+        hub.onScreenSize = { [weak self] in self?.view.screenSize = $0 }
+        // Before iOS 27 there is no Device Hub: fall back to the capture path
+        hid.onFailed = { [weak self] in self?.fallBackToCapture() }
+        self.hid = hid
+        return hub
+    }
+
+    private func fallBackToCapture() {
+        FileHandle.standardError.write(Data("dmb: no Device Hub stream, capturing the screen instead\n".utf8))
+        view.screenSize = nil
+        source = CaptureSource(name: options.name)
+        startSource()
+        hid = nil
+        input = nil
         connectInput()
     }
 
@@ -134,6 +163,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             let input = WDAInput(client: WDAClient(base: wda))
             input.onError = log
             self.input = input
+        } else if let hid, hid.video {
+            hid.onError = log
+            hid.onReady = { log("input ready") }
+            self.input = hid
         } else if let udid = options.udid, let helper = hidHelper {
             // Started on the first frame: the phone reconnects its USB when
             // capture begins, which drops any session opened before
@@ -156,7 +189,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Fit the window to the video. On a rotation the window turns about its
     /// center, so the phone stays the same size on screen.
     private func resize(to size: CGSize) {
-        if videoSize == .zero, let hid {
+        if videoSize == .zero, let hid, !hid.video {
             do { try hid.start() } catch { FileHandle.standardError.write(Data("dmb: cannot start dmb-hid: \(error)\n".utf8)) }
         }
         let old = videoSize

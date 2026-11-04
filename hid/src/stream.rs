@@ -20,6 +20,8 @@ pub struct ScreenMediaStream {
     pub client: DisplayServiceClient<Box<dyn ReadWrite>>,
     pub audio_udp: UdpSocketHandle,
     pub video_udp: UdpSocketHandle,
+    /// Our RTP SSRC, as declared in the video offer, for RTCP we send back
+    pub ssrc: u32,
 }
 
 pub async fn start(
@@ -65,5 +67,5 @@ pub async fn start(
         ))
         .await
         .map_err(|e| format!("video stream: {e:?}"))?;
-    Ok(ScreenMediaStream { client, audio_udp, video_udp })
+    Ok(ScreenMediaStream { client, audio_udp, video_udp, ssrc })
 }

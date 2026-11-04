@@ -8,7 +8,7 @@ description = "Live touch, keyboard and buttons for an iPhone over CoreDevice, f
 [dependencies]
 # Pinned: the HID and display services are reverse-engineered and change between commits
 idevice = { git = "https://github.com/jkcoxson/idevice", rev = "89702099f4d7552f704f93b4526756abda319ceb", default-features = false, features = [
-  "ring", "core_device_proxy", "display_stream", "rsd", "usbmuxd", "tunnel_tcp_stack",
+  "ring", "core_device_proxy", "display_stream", "dvt", "rsd", "usbmuxd", "tunnel_tcp_stack",
 ] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }

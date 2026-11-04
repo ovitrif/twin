@@ -72,3 +72,75 @@ func androidProbe(_ args: [String]) {
     }
     session.stop()
 }
+
+/// `dmb iphone-probe --udid U --helper PATH --png OUT`: checks the iPhone's
+/// Device Hub stream headless. Decodes the first key frame through the same
+/// assembler the mirror uses and saves it cropped to the screen's size.
+func iphoneProbe(_ args: [String]) {
+    var udid: String?, helper: String?, png: String?
+    var it = args.makeIterator()
+    while let arg = it.next() {
+        switch arg {
+        case "--udid": udid = it.next()
+        case "--helper": helper = it.next()
+        case "--png": png = it.next()
+        default: break
+        }
+    }
+    guard let udid, let helper, let png else { fail("iphone-probe needs --udid, --helper and --png") }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: helper)
+    process.arguments = [udid, "--video"]
+    let input = Pipe(), output = Pipe(), errors = Pipe()
+    process.standardInput = input
+    process.standardOutput = output
+    process.standardError = errors
+    var screen = CGSize.zero
+    errors.fileHandleForReading.readabilityHandler = { handle in
+        for line in String(decoding: handle.availableData, as: UTF8.self).split(separator: "\n") {
+            print("helper: \(line)")
+            let parts = line.split(separator: " ")
+            if parts.count == 3, parts[0] == "screen", let w = Double(parts[1]), let h = Double(parts[2]) {
+                screen = CGSize(width: w, height: h)
+            }
+        }
+    }
+    do { try process.run() } catch { fail("\(error)") }
+    let assembler = HEVCAssembler()
+    var buffer = Data(), units = 0, done = false
+    let deadline = Date().addingTimeInterval(15)
+    while !done && Date() < deadline {
+        buffer.append(output.fileHandleForReading.availableData)
+        while buffer.count >= 4 {
+            let length = buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
+            guard buffer.count >= 4 + length else { break }
+            let unit = buffer.subdata(in: buffer.startIndex + 4..<buffer.startIndex + 4 + length)
+            buffer.removeSubrange(buffer.startIndex..<buffer.startIndex + 4 + length)
+            units += 1
+            guard !done, let sample = assembler.sampleBuffer(accessUnit: unit),
+                  let format = CMSampleBufferGetFormatDescription(sample) else { continue }
+            var decoder: VTDecompressionSession?
+            VTDecompressionSessionCreate(allocator: nil, formatDescription: format, decoderSpecification: nil,
+                                         imageBufferAttributes: nil, outputCallback: nil, decompressionSessionOut: &decoder)
+            guard let decoder else { continue }
+            VTDecompressionSessionDecodeFrame(decoder, sampleBuffer: sample, flags: [], infoFlagsOut: nil) { status, _, image, _, _ in
+                guard status == noErr, let image else { print("decode failed \(status)"); return }
+                let ci = CIImage(cvPixelBuffer: image)
+                // Keep the screen, at the top left; the padding is right and bottom
+                let crop = screen.width > 0
+                    ? CGRect(x: 0, y: ci.extent.height - screen.height, width: screen.width, height: screen.height) : ci.extent
+                if let cg = CIContext().createCGImage(ci, from: crop),
+                   let data = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) {
+                    try? data.write(to: URL(fileURLWithPath: png))
+                    print("decoded \(Int(ci.extent.width))x\(Int(ci.extent.height)), saved \(cg.width)x\(cg.height)")
+                    done = true
+                }
+            }
+        }
+        usleep(20_000)
+    }
+    print("access units \(units)")
+    try? input.fileHandleForWriting.close()
+    usleep(500_000)
+    if process.isRunning { process.terminate() }
+}

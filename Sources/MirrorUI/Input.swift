@@ -30,30 +30,83 @@ final class HIDInput: InputSink {
     private var scrollPending = CGVector.zero
     private var scrollTimer: Timer?
 
-    init(helper: URL, udid: String) {
+    /// With video, dmb-hid also streams the screen (the Device Hub stream,
+    /// which keeps the phone's real status bar): H.265 access units arrive
+    /// on `onVideoFrame`, off the main thread, after `onScreenSize`
+    let video: Bool
+    var onVideoFrame: ((Data) -> Void)?
+    var onScreenSize: ((CGSize) -> Void)?
+    /// The session ended before it worked, as on a phone before iOS 27
+    var onFailed: (() -> Void)?
+    /// The phone refused the session until it is unlocked; it retries
+    var onLocked: (() -> Void)?
+    private var everReady = false
+    private var lastError = ""
+
+    init(helper: URL, udid: String, video: Bool = false) {
         self.helper = helper
         self.udid = udid
+        self.video = video
     }
 
     func start() throws {
         let process = Process()
         process.executableURL = helper
-        process.arguments = [udid]
+        process.arguments = video ? [udid, "--video"] : [udid]
         let stdin = Pipe()
         process.standardInput = stdin
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let text = String(decoding: handle.availableData, as: UTF8.self)
-            for line in text.split(separator: "\n") {
-                DispatchQueue.main.async {
-                    if line == "ready" { self?.onReady?() } else { self?.onError?(String(line)) }
+        let text = Pipe()
+        let lines: (String) -> Void = { [weak self] line in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if line == "ready" {
+                    self.everReady = true
+                    self.onReady?()
+                } else if line.hasPrefix("screen "), case let parts = line.split(separator: " "), parts.count == 3,
+                          let w = Double(parts[1]), let h = Double(parts[2]) {
+                    self.onScreenSize?(CGSize(width: w, height: h))
+                } else {
+                    self.lastError = line
+                    self.onError?(line)
                 }
             }
+        }
+        text.fileHandleForReading.readabilityHandler = { handle in
+            for line in String(decoding: handle.availableData, as: UTF8.self).split(separator: "\n") { lines(String(line)) }
+        }
+        if video {
+            process.standardError = text
+            let frames = Pipe()
+            process.standardOutput = frames
+            var buffer = Data()
+            frames.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                buffer.append(handle.availableData)
+                // Each access unit: a 4-byte big-endian length, then the unit
+                while buffer.count >= 4 {
+                    let length = buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
+                    guard buffer.count >= 4 + length else { break }
+                    let unit = buffer.subdata(in: buffer.startIndex + 4..<buffer.startIndex + 4 + length)
+                    buffer.removeSubrange(buffer.startIndex..<buffer.startIndex + 4 + length)
+                    self?.onVideoFrame?(unit)
+                }
+            }
+        } else {
+            process.standardOutput = text
         }
         process.terminationHandler = { [weak self] ended in
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 guard let self, !self.stopping, self.process === ended else { return }
+                if !self.everReady {
+                    // A locked phone refuses CoreDevice; wait for it rather
+                    // than give up on the Device Hub stream
+                    if self.lastError.contains("PasswordProtected") {
+                        self.onLocked?()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { try? self.start() }
+                    } else {
+                        self.onFailed?()
+                    }
+                    return
+                }
                 self.onError?("input session ended (\(ended.terminationStatus)), reconnecting")
                 try? self.start()
             }
@@ -62,6 +115,8 @@ final class HIDInput: InputSink {
         self.process = process
         self.stdin = stdin
     }
+
+    func requestKeyframe() { send(["keyframe": true]) }
 
     /// Closing stdin lets dmb-hid end the media stream, which the phone needs
     /// to accept the next session; terminate only if it hangs

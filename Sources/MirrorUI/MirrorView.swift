@@ -49,7 +49,32 @@ final class MirrorView: NSView {
         }
     }
 
-    /// Shows a frame as soon as it arrives and returns the video's size
+    /// The screen's size when the video pads it (the Device Hub stream pads
+    /// to a multiple of 16 at the right and bottom); the padding is cropped
+    var screenSize: CGSize? { didSet { needsLayout = true } }
+    private var codedSize = CGSize.zero
+
+    override func layout() {
+        super.layout()
+        guard var screen = screenSize, codedSize.width > 0, screen.width > 0 else {
+            display.frame = bounds
+            return
+        }
+        // The stream turns with the phone; the screenshot size does not
+        if (codedSize.width > codedSize.height) != (screen.width > screen.height) {
+            screen = CGSize(width: screen.height, height: screen.width)
+        }
+        let width = bounds.width * codedSize.width / screen.width
+        let height = bounds.height * codedSize.height / screen.height
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        display.frame = CGRect(x: 0, y: display.isGeometryFlipped || layer?.isGeometryFlipped == true ? 0 : bounds.height - height,
+                               width: width, height: height)
+        CATransaction.commit()
+    }
+
+    /// Shows a frame as soon as it arrives and returns the size the window
+    /// should take: the screen's, without any padding
     @discardableResult
     func enqueue(_ buffer: CMSampleBuffer) -> CGSize? {
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true),
@@ -63,7 +88,20 @@ final class MirrorView: NSView {
         renderer.enqueue(buffer)
         guard let format = CMSampleBufferGetFormatDescription(buffer) else { return nil }
         let dims = CMVideoFormatDescriptionGetDimensions(format)
-        return CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+        let coded = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+        guard var screen = screenSize, screen.width > 0 else { return coded }
+        if coded != codedSize {
+            DispatchQueue.main.async {
+                self.codedSize = coded
+                self.display.videoGravity = .resize
+                self.display.autoresizingMask = []
+                self.needsLayout = true
+            }
+        }
+        if (coded.width > coded.height) != (screen.width > screen.height) {
+            screen = CGSize(width: screen.height, height: screen.width)
+        }
+        return screen
     }
 
     func setStatus(_ text: String?) {

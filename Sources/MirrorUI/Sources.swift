@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMediaIO
 import AppKit
+import DMBCore
 
 /// Delivers the phone's screen as sample buffers, on any queue.
 protocol FrameSource: AnyObject {
@@ -211,4 +212,30 @@ final class MJPEGSource: NSObject, FrameSource, URLSessionDataDelegate {
                                                  sampleTiming: &timing, sampleBufferOut: &sample)
         return sample
     }
+}
+
+/// The iPhone's screen through `dmb-hid --video`: the Device Hub stream,
+/// which leaves the phone's status bar alone, unlike the capture path above.
+final class DeviceHubSource: FrameSource {
+    var onFrame: ((CMSampleBuffer) -> Void)?
+    var onStatus: ((String) -> Void)?
+    /// The screen's size in pixels; the stream pads it
+    var onScreenSize: ((CGSize) -> Void)?
+    let hid: HIDInput
+    private let assembler = HEVCAssembler()
+
+    init(hid: HIDInput) { self.hid = hid }
+
+    func start() {
+        onStatus?("Connecting to the iPhone…")
+        hid.onScreenSize = { [weak self] in self?.onScreenSize?($0) }
+        hid.onLocked = { [weak self] in self?.onStatus?("Unlock the iPhone to see it") }
+        hid.onVideoFrame = { [weak self] unit in
+            guard let self, let sample = self.assembler.sampleBuffer(accessUnit: unit) else { return }
+            self.onFrame?(sample)
+        }
+        do { try hid.start() } catch { onStatus?("Cannot start dmb-hid: \(error)") }
+    }
+
+    func stop() { hid.stop() }
 }

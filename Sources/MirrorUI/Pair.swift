@@ -107,7 +107,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     private var pair: PairView!
     private var styler: WindowStyler!
     private var androidSource: ScrcpySource?
-    private var iphoneSource: CaptureSource?
+    private var iphoneSource: FrameSource?
     private var hid: HIDInput?
     private var androidInput: ScrcpyInput?
     private var parentWatch: DispatchSourceProcess?
@@ -186,21 +186,48 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         source.start()
     }
 
+    private var hidHelper: URL? {
+        let helper = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid")
+        return helper.flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
+    }
+
+    /// The iPhone's screen and touch over one Device Hub session, which keeps
+    /// the phone's real status bar; the capture path without one
     private func startIPhone() {
-        let source = CaptureSource(name: options.name)
+        if let udid = options.udid, let helper = hidHelper {
+            let hid = HIDInput(helper: helper, udid: udid, video: true)
+            hid.onError = { [weak self] in self?.log($0) }
+            hid.onReady = { [weak self] in self?.log("iPhone input ready") }
+            hid.onFailed = { [weak self] in self?.captureIPhone() }
+            let hub = DeviceHubSource(hid: hid)
+            hub.onScreenSize = { [weak self] in self?.pair.iphone.screenSize = $0 }
+            pair.iphone.input = hid
+            self.hid = hid
+            run(hub)
+        } else {
+            captureIPhone()
+        }
+    }
+
+    /// Before iOS 27 there is no Device Hub: capture the screen, with touch
+    /// through a dmb-hid session started on its first frame
+    private func captureIPhone() {
+        log("no Device Hub stream for the iPhone, capturing its screen instead")
+        pair.iphone.screenSize = nil
+        if let udid = options.udid, let helper = hidHelper {
+            let hid = HIDInput(helper: helper, udid: udid)
+            hid.onError = { [weak self] in self?.log($0) }
+            pair.iphone.input = hid
+            self.hid = hid
+        }
+        run(CaptureSource(name: options.name))
+    }
+
+    private func run(_ source: FrameSource) {
         source.onStatus = { [weak self] text in DispatchQueue.main.async { self?.pair.iphone.setStatus(text) } }
         source.onFrame = { [weak self] buffer in
             guard let self, let size = self.pair.iphone.enqueue(buffer) else { return }
             DispatchQueue.main.async { if size != self.iphoneSize { self.resized(iphone: size) } }
-        }
-        if let udid = options.udid,
-           let helper = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid"),
-           FileManager.default.isExecutableFile(atPath: helper.path) {
-            let hid = HIDInput(helper: helper, udid: udid)
-            hid.onError = { [weak self] in self?.log($0) }
-            hid.onReady = { [weak self] in self?.log("iPhone input ready") }
-            pair.iphone.input = hid
-            self.hid = hid
         }
         iphoneSource = source
         source.start()
@@ -216,8 +243,11 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     private func resized(iphone size: CGSize) {
         if iphoneSize == .zero {
             pair.iphone.setStatus(nil)
-            // The phone reconnects its USB once capture starts, so input waits for it
-            do { try hid?.start() } catch { log("cannot start dmb-hid: \(error)") }
+            // With capture the phone reconnects its USB once it starts, so
+            // input waits for it
+            if let hid, !hid.video {
+                do { try hid.start() } catch { log("cannot start dmb-hid: \(error)") }
+            }
         }
         iphoneSize = size
         pair.iphoneAspect = size.width / size.height
