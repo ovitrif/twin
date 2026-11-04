@@ -5,7 +5,7 @@
 # mirror beside itself. Every mirror is this one app, so macOS asks camera
 # access (the capture fallback before iOS 27) once.
 # It runs scrcpy's own server on the Android phone (scrcpy-server 5.0.1,
-# Apache-2.0), pinned as Android Mirror pins it.
+# Apache-2.0), pinned.
 set -eu
 out=${1:-build}
 swift build -c release --product Twin >/dev/null

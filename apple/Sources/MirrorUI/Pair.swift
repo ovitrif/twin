@@ -2,13 +2,13 @@ import AppKit
 import AVFoundation
 import DMBCore
 
-// Twin's two-phone window: an Android phone and an iPhone side by
-// side, a gap apart and the same height. One window is one app to macOS, so
-// window managers (Raycast's Center), Mission Control and Cmd-Tab treat the
-// pair as one, and it moves as one.
+// Twin's Android window: an Android phone alone, or beside an iPhone, a gap
+// apart and the same height. One window is one app to macOS, so window
+// managers (Raycast's Center), Mission Control and Cmd-Tab treat the pair as
+// one, and it moves as one.
 //
 //   --serial <serial>        the Android phone (adb)
-//   --udid <udid>            the iPhone
+//   --udid <udid>            the iPhone beside it (none: the Android phone alone)
 //   --name <phone name>      the iPhone's capture device name (default: the first iPhone)
 //   --product <type>         the iPhone's productType, for its corner radius
 //   --height <points>        initial height (default 80% of the screen)
@@ -17,6 +17,7 @@ import DMBCore
 //   --iphone-title <text>    default iPhone
 //   --cursor touch|system    the round touch pointer (default) or macOS's own
 //   --server <file>          scrcpy-server 5.0.1 (default: the one in this app)
+//   --on-top                 keep the window above other windows
 //   --parent <pid>           quit when this process ends (dmb devices --wait)
 //   --log <file>             append diagnostics here instead of stderr
 //   --android-replay <file>  play a video in the Android pane instead of a phone, for testing
@@ -35,6 +36,7 @@ public struct PairOptions {
     var server: String?
     var parent: pid_t?
     var log: String?
+    var onTop = false
     var androidReplay: String?
     var iphoneReplay: String?
 
@@ -53,6 +55,7 @@ public struct PairOptions {
             case "--cursor": cursor = it.next() ?? cursor
             case "--server": server = it.next()
             case "--parent": parent = it.next().flatMap { pid_t($0) }
+            case "--on-top": onTop = true
             case "--log": log = it.next()
             case "--android-replay": androidReplay = it.next()
             case "--iphone-replay": iphoneReplay = it.next()
@@ -61,7 +64,10 @@ public struct PairOptions {
         }
     }
 
-    public var isEmpty: Bool { (serial == nil && androidReplay == nil) || (udid == nil && iphoneReplay == nil) }
+    public var isEmpty: Bool { serial == nil && androidReplay == nil }
+
+    /// Whether an iPhone shows beside the Android phone
+    var hasIPhone: Bool { udid != nil || iphoneReplay != nil }
 }
 
 /// Lays out the two phones: the same height, a gap apart, centered.
@@ -150,6 +156,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let height = options.height ?? (screen.height * 0.8).rounded()
         pair = PairView(frame: .zero)
+        pair.showsIPhone = options.hasIPhone
         pair.gap = options.gap
         pair.cornerRatio = Screen.cornerRatio(productType: options.product)
         let width = pair.width(forHeight: height)
@@ -159,7 +166,8 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         window.collectionBehavior = [.fullScreenPrimary]
         window.isReleasedWhenClosed = false
         window.acceptsMouseMovedEvents = true
-        window.title = "\(options.androidTitle) and \(options.iphoneTitle)"
+        window.title = options.hasIPhone ? "\(options.androidTitle) and \(options.iphoneTitle)" : options.androidTitle
+        if options.onTop { window.level = .floating }
         pair.frame = NSRect(x: 0, y: 0, width: width, height: height)
         pair.autoresizingMask = [.width, .height]
         window.contentView = pair
@@ -183,8 +191,10 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         startAndroid()
-        startIPhone()
-        listenForPanes()
+        if options.hasIPhone {
+            startIPhone()
+            listenForPanes()
+        }
     }
 
     /// `dmb pane` hides or shows one phone of this pair, so the menu bar app can stop or

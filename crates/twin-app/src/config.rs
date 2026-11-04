@@ -68,6 +68,7 @@ impl Settings {
             android_title: self.window_title.clone(),
             iphone_title: self.iphone_title.clone(),
             touch_pointer: self.touch_pointer,
+            on_top: self.always_on_top,
         }
     }
 

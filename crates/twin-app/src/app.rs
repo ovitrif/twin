@@ -795,7 +795,7 @@ impl App {
             (state.snapshot.clone(), mirroring)
         };
         let Some(snapshot) = snapshot else { return };
-        if !snapshot.scrcpy.available {
+        if !snapshot.mirror.available {
             return;
         }
 
@@ -815,6 +815,7 @@ impl App {
                     ctx.clone(),
                     device.clone(),
                     self.settings.scrcpy_options(),
+                    self.settings.pair_options(),
                 );
             }
         }
@@ -1747,7 +1748,7 @@ impl App {
             return;
         }
 
-        let scrcpy_ok = snapshot.scrcpy.available;
+        let scrcpy_ok = snapshot.mirror.available;
         let day_weight = self.animations.skin.day_weight;
         let shell = Arc::clone(&self.shell);
         let settings = &self.settings;
@@ -1844,6 +1845,7 @@ impl App {
                                 ctx.clone(),
                                 android.clone(),
                                 settings.scrcpy_options(),
+                                settings.pair_options(),
                             );
                         }
                     }
@@ -1894,6 +1896,7 @@ impl App {
                             ctx.clone(),
                             device.clone(),
                             settings.scrcpy_options(),
+                            settings.pair_options(),
                         );
                     }
                 }
@@ -2095,8 +2098,6 @@ impl App {
                 changed |= check_item(ui, "Always on top", &mut self.settings.always_on_top);
                 ui.add_space(20.0);
                 second_column = ui.cursor().min.x;
-                changed |= check_item(ui, "Borderless", &mut self.settings.borderless);
-                ui.add_space(20.0);
                 changed |= check_item(ui, "Auto mirror", &mut self.settings.auto_mirror);
             });
             ui.add_space(8.0);
@@ -2183,25 +2184,40 @@ impl App {
             divider(ui);
             ui.add_space(12.0);
 
-            ui.add(
-                Label::new(semibold("Dependencies", 12.5, theme::text_bright())).selectable(false),
-            );
+            ui.add(Label::new(semibold("Setup", 12.5, theme::text_bright())).selectable(false));
 
             let snapshot = self.shared.lock().unwrap().snapshot.clone();
-            let (adb, emulator, scrcpy) = match &snapshot {
+            let (adb, xcode, emulator) = match &snapshot {
                 Some(snapshot) => (
                     Some(&snapshot.adb),
+                    Some(&snapshot.xcode),
                     Some(&snapshot.emulator),
-                    Some(&snapshot.scrcpy),
                 ),
                 None => (None, None, None),
             };
 
-            dependency_row(ui, ph::TERMINAL_WINDOW, "ADB", adb);
+            // Nothing installs or opens until its button is pressed
+            dependency_row(ui, ph::TERMINAL_WINDOW, "ADB", adb, None);
             divider(ui);
-            dependency_row(ui, ph::DESKTOP, "Android Emulator", emulator);
+            dependency_row(
+                ui,
+                ph::APPLE_LOGO,
+                "Xcode, for iPhones",
+                xcode,
+                Some(if xcode.is_some_and(|tool| tool.available) {
+                    ("Open Xcode", "/Applications/Xcode.app")
+                } else {
+                    ("Get Xcode", "macappstore://apps.apple.com/app/id497799835")
+                }),
+            );
             divider(ui);
-            dependency_row(ui, ph::MONITOR_PLAY, "scrcpy", scrcpy);
+            dependency_row(
+                ui,
+                ph::DESKTOP,
+                "Android Emulator (optional)",
+                emulator,
+                Some(("Get Android Studio", "https://developer.android.com/studio")),
+            );
         });
     }
 
@@ -2456,7 +2472,15 @@ fn divider(ui: &mut Ui) {
     ui.painter().rect_filled(rect, 0.0, theme::hairline());
 }
 
-fn dependency_row(ui: &mut Ui, row_icon: &str, name: &str, info: Option<&backend::ToolInfo>) {
+/// A tool Twin uses: a check when ready; else its warning or a button that
+/// opens `get` (an App Store or download page, or the app to open once)
+fn dependency_row(
+    ui: &mut Ui,
+    row_icon: &str,
+    name: &str,
+    info: Option<&backend::ToolInfo>,
+    get: Option<(&str, &str)>,
+) {
     ui.horizontal(|ui| {
         ui.set_height(ROW_HEIGHT);
         ui.add(Label::new(icon(row_icon, 14.0, theme::text_label())).selectable(false));
@@ -2481,18 +2505,35 @@ fn dependency_row(ui: &mut Ui, row_icon: &str, name: &str, info: Option<&backend
             });
         }
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match info {
-            Some(tool) if tool.available && tool.warnings.is_empty() => {
-                ui.add(Label::new(icon(ph::CHECK, 14.0, theme::green())).selectable(false))
-                    .on_hover_text("Ready");
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            match (info, get) {
+                (Some(tool), _) if tool.available && tool.warnings.is_empty() => {
+                    ui.add(Label::new(icon(ph::CHECK, 14.0, theme::green())).selectable(false))
+                        .on_hover_text("Ready");
+                }
+                (Some(_), Some((label, target))) => {
+                    if pill_button(
+                        ui,
+                        None,
+                        label,
+                        theme::control_selected(),
+                        theme::text_bright(),
+                        false,
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                    {
+                        let _ = std::process::Command::new("open").arg(target).spawn();
+                    }
+                }
+                (Some(tool), None) if tool.available => {
+                    ui.add(Label::new(regular("Update", 11.0, theme::amber())).selectable(false));
+                }
+                (Some(_), None) => {
+                    ui.add(Label::new(regular("Missing", 11.0, theme::red())).selectable(false));
+                }
+                (None, _) => {}
             }
-            Some(tool) if tool.available => {
-                ui.add(Label::new(regular("Update", 11.0, theme::amber())).selectable(false));
-            }
-            Some(_) => {
-                ui.add(Label::new(regular("Missing", 11.0, theme::red())).selectable(false));
-            }
-            None => {}
         });
     });
 }

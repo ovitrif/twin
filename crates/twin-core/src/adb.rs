@@ -19,6 +19,9 @@ const ADB_MDNS_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const ADB_PAIR_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const ADB_SHELL_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// The adb Twin.app ships, from Google's platform-tools
+const BUNDLED_ADB: &str = "Contents/Helpers/platform-tools/adb";
+
 #[derive(Debug, Clone)]
 pub struct Adb {
     path: PathBuf,
@@ -120,9 +123,15 @@ impl Adb {
             });
         }
 
-        Ok(Self {
-            path: resolve_program("adb", None)?,
-        })
+        // Your own adb first, so one adb server serves the Android SDK and
+        // Twin; else the one Twin.app ships
+        match resolve_program("adb", None) {
+            Ok(path) => Ok(Self { path }),
+            Err(error) => match crate::bundle::find(BUNDLED_ADB) {
+                Some(path) => Ok(Self { path }),
+                None => Err(error),
+            },
+        }
     }
 
     #[cfg(test)]

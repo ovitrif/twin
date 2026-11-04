@@ -11,6 +11,8 @@ twin iphone: mirror a USB-connected iPhone in Twin
                                        this command closes it, for the menu bar app
   twin iphone devices --serial SERIAL  show this Android phone beside the iPhone in one
                       [--udid UDID]    window; --wait as for mirror
+  twin iphone android --serial SERIAL  that Android phone alone in Twin's window;
+                                       --wait as for mirror
   twin iphone pane android|iphone show|hide --udid UDID
                                        show or hide one phone of that pair; hiding both
                                        closes the window
@@ -107,6 +109,30 @@ func devices(_ args: [String]) {
     if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
 }
 
+/// The Android phone `serial` alone in Twin Mirror, through its scrcpy client
+func android(_ args: [String]) {
+    var serial: String?
+    var wait = false
+    var passthrough: [String] = []
+    var it = args.makeIterator()
+    while let arg = it.next() {
+        switch arg {
+        case "--serial": serial = it.next()
+        case "--wait": wait = true
+        default: passthrough.append(arg)
+        }
+    }
+    guard let serial else { fail("android needs --serial, the phone's adb serial") }
+    guard let binary = twinBinary() else { fail("Twin Mirror not found; reinstall Twin") }
+    try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+    var arguments = ["--serial", serial, "--log", stateDir.appendingPathComponent("android.log").path] + passthrough
+    if wait { arguments += ["--parent", "\(getpid())"] }
+    let pid: pid_t
+    do { pid = try launch(binary, arguments) } catch { fail("cannot start Twin: \(error.localizedDescription)") }
+    print("Showing \(serial)")
+    if wait { while kill(pid, 0) == 0 { usleep(250_000) } }
+}
+
 func status(json: Bool) {
     let devices: [Device]
     do { devices = try Devices.list().filter(\.wired) } catch { fail("\(error)") }
@@ -179,6 +205,7 @@ case "status", "list": status(json: args.contains("--json"))
 case "mirror": mirror(Array(args.dropFirst()))
 case "android-probe": androidProbe(Array(args.dropFirst()))
 case "devices": devices(Array(args.dropFirst()))
+case "android": android(Array(args.dropFirst()))
 case "pane": pane(Array(args.dropFirst()))
 case "iphone-probe": iphoneProbe(Array(args.dropFirst()))
 case "--version", "-V": print("dmb 1.0.0")

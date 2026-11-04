@@ -69,7 +69,10 @@ impl AvdInfo {
 pub struct Snapshot {
     pub adb: ToolInfo,
     pub emulator: ToolInfo,
-    pub scrcpy: ToolInfo,
+    /// What opens an Android phone's mirror: Twin Mirror, else scrcpy
+    pub mirror: ToolInfo,
+    /// Xcode's devicectl and CoreDevice, which iPhone mirroring needs
+    pub xcode: ToolInfo,
     pub devices: Vec<DeviceInfo>,
     pub avds: Vec<AvdInfo>,
     /// iPhones on USB, when dmb is installed.
@@ -235,7 +238,7 @@ pub fn refresh_status(shared: Arc<Mutex<Shared>>, ctx: Context) {
         let device_connected = snapshot.devices.iter().any(|device| device.ready);
 
         state.reap_finished_mirrors();
-        state.log_tool_warnings(&snapshot.scrcpy.warnings);
+        state.log_tool_warnings(&snapshot.mirror.warnings);
         state.snapshot = Some(snapshot);
         state.device_connected = device_connected;
         state.refreshing = false;
@@ -333,27 +336,14 @@ fn collect_snapshot() -> Snapshot {
         },
     };
 
-    let scrcpy_info = match Scrcpy::resolve(None, false) {
-        Ok(scrcpy) => {
-            let diagnostics = scrcpy.diagnostics(&Default::default());
-            let detail = match diagnostics.version_line {
-                Some(version) if !version.is_empty() => {
-                    format!("{} ({})", version, scrcpy.path().display())
-                }
-                _ => scrcpy.path().display().to_string(),
-            };
-
-            ToolInfo {
-                available: true,
-                detail,
-                warnings: diagnostics.warnings,
-            }
-        }
-        Err(_) => ToolInfo {
-            available: false,
-            detail: "Not found".to_string(),
+    // Twin Mirror needs no scrcpy; a dev build without it falls back to one
+    let mirror_info = match Dmb::resolve() {
+        Ok(dmb) => ToolInfo {
+            available: true,
+            detail: dmb.path().display().to_string(),
             warnings: Vec::new(),
         },
+        Err(_) => scrcpy_info(),
     };
 
     let (devices, running_avds) = adb_handle
@@ -399,10 +389,73 @@ fn collect_snapshot() -> Snapshot {
     Snapshot {
         adb: adb_info,
         emulator: emulator_info,
-        scrcpy: scrcpy_info,
+        mirror: mirror_info,
+        xcode: xcode_info(),
         devices,
         avds,
         iphones,
+    }
+}
+
+/// A scrcpy on PATH, for a build without Twin Mirror
+fn scrcpy_info() -> ToolInfo {
+    match Scrcpy::resolve(None, false) {
+        Ok(scrcpy) => {
+            let diagnostics = scrcpy.diagnostics(&Default::default());
+            let detail = match diagnostics.version_line {
+                Some(version) if !version.is_empty() => {
+                    format!("{} ({})", version, scrcpy.path().display())
+                }
+                _ => scrcpy.path().display().to_string(),
+            };
+
+            ToolInfo {
+                available: true,
+                detail,
+                warnings: diagnostics.warnings,
+            }
+        }
+        Err(_) => ToolInfo {
+            available: false,
+            detail: "Not found".to_string(),
+            warnings: Vec::new(),
+        },
+    }
+}
+
+/// Xcode's devicectl and the CoreDevice services it installs on its first
+/// launch, which iPhone mirroring needs. Looked up by path: `xcrun` on a Mac
+/// without developer tools would show macOS's install prompt.
+fn xcode_info() -> ToolInfo {
+    let devicectl = std::fs::read_dir("/Applications")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|app| {
+            app.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("Xcode") && name.ends_with(".app"))
+        })
+        .map(|app| app.join("Contents/Developer/usr/bin/devicectl"))
+        .find(|path| path.is_file());
+    let core_device =
+        std::path::Path::new("/Library/Developer/PrivateFrameworks/CoreDevice.framework").exists();
+    match devicectl {
+        Some(path) => ToolInfo {
+            available: true,
+            detail: path.display().to_string(),
+            warnings: if core_device {
+                Vec::new()
+            } else {
+                vec!["Open Xcode once to set up iPhone support".to_string()]
+            },
+        },
+        None => ToolInfo {
+            available: false,
+            detail: "For iPhones".to_string(),
+            warnings: Vec::new(),
+        },
     }
 }
 
@@ -505,6 +558,7 @@ pub fn start_mirror(
     ctx: Context,
     device: DeviceInfo,
     options: twin_core::scrcpy::ScrcpyOptions,
+    pair_options: PairOptions,
 ) {
     let mirror_key = device.mirror_key.clone();
     {
@@ -520,16 +574,23 @@ pub fn start_mirror(
     }
 
     thread::spawn(move || {
-        let result = {
-            let _adb_work = ADB_WORK_LOCK.lock().unwrap();
-            Adb::resolve(None).and_then(|adb| {
-                Scrcpy::resolve_with_adb(None, false, Some(adb)).and_then(|scrcpy| {
-                    let diagnostics = scrcpy.diagnostics(&options);
-                    scrcpy
-                        .spawn_piped(&device.serial, &options)
-                        .map(|child| (child, diagnostics))
+        // Twin Mirror's own scrcpy client when Twin.app is installed; a
+        // scrcpy on PATH otherwise (a dev build)
+        let result = match Dmb::resolve() {
+            Ok(dmb) => dmb
+                .spawn_android(&device.serial, &pair_options)
+                .map(|child| (child, Vec::new())),
+            Err(_) => {
+                let _adb_work = ADB_WORK_LOCK.lock().unwrap();
+                Adb::resolve(None).and_then(|adb| {
+                    Scrcpy::resolve_with_adb(None, false, Some(adb)).and_then(|scrcpy| {
+                        let diagnostics = scrcpy.diagnostics(&options);
+                        scrcpy
+                            .spawn_piped(&device.serial, &options)
+                            .map(|child| (child, diagnostics.warnings))
+                    })
                 })
-            })
+            }
         };
 
         let mut state = shared.lock().unwrap();
@@ -548,8 +609,8 @@ pub fn start_mirror(
                 let _ = child.wait();
                 state.log(format!("Already mirroring {}", device.name));
             }
-            Ok((mut child, diagnostics)) => {
-                state.log_tool_warnings(&diagnostics.warnings);
+            Ok((mut child, warnings)) => {
+                state.log_tool_warnings(&warnings);
                 state.log(format!("Mirroring {} (pid {})", device.name, child.id()));
 
                 if let Some(out) = child.stdout.take() {
@@ -1209,7 +1270,8 @@ mod tests {
                 snapshot: Some(Snapshot {
                     adb: tool.clone(),
                     emulator: tool.clone(),
-                    scrcpy: tool.clone(),
+                    mirror: tool.clone(),
+                    xcode: tool.clone(),
                     devices: vec![],
                     avds: vec![AvdInfo {
                         name: "Pixel_9a".to_string(),

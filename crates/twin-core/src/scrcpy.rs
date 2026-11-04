@@ -7,16 +7,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::adb::Adb;
-use crate::bundle;
-use crate::command_path::{is_executable_file, path_env_with_tool_dirs, resolve_program};
+use crate::command_path::{path_env_with_tool_dirs, resolve_program};
 
 pub const DEFAULT_WINDOW_WIDTH: u32 = 480;
 pub const DEFAULT_WINDOW_HEIGHT: u32 = 1_071;
 const RECOMMENDED_SCRCPY_VERSION: ScrcpyVersion = ScrcpyVersion::new(4, 0, 0);
 const SCRCPY_METADATA_TIMEOUT: Duration = Duration::from_secs(5);
-/// The launcher of the patched scrcpy app inside Twin.app
-/// (scripts/build-scrcpy.sh, scripts/bundle-app.sh).
-const BUNDLED_SCRCPY: &str = "Contents/Helpers/Android Mirror.app/Contents/MacOS/Android Mirror";
 
 #[derive(Debug, Clone)]
 pub struct Scrcpy {
@@ -73,7 +69,6 @@ impl Scrcpy {
         skip_check: bool,
         adb: Option<Adb>,
     ) -> Result<Self> {
-        let override_path = override_path.or_else(bundled_scrcpy);
         let path = if skip_check {
             override_path.unwrap_or_else(|| PathBuf::from("scrcpy"))
         } else {
@@ -154,11 +149,7 @@ impl Scrcpy {
     }
 
     fn update_hint(&self) -> &'static str {
-        if self.path.ends_with(BUNDLED_SCRCPY) {
-            "rebuild the app's scrcpy with `scripts/build-scrcpy.sh` and rebundle it"
-        } else {
-            "run `brew upgrade scrcpy`"
-        }
+        "run `brew upgrade scrcpy`"
     }
 
     pub fn launch(&self, serial: &str, options: &ScrcpyOptions) -> Result<()> {
@@ -338,22 +329,6 @@ impl Default for ScrcpyOptions {
     }
 }
 
-/// The bundled scrcpy: the running app's own, else the installed app's (for
-/// the CLI), so mirrors get the patched window and a stable path for window
-/// managers.
-fn bundled_scrcpy() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok();
-    first_executable(bundled_scrcpy_candidates(exe.as_deref()))
-}
-
-fn bundled_scrcpy_candidates(exe: Option<&Path>) -> Vec<PathBuf> {
-    bundle::candidates(exe, BUNDLED_SCRCPY)
-}
-
-fn first_executable(candidates: Vec<PathBuf>) -> Option<PathBuf> {
-    candidates.into_iter().find(|path| is_executable_file(path))
-}
-
 pub fn default_args(serial: &str, options: &ScrcpyOptions) -> Vec<OsString> {
     let mut args = vec![OsString::from("-s"), OsString::from(serial)];
 
@@ -482,7 +457,6 @@ fn parse_number_prefix(value: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bundle::APP_BUNDLE_PATH;
 
     #[test]
     fn builds_raycast_equivalent_scrcpy_args() {
@@ -583,56 +557,6 @@ mod tests {
 
         assert_eq!(adb_env, adb_path.as_os_str());
         assert_eq!(path_dirs.first().map(PathBuf::as_path), adb_path.parent());
-    }
-
-    #[test]
-    fn bundled_scrcpy_prefers_the_running_app_bundle() {
-        let exe = Path::new("/tmp/Dev Build.app/Contents/MacOS/twin-app");
-
-        assert_eq!(
-            bundled_scrcpy_candidates(Some(exe)),
-            vec![
-                PathBuf::from("/tmp/Dev Build.app").join(BUNDLED_SCRCPY),
-                Path::new(APP_BUNDLE_PATH).join(BUNDLED_SCRCPY),
-            ]
-        );
-    }
-
-    #[test]
-    fn bundled_scrcpy_falls_back_to_the_installed_app_outside_a_bundle() {
-        let exe = Path::new("/Users/me/.local/bin/twin");
-
-        assert_eq!(
-            bundled_scrcpy_candidates(Some(exe)),
-            vec![Path::new(APP_BUNDLE_PATH).join(BUNDLED_SCRCPY)]
-        );
-    }
-
-    #[test]
-    fn bundled_scrcpy_skips_missing_candidates() {
-        let missing = PathBuf::from("/nonexistent/scrcpy");
-        let present = PathBuf::from("/bin/sh");
-
-        assert_eq!(
-            first_executable(vec![missing, present.clone()]),
-            Some(present)
-        );
-        assert_eq!(first_executable(vec![]), None);
-    }
-
-    #[test]
-    fn update_hint_follows_where_scrcpy_comes_from() {
-        let bundled = Scrcpy {
-            path: Path::new(APP_BUNDLE_PATH).join(BUNDLED_SCRCPY),
-            adb: None,
-        };
-        let homebrew = Scrcpy {
-            path: PathBuf::from("/opt/homebrew/bin/scrcpy"),
-            adb: None,
-        };
-
-        assert!(bundled.update_hint().contains("build-scrcpy.sh"));
-        assert!(homebrew.update_hint().contains("brew upgrade scrcpy"));
     }
 
     #[test]

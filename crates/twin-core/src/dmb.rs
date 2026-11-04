@@ -85,6 +85,9 @@ impl Dmb {
         command.args(["devices", "--wait", "--serial", serial, "--udid", udid]);
         command.args(["--gap", &options.gap.to_string()]);
         add_window_args(&mut command, options.height, options.touch_pointer);
+        if options.on_top {
+            command.arg("--on-top");
+        }
         if !options.android_title.is_empty() {
             command.args(["--android-title", &options.android_title]);
         }
@@ -92,6 +95,10 @@ impl Dmb {
             command.args(["--iphone-title", &options.iphone_title]);
         }
         Self::spawn(command)
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
     }
 
     /// Runs dmb with these arguments in this terminal, for `twin iphone`
@@ -122,7 +129,26 @@ impl Dmb {
         Ok(())
     }
 
+    /// This Android phone alone in Twin Mirror, through its scrcpy client;
+    /// the window as for the side by side one
+    pub fn spawn_android(&self, serial: &str, options: &PairOptions) -> Result<Child> {
+        let mut command = Command::new(&self.path);
+        command.args(["android", "--wait", "--serial", serial]);
+        add_window_args(&mut command, options.height, options.touch_pointer);
+        if options.on_top {
+            command.arg("--on-top");
+        }
+        if !options.android_title.is_empty() {
+            command.args(["--android-title", &options.android_title]);
+        }
+        Self::spawn(command)
+    }
+
     fn spawn(mut command: Command) -> Result<Child> {
+        // Twin Mirror's scrcpy client talks to the same adb as the app
+        if let Ok(adb) = crate::adb::Adb::resolve(None) {
+            command.env("ADB", adb.path());
+        }
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -140,6 +166,8 @@ pub struct PairOptions {
     pub android_title: String,
     pub iphone_title: String,
     pub touch_pointer: bool,
+    /// Keep the window above other windows
+    pub on_top: bool,
 }
 
 fn add_window_args(command: &mut Command, height: u32, touch_pointer: bool) {

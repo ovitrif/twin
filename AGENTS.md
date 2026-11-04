@@ -99,7 +99,7 @@ screen, mouse or keyboard: drive the real popover headlessly.
 - `crates/twin`: the `twin` CLI; `twin iphone` runs the bundled dmb.
 - `crates/twin-app`: the macOS menu bar app (`twin-app`), design source in `DESIGN.pen`.
 - `apple/`: Twin Mirror (the iPhone and side by side windows, Swift), the `dmb` helper CLI and `apple/hid` (`dmb-hid`, Rust, outside the workspace).
-- `scripts/bundle-app.sh` builds `target/bundle/Twin.app`: the menu bar app, with `Twin Mirror.app` and `Android Mirror.app` under `Contents/Helpers`.
+- `scripts/bundle-app.sh` builds `target/bundle/Twin.app`: the menu bar app, with `Twin Mirror.app` (every mirror window) and Google's `adb` under `Contents/Helpers`.
 
 ## CI / GitHub Actions
 - GitHub Action workflow file changes only take effect on PRs opened after the merge of the PR that modifies them. Always note "(after merge)" in test plan items about verifying workflow behavior.

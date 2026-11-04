@@ -1,16 +1,13 @@
 #!/bin/sh
 # Wraps the menu bar app binary into Twin.app (menu bar agent, no Dock icon),
-# with its mirrors under Contents/Helpers: Twin Mirror.app (the iPhone and
-# side by side windows, dmb, dmb-hid; built from apple/) and Android Mirror.app
-# (the patched scrcpy from scripts/build-scrcpy.sh, when built in target/scrcpy
-# or $SCRCPY_DIR; otherwise the app uses scrcpy from PATH).
+# with its helpers under Contents/Helpers: Twin Mirror.app (every mirror
+# window, dmb, dmb-hid; built from apple/) and Google's adb (platform-tools).
 # Usage: scripts/bundle-app.sh [app-binary] [output-dir]
 # TWIN_SKIP_MIRROR=1 leaves Twin Mirror.app out (a quick tray-only build).
 set -eu
 
 APP_BIN="${1:-target/release/twin-app}"
 OUT_DIR="${2:-target/bundle}"
-SCRCPY_DIR="${SCRCPY_DIR:-target/scrcpy}"
 VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
 
 if [ ! -x "$APP_BIN" ]; then
@@ -39,66 +36,20 @@ if [ "${TWIN_SKIP_MIRROR:-}" != 1 ]; then
   (cd "$(dirname "$0")/../apple" && scripts/bundle-app.sh "$helpers") >/dev/null
 fi
 
-if [ -x "${SCRCPY_DIR}/scrcpy" ] \
-  && [ "$(lipo -archs "${SCRCPY_DIR}/scrcpy")" != "$(lipo -archs "$APP_BIN")" ]; then
-  echo "skipping ${SCRCPY_DIR}/scrcpy: not built for the app's architecture" >&2
-elif [ -x "${SCRCPY_DIR}/scrcpy" ]; then
-  MIRROR="${APP}/Contents/Helpers/Android Mirror.app"
-  mkdir -p "${MIRROR}/Contents/MacOS" "${MIRROR}/Contents/Resources"
-  cp "${SCRCPY_DIR}/scrcpy" "${MIRROR}/Contents/MacOS/scrcpy"
-  cp "${SCRCPY_DIR}/scrcpy-server" "${SCRCPY_DIR}/scrcpy.png" \
-    "${SCRCPY_DIR}/disconnected.png" "${SCRCPY_DIR}/LICENSE" \
-    "${MIRROR}/Contents/Resources/"
-  # Made with dmb's scripts/make-icon.swift android. scrcpy sets its Dock icon
-  # from scrcpy.png at runtime, so that is this icon too
-  cp "$(dirname "$0")/../scrcpy/AndroidMirror.icns" "${MIRROR}/Contents/Resources/AppIcon.icns"
-  sips -s format png "${MIRROR}/Contents/Resources/AppIcon.icns" \
-    --out "${MIRROR}/Contents/Resources/scrcpy.png" >/dev/null
-
-  # awb starts mirrors through this launcher; opened with no arguments (Finder,
-  # Raycast, Spotlight) it quits, since only awb knows which phone to mirror.
-  # The patched scrcpy links Homebrew's ffmpeg, sdl3 and libusb; when it cannot
-  # load them, the launcher falls back to the scrcpy on PATH.
-  cat > "${MIRROR}/Contents/MacOS/Android Mirror" <<'LAUNCHER'
-#!/bin/sh
-[ "$#" -eq 0 ] && exit 0
-dir="$(cd "$(dirname "$0")" && pwd)"
-if ! "${dir}/scrcpy" --version >/dev/null 2>&1; then
-  if ! command -v scrcpy >/dev/null 2>&1; then
-    echo "Android Mirror: the bundled scrcpy cannot start and no scrcpy is on PATH" >&2
-    exit 127
-  fi
-  echo "Android Mirror: the bundled scrcpy cannot start; using scrcpy from PATH" >&2
-  exec scrcpy "$@"
+# Google's adb (platform-tools, pinned), for phones on a Mac without the
+# Android SDK; an adb on PATH or in the SDK is used first
+PT_VERSION="r37.0.1"
+PT_SHA256="ee39ad5967e95c2a07f04dbcbde96b1a0c916ba376096db5d2f498b7727a5d1d"
+pt_cache="${HOME}/.cache/twin"
+pt_zip="${pt_cache}/platform-tools-${PT_VERSION}-darwin.zip"
+mkdir -p "$pt_cache"
+if ! echo "${PT_SHA256}  ${pt_zip}" | shasum -a 256 -c - >/dev/null 2>&1; then
+  curl -fsSL "https://dl.google.com/android/repository/platform-tools_${PT_VERSION}-darwin.zip" -o "$pt_zip"
+  echo "${PT_SHA256}  ${pt_zip}" | shasum -a 256 -c - >/dev/null || { echo "platform-tools checksum mismatch" >&2; exit 1; }
 fi
-resources="$(cd "${dir}/../Resources" && pwd)"
-export SCRCPY_SERVER_PATH="${resources}/scrcpy-server"
-export SCRCPY_ICON_DIR="$resources"
-exec "${dir}/scrcpy" "$@"
-LAUNCHER
-  chmod 755 "${MIRROR}/Contents/MacOS/Android Mirror"
-
-  cat > "${MIRROR}/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key><string>Android Mirror</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>tech.masivo.twin.android</string>
-  <key>CFBundleName</key><string>Android Mirror</string>
-  <key>CFBundleDisplayName</key><string>Android Mirror</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
-  <key>LSMinimumSystemVersion</key><string>11.0</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
-PLIST
-  codesign --force --sign - "${MIRROR}/Contents/MacOS/scrcpy" 2>/dev/null || true
-  codesign --force --sign - "$MIRROR" 2>/dev/null || true
-fi
+mkdir -p "${APP}/Contents/Helpers"
+unzip -q -o "$pt_zip" platform-tools/adb platform-tools/NOTICE.txt platform-tools/source.properties \
+  -d "${APP}/Contents/Helpers"
 
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

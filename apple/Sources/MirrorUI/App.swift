@@ -32,6 +32,7 @@ public struct Options {
     var parent: pid_t?
     var log: String?
     var cursor = "touch"
+    var onTop = false
 
     public init(_ args: [String]) {
         var it = args.makeIterator()
@@ -49,6 +50,7 @@ public struct Options {
             case "--parent": parent = it.next().flatMap { pid_t($0) }
             case "--log": log = it.next()
             case "--cursor": cursor = it.next() ?? cursor
+            case "--on-top": onTop = true
             default: break
             }
         }
@@ -89,6 +91,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                               styleMask: [.borderless, .miniaturizable],  // the resize ring resizes it
                               backing: .buffered, defer: false)
         window.collectionBehavior = [.fullScreenPrimary]
+        if options.onTop { window.level = .floating }
         window.isMovableByWindowBackground = false
         window.acceptsMouseMovedEvents = true
         window.isReleasedWhenClosed = false

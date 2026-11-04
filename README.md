@@ -35,12 +35,15 @@ curl -fsSL https://github.com/ovitrif/twin/releases/latest/download/install.sh |
 
 `install.sh` installs the `twin` CLI and, on macOS, `Twin.app` into /Applications.
 
-Requirements: `adb` on your PATH (Android SDK platform-tools). `scrcpy` is optional and
-only needed for screen mirroring. Launching AVDs requires the Android SDK Emulator;
-deleting them requires Android SDK Command-Line Tools (`avdmanager`). The phone needs
-Android 11+ with developer options enabled, on the same Wi-Fi network as your Mac. iPhone
-mirroring needs Xcode 27 (for `devicectl`) and an iPhone on USB, on iOS 27+ with Developer
-Mode on, that trusts this Mac.
+What Twin needs, which its Settings check under Setup:
+
+- **Android phones:** nothing more. Twin.app brings its own `adb`; the phone needs
+  Android 11+ with developer options on, on the same Wi-Fi network as your Mac (or USB).
+- **iPhones:** Xcode 27 from the App Store, opened once (it sets up the phone's developer
+  services), and an iPhone on USB, on iOS 27+ with Developer Mode on, that trusts this Mac.
+- **Emulators (optional):** the Android SDK Emulator, from Android Studio; deleting them
+  needs its Command-Line Tools (`avdmanager`).
+- **The `twin` CLI's own mirror (optional):** `scrcpy` on your PATH (`brew install scrcpy`).
 
 ## Menu bar app
 
@@ -61,8 +64,9 @@ The popover works from the keyboard: Tab moves between controls, Return or Space
 the focused one, Escape closes the popover, and ← / → step back and forward through the
 pages you visited, then through Main, Settings, and Pair in order.
 
-Twin.app holds the menu bar app and its mirrors: `Twin Mirror.app` (the iPhone and side by
-side windows) and `Android Mirror.app` (the patched scrcpy) under `Contents/Helpers`.
+Twin.app holds the menu bar app, `Twin Mirror.app` (every mirror window: an Android phone,
+an iPhone, or both side by side) and Google's `adb` under `Contents/Helpers`. Twin uses your
+own `adb` when you have one installed, so one adb server serves both.
 
 ## CLI
 
@@ -97,15 +101,10 @@ twin iphone mirror       # mirror the first one; --udid picks another
 twin iphone devices --serial SERIAL   # that Android phone beside the iPhone
 ```
 
-By default scrcpy launches borderless at 480x1071 with `--stay-awake` and no audio; pass
-`--plain-window` for scrcpy's regular decorated window. The menu bar app stores its scrcpy
-options in `~/.config/twin/config.toml`.
-
-On Apple silicon, Twin prefers the scrcpy bundled in `Twin.app` (`Android Mirror.app`,
-`tech.masivo.twin.android`). It is a pinned scrcpy release patched to draw a
-QuickTime-style mirror window: rounded corners, a title bar with traffic lights while ⌘ is
-held, and ⌘ + drag anywhere to move the window. It needs Homebrew's scrcpy dependencies;
-without them, or without the app, Twin uses `scrcpy` from your PATH.
+The `twin` CLI mirrors with `scrcpy` from your PATH: borderless at 480x1071 with
+`--stay-awake` and no audio by default; pass `--plain-window` for scrcpy's regular decorated
+window. The menu bar app needs no scrcpy: its mirrors run scrcpy's server on the phone and
+draw it in Twin Mirror. It stores its settings in `~/.config/twin/config.toml`.
 
 ## iPhone mirroring
 
@@ -129,19 +128,17 @@ In the window:
 git clone https://github.com/ovitrif/twin.git
 cd twin
 cargo build --release            # target/release/twin and target/release/twin-app
-scripts/build-scrcpy.sh          # optional: patched scrcpy into target/scrcpy (needs meson, ninja, Homebrew ffmpeg, sdl3, libusb)
-scripts/bundle-app.sh            # target/bundle/Twin.app, with Twin Mirror (needs Xcode) and the patched scrcpy
+scripts/bundle-app.sh            # target/bundle/Twin.app, with Twin Mirror (needs Xcode) and adb
 (cd apple && swift test)         # Twin Mirror's tests
 ```
 
 The Rust workspace has three crates: `twin-core` (ADB, scrcpy, QR, and Bonjour logic),
 `twin` (the CLI), and `twin-app` (the menu bar app, built from the design in `DESIGN.pen`).
-`apple/` holds Twin Mirror, the Swift app that draws the iPhone and side by side windows,
+`apple/` holds Twin Mirror, the Swift app that draws every mirror window (with a Swift
+port of scrcpy's client for Android),
 its `dmb` helper CLI, and `apple/hid` (`dmb-hid`, on
 [idevice](https://github.com/jkcoxson/idevice)), which carries the iPhone's screen and
-touch. `scrcpy/macos-window.patch` holds the Android mirror window patch;
-`scripts/build-scrcpy.sh` pins the scrcpy version and says how to move the patch to a new
-release.
+touch.
 
 ## License
 

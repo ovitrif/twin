@@ -1,9 +1,9 @@
 import AppKit
 import MirrorUI
 
-// Twin: one app for every mirror dmb opens, so macOS asks camera access once.
-// With an Android phone (--serial) it shows that phone and the iPhone side by
-// side in one window; otherwise just the iPhone. Opened on its own (Finder,
+// Twin Mirror: one app for every mirror dmb opens, so macOS asks camera access
+// once. With an Android phone (--serial) it shows that phone, beside the
+// iPhone when --udid names one; otherwise just the iPhone. Opened on its own (Finder,
 // Spotlight) it quits, since only dmb knows which phones to show.
 
 let args = Array(CommandLine.arguments.dropFirst())

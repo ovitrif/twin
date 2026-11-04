@@ -63,15 +63,6 @@ jobs:
           if [ -n "$xcode" ]; then sudo xcode-select -s "$xcode"; fi
           swift --version
 
-      - name: Build the patched scrcpy
-        if: matrix.target == 'aarch64-apple-darwin'
-        # Without it the app ships without Android Mirror.app and uses PATH
-        continue-on-error: true
-        timeout-minutes: 30
-        run: |
-          brew install meson ninja pkgconf ffmpeg sdl3 libusb
-          scripts/build-scrcpy.sh
-
       - name: Package
         shell: bash
         run: |
