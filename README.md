@@ -18,9 +18,7 @@ without remembering SDK commands. Nothing is installed on either phone.
 - **Side by side:** with both connected, one play button shows the two phones in one
   window that moves as one; each phone can also open or hide on its own.
 
-Twin is the successor of [awb](https://github.com/ovitrif/awb) (Android Wifi Bridge). Its
-settings carry over, and `awb` still runs the `twin` CLI. Twin runs on Apple silicon Macs;
-the `twin` CLI also runs on Linux, for Android.
+Twin runs on Apple silicon Macs; the `twin` CLI also runs on Linux, for Android.
 
 ## Install
 
