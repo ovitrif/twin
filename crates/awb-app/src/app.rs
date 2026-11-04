@@ -1754,7 +1754,7 @@ impl App {
             });
             let mut link_ends: Vec<egui::Pos2> = Vec::new();
             if has_phones {
-                section_header(ui, "Phones");
+                section_header(ui, "Physical");
             }
             let mut first = true;
             for device in devices {
@@ -1787,6 +1787,11 @@ impl App {
                 let row = Row {
                     key: &device.mirror_key,
                     icon: ph::DEVICE_MOBILE,
+                    icon_color: if mirroring {
+                        theme::green()
+                    } else {
+                        theme::text_label()
+                    },
                     name: &device.name,
                     tooltip: &device.serial,
                     status,
@@ -1844,6 +1849,11 @@ impl App {
                 let row = Row {
                     key: &key,
                     icon: ph::APPLE_LOGO,
+                    icon_color: if mirroring {
+                        theme::green()
+                    } else {
+                        theme::text_label()
+                    },
                     name: &iphone.name,
                     tooltip: &iphone.model,
                     status: if mirroring { "Mirroring" } else { "Ready" },
@@ -1904,7 +1914,7 @@ impl App {
                 if has_phones {
                     ui.add_space(14.0);
                 }
-                section_header(ui, "Emulators");
+                section_header(ui, "Virtual");
                 first = true;
             }
             for avd in &snapshot.avds {
@@ -1943,6 +1953,7 @@ impl App {
                         .as_ref()
                         .map_or(avd.name.as_str(), |device| device.serial.as_str()),
                     icon: ph::ANDROID_LOGO,
+                    icon_color: theme::text_label(),
                     name: &name,
                     tooltip: &name,
                     status,
@@ -2390,7 +2401,7 @@ fn tab_item(ui: &mut Ui, label: &str, active: bool) -> egui::Response {
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A small list header, as "Phones" and "Emulators" in the Devices tab
+/// A small list header, as "Physical" and "Virtual" in the Devices tab
 fn section_header(ui: &mut Ui, text: &str) {
     ui.add_space(6.0);
     ui.add(Label::new(semibold(text, 11.0, theme::text_faint())).selectable(false));
@@ -2768,6 +2779,8 @@ struct Row<'a> {
     /// two phones of the same model share a display name.
     key: &'a str,
     icon: &'a str,
+    /// Green while the device is mirrored, as its status is
+    icon_color: Color32,
     name: &'a str,
     tooltip: &'a str,
     status: &'a str,
@@ -2796,7 +2809,7 @@ fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<us
         egui::Align2::CENTER_CENTER,
         row.icon,
         theme::icon_font(ROW_ICON_SIZE),
-        theme::text_label(),
+        row.icon_color,
     );
 
     let actions_width = actions.len() as f32 * ROW_ACTION_SIZE
@@ -2891,6 +2904,7 @@ fn list_row(
     let row = Row {
         key: name,
         icon: row_icon,
+        icon_color: theme::text_label(),
         name,
         tooltip: name,
         status: detail,
