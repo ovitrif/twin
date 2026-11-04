@@ -39,6 +39,9 @@ menu bar app is not left stale:
   values. A heading to its content and rows within a group: 1×; a field's label
   to the field: ½×; between checkbox columns: 2.5×; around a divider between
   sections: 2× on each side. Rows that only list (Setup) stay compact: 4× tall.
+- Every section heading, in the Devices tab and in Settings alike, is
+  `section_header` (semibold 11 pt, the faint label color), never a
+  one-off label style.
 
 ## Verify the app UI
 Check every UI change yourself before calling it done, without the user's

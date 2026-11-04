@@ -258,6 +258,28 @@ fn edge_line(color: Color) -> Shader<'static> {
     .expect("shell edge gradient")
 }
 
+/// The top edge's highlight: bright on both sides of the beak and gone where
+/// the beak meets the body (x 175 to 205), so the beak flows into the body
+/// without a line across its base
+fn top_line(color: Color) -> Shader<'static> {
+    let beak = |x: f32| x / SHELL_W;
+    LinearGradient::new(
+        Point::from_xy(0.0, 0.0),
+        Point::from_xy(SHELL_W, 0.0),
+        vec![
+            GradientStop::new(0.08, transparent(color)),
+            GradientStop::new(beak(150.0), color),
+            GradientStop::new(beak(172.0), transparent(color)),
+            GradientStop::new(beak(208.0), transparent(color)),
+            GradientStop::new(beak(230.0), color),
+            GradientStop::new(0.92, transparent(color)),
+        ],
+        SpreadMode::Pad,
+        Transform::identity(),
+    )
+    .expect("shell top gradient")
+}
+
 /// Rasterizes the popover shell (beak + rounded body): a vertical base
 /// gradient lit from the bottom edge like the Agents Board cards, with a soft
 /// bloom and a center-weighted hairline on that edge, an inner highlight along
@@ -300,7 +322,7 @@ fn render_shell(oversample: u32, appearance: Appearance, height: f32, gradients:
         tiny_skia::Rect::from_xywh(0.0, height - 1.5, SHELL_W, 1.5).expect("glow line"),
     );
     fill(
-        edge_line(style.highlight),
+        top_line(style.highlight),
         tiny_skia::Rect::from_xywh(0.0, body_top, SHELL_W, 1.2).expect("highlight line"),
     );
 

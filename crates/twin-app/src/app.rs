@@ -2074,11 +2074,7 @@ impl App {
         let day_weight = self.animations.skin.day_weight;
         let shell = Arc::clone(&self.shell);
         chrome_scroll(ui, "settings-scroll", &shell, day_weight, false, |ui| {
-            ui.add(
-                Label::new(semibold("Screen Mirroring", 12.5, theme::text_bright()))
-                    .selectable(false),
-            );
-            ui.add_space(SPACE);
+            section_header(ui, "Screen Mirroring");
 
             let mut changed = false;
             ui.horizontal(|ui| {
@@ -2116,8 +2112,7 @@ impl App {
             divider(ui);
             ui.add_space(SPACE * 2.0);
 
-            ui.add(Label::new(semibold("General", 12.5, theme::text_bright())).selectable(false));
-            ui.add_space(SPACE);
+            section_header(ui, "General");
 
             let mut theme_changed = false;
             ui.allocate_ui_with_layout(
@@ -2188,8 +2183,7 @@ impl App {
             divider(ui);
             ui.add_space(SPACE * 2.0);
 
-            ui.add(Label::new(semibold("Setup", 12.5, theme::text_bright())).selectable(false));
-            ui.add_space(SPACE * 0.5);
+            section_header(ui, "Setup");
 
             let snapshot = self.shared.lock().unwrap().snapshot.clone();
             let (adb, xcode, emulator) = match &snapshot {
@@ -2442,11 +2436,12 @@ fn tab_item(ui: &mut Ui, label: &str, active: bool) -> egui::Response {
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A small list header, as "Physical" and "Virtual" in the Devices tab
+/// A section's heading, the same everywhere: "Physical" and "Virtual" in the
+/// Devices tab, the groups of Settings
 fn section_header(ui: &mut Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(SPACE * 0.5);
     ui.add(Label::new(semibold(text, 11.0, theme::text_faint())).selectable(false));
-    ui.add_space(2.0);
+    ui.add_space(SPACE * 0.5);
 }
 
 /// A dot, a line and a dot from one row's icon down to another's, linking
