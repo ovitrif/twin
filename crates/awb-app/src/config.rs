@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use awb_core::imb::PairOptions;
+use awb_core::dmb::PairOptions;
 use awb_core::scrcpy::ScrcpyOptions;
 use serde::{Deserialize, Serialize};
 

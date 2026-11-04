@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use awb_core::adb::{self, Adb};
+use awb_core::dmb::{Dmb, Iphone, PairOptions};
 use awb_core::emulator::{self, Emulator};
-use awb_core::imb::{Imb, Iphone, PairOptions};
 use awb_core::pairing_flow::{
     self, AlreadyConnectedChoice, PairingEvent, PairingFlowDelegate, PairingProgressKind,
 };
@@ -72,7 +72,7 @@ pub struct Snapshot {
     pub scrcpy: ToolInfo,
     pub devices: Vec<DeviceInfo>,
     pub avds: Vec<AvdInfo>,
-    /// iPhones on USB, when imb is installed.
+    /// iPhones on USB, when dmb is installed.
     pub iphones: Vec<Iphone>,
 }
 
@@ -377,8 +377,8 @@ fn collect_snapshot() -> Snapshot {
         })
         .unwrap_or_default();
     let avds = avd_rows(avds, &devices, &running_avds);
-    let iphones = Imb::resolve()
-        .and_then(|imb| imb.iphones())
+    let iphones = Dmb::resolve()
+        .and_then(|dmb| dmb.iphones())
         .unwrap_or_default();
 
     Snapshot {
@@ -573,8 +573,8 @@ pub fn start_iphone_mirror(
         state.log(format!("Already mirroring {}", iphone.name));
         return;
     }
-    match Imb::resolve()
-        .and_then(|imb| imb.spawn_mirror(&iphone.udid, height, title, touch_pointer))
+    match Dmb::resolve()
+        .and_then(|dmb| dmb.spawn_mirror(&iphone.udid, height, title, touch_pointer))
     {
         Ok(mut child) => {
             state.log(format!("Mirroring {} (pid {})", iphone.name, child.id()));
@@ -605,7 +605,7 @@ pub fn start_pair(
         state.log("Android v iOS is already open");
         return;
     }
-    match Imb::resolve().and_then(|imb| imb.spawn_pair(&device.serial, &iphone.udid, &options)) {
+    match Dmb::resolve().and_then(|dmb| dmb.spawn_pair(&device.serial, &iphone.udid, &options)) {
         Ok(mut child) => {
             state.log(format!(
                 "Showing {} and {} side by side (pid {})",

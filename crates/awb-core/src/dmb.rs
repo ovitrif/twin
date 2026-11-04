@@ -1,5 +1,5 @@
-//! iPhones on USB through [imb](https://github.com/ovitrif/imb): listing them and
-//! opening their mirror, which imb draws in the same window style as scrcpy's.
+//! iPhones on USB through [dmb](https://github.com/ovitrif/dmb): listing them and
+//! opening their mirror, which dmb draws in the same window style as scrcpy's.
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -21,14 +21,14 @@ struct Status {
     devices: Vec<Iphone>,
 }
 
-pub struct Imb {
+pub struct Dmb {
     path: PathBuf,
 }
 
-impl Imb {
+impl Dmb {
     pub fn resolve() -> Result<Self> {
         Ok(Self {
-            path: resolve_program("imb", None)?,
+            path: resolve_program("dmb", None)?,
         })
     }
 
@@ -37,20 +37,20 @@ impl Imb {
             .args(["status", "--json"])
             .stdin(Stdio::null())
             .output()
-            .context("running imb status")?;
+            .context("running dmb status")?;
         if !output.status.success() {
             bail!(
-                "imb status: {}",
+                "dmb status: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
         parse_status(&String::from_utf8_lossy(&output.stdout))
     }
 
-    /// The mirror for this iPhone; imb stays running while it is open and the
-    /// mirror quits when imb ends, so killing the child closes the window.
+    /// The mirror for this iPhone; dmb stays running while it is open and the
+    /// mirror quits when dmb ends, so killing the child closes the window.
     /// `height` is the window height in points, as for scrcpy; 0 or an empty
-    /// title leaves imb's default; `touch_pointer` off keeps macOS's pointer.
+    /// title leaves dmb's default; `touch_pointer` off keeps macOS's pointer.
     pub fn spawn_mirror(
         &self,
         udid: &str,
@@ -68,7 +68,7 @@ impl Imb {
     }
 
     /// Android v iOS: this Android phone and this iPhone side by side in one
-    /// window, `gap` points apart, through imb's own scrcpy client.
+    /// window, `gap` points apart, through dmb's own scrcpy client.
     pub fn spawn_pair(&self, serial: &str, udid: &str, options: &PairOptions) -> Result<Child> {
         let mut command = Command::new(&self.path);
         command.args(["devices", "--wait", "--serial", serial, "--udid", udid]);
@@ -89,7 +89,7 @@ impl Imb {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context("starting imb")
+            .context("starting dmb")
     }
 }
 
@@ -114,7 +114,7 @@ fn add_window_args(command: &mut Command, height: u32, touch_pointer: bool) {
 
 pub fn parse_status(json: &str) -> Result<Vec<Iphone>> {
     Ok(serde_json::from_str::<Status>(json)
-        .context("reading imb status")?
+        .context("reading dmb status")?
         .devices)
 }
 
@@ -123,7 +123,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_imb_status() {
+    fn reads_dmb_status() {
         let json = r#"{"devices": [{"mirroring": false, "model": "iPhone Air",
             "name": "Test iPhone", "productType": "iPhone18,4", "udid": "00008150-AAAA"}]}"#;
         assert_eq!(

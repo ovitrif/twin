@@ -1,8 +1,8 @@
 pub mod adb;
 pub mod command_path;
+pub mod dmb;
 pub mod dnssd;
 pub mod emulator;
-pub mod imb;
 pub mod pairing;
 pub mod pairing_flow;
 pub mod qr;
