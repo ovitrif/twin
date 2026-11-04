@@ -2,9 +2,11 @@ import AppKit
 import Testing
 @testable import MirrorUI
 
-/// A 300 × 600 mirror at (100, 100) with its ring, never shown
-@MainActor private func makeRing() -> (NSWindow, ResizeRing) {
-    let mirror = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 300, height: 600),
+/// A mirror at (100, 100), 300 × 600 unless `small` (150 × 300, so a drag
+/// never reaches a small screen's height limit), with its ring, never shown
+@MainActor private func makeRing(small: Bool = false) -> (NSWindow, ResizeRing) {
+    let size = small ? NSSize(width: 150, height: 300) : NSSize(width: 300, height: 600)
+    let mirror = NSWindow(contentRect: NSRect(origin: NSPoint(x: 100, y: 100), size: size),
                           styleMask: [.borderless], backing: .buffered, defer: true)
     let ring = ResizeRing(mirror: mirror)
     ring.update(radius: 42, shown: true)
@@ -31,21 +33,21 @@ import Testing
 }
 
 @MainActor @Test func draggingAnEdgeKeepsThePhonesShape() {
-    let (mirror, ring) = makeRing()
+    let (mirror, ring) = makeRing(small: true)
     let view = ring.view
-    // Pull the right edge out by 60 pt: 360 wide, so 720 tall, top kept
-    view.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 309, y: 306), ring))
-    view.mouseDragged(with: mouse(.leftMouseDragged, NSPoint(x: 369, y: 306), ring))
-    #expect(mirror.frame == NSRect(x: 100, y: -20, width: 360, height: 720))
-    view.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 369, y: 306), ring))
+    // Pull the right edge out by 30 pt: 180 wide, so 360 tall, top kept
+    view.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 159, y: 156), ring))
+    view.mouseDragged(with: mouse(.leftMouseDragged, NSPoint(x: 189, y: 156), ring))
+    #expect(mirror.frame == NSRect(x: 100, y: 40, width: 180, height: 360))
+    view.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 189, y: 156), ring))
 }
 
 @MainActor @Test func draggingTheBottomLeftCornerKeepsTheTopRight() {
-    let (mirror, ring) = makeRing()
+    let (mirror, ring) = makeRing(small: true)
     let view = ring.view
-    // Pull the corner in by 30 pt down and left: 660 tall, 330 wide
+    // Pull the corner out by 30 pt down and 15 left: 330 tall, 165 wide
     view.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 16, y: 16), ring))
-    view.mouseDragged(with: mouse(.leftMouseDragged, NSPoint(x: -14, y: -44), ring))
-    #expect(mirror.frame.maxX == 400 && mirror.frame.maxY == 700)
-    #expect(mirror.frame.size == NSSize(width: 330, height: 660))
+    view.mouseDragged(with: mouse(.leftMouseDragged, NSPoint(x: 1, y: -14), ring))
+    #expect(mirror.frame.maxX == 250 && mirror.frame.maxY == 400)
+    #expect(mirror.frame.size == NSSize(width: 165, height: 330))
 }
