@@ -1,65 +1,48 @@
-//! "Open at Login" backed by macOS Login Items (System Events). Registering
-//! the app here makes it appear under System Settings → General → Login Items.
-//!
-//! The first add/remove (or query) prompts the user to allow controlling
-//! System Events under Privacy & Security → Automation.
+//! "Open at Login" through macOS's ServiceManagement (`SMAppService`, macOS
+//! 13+): registering the app adds it under System Settings → General → Login
+//! Items. Reading and changing it needs no permission prompt, unlike the
+//! System Events login items Twin used before.
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use std::process::Command;
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
 
-    /// Display name for the login item Twin registers.
-    const ITEM_NAME: &str = "Twin";
+    #[link(name = "ServiceManagement", kind = "framework")]
+    unsafe extern "C" {}
 
-    /// The enclosing `.app` bundle when present, otherwise the bare executable.
-    /// Login Items shows whichever path is registered.
-    fn app_path() -> Option<String> {
+    /// `SMAppServiceStatusEnabled`
+    const ENABLED: isize = 1;
+
+    /// The service for this app's own bundle, or none outside a bundle (a
+    /// dev build), where there is nothing to register.
+    fn main_app() -> Option<Retained<AnyObject>> {
         let exe = std::env::current_exe().ok()?;
-        let exe = exe.to_string_lossy().into_owned();
-
-        match exe.find(".app/Contents/MacOS/") {
-            Some(index) => Some(exe[..index + ".app".len()].to_string()),
-            None => Some(exe),
-        }
-    }
-
-    fn osascript(script: &str) -> Option<String> {
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()
-            .ok()?;
-        if !output.status.success() {
+        if !exe.to_string_lossy().contains(".app/Contents/MacOS/") {
             return None;
         }
-        Some(String::from_utf8_lossy(&output.stdout).into_owned())
+        let class = AnyClass::get(c"SMAppService")?;
+        unsafe { msg_send![class, mainAppService] }
     }
 
     pub fn is_enabled() -> bool {
-        let Some(path) = app_path() else {
-            return false;
-        };
-        // `get the path of every login item` returns a comma-separated list.
-        osascript("tell application \"System Events\" to get the path of every login item")
-            .is_some_and(|paths| paths.split(',').any(|entry| entry.trim() == path))
+        main_app().is_some_and(|service| {
+            let status: isize = unsafe { msg_send![&service, status] };
+            status == ENABLED
+        })
     }
 
     pub fn set_enabled(enabled: bool) {
-        let Some(path) = app_path() else {
+        let Some(service) = main_app() else {
             return;
         };
-
-        // Remove only Twin's own entry, matched by the exact registered path, so
-        // toggling never deletes an unrelated login item.
-        let _ = osascript(&format!(
-            "tell application \"System Events\" to delete (every login item whose path is \"{path}\")"
-        ));
-
-        if enabled {
-            let _ = osascript(&format!(
-                "tell application \"System Events\" to make login item at end with properties {{name:\"{ITEM_NAME}\", path:\"{path}\", hidden:true}}"
-            ));
-        }
+        let error: *mut *mut AnyObject = std::ptr::null_mut();
+        let _: Bool = if enabled {
+            unsafe { msg_send![&service, registerAndReturnError: error] }
+        } else {
+            unsafe { msg_send![&service, unregisterAndReturnError: error] }
+        };
     }
 }
 
