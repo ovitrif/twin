@@ -1,0 +1,242 @@
+import AppKit
+import AVFoundation
+import DMBCore
+
+/// Shows the phone's screen and turns mouse and keyboard input into touches.
+/// While Cmd is held, a press moves the window and nothing reaches the phone.
+final class MirrorView: NSView {
+    let display = AVSampleBufferDisplayLayer()
+    private let status = NSTextField(labelWithString: "")
+    weak var input: InputSink?
+    private var pressed = false
+    private var commandPress = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+        display.videoGravity = .resizeAspectFill  // the window keeps the video's aspect; fill hides rounding slivers
+        display.frame = bounds
+        display.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        layer?.addSublayer(display)
+
+
+        status.textColor = .secondaryLabelColor
+        status.alignment = .center
+        status.maximumNumberOfLines = 0
+        status.font = .systemFont(ofSize: 13)
+        status.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(status)
+        NSLayoutConstraint.activate([
+            status.centerXAnchor.constraint(equalTo: centerXAnchor),
+            status.centerYAnchor.constraint(equalTo: centerYAnchor),
+            status.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -32),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var isFlipped: Bool { true }
+
+    /// Rounds this phone in a window of several
+    var cornerRadius: CGFloat = 0 {
+        didSet {
+            layer?.cornerRadius = cornerRadius
+            layer?.cornerCurve = .continuous
+            layer?.masksToBounds = cornerRadius > 0
+        }
+    }
+
+    /// The screen's size when the video pads it (the Device Hub stream pads
+    /// to a multiple of 16 at the right and bottom); the padding is cropped
+    var screenSize: CGSize? { didSet { needsLayout = true } }
+    private var codedSize = CGSize.zero
+
+    override func layout() {
+        super.layout()
+        guard var screen = screenSize, codedSize.width > 0, screen.width > 0 else {
+            display.frame = bounds
+            return
+        }
+        // The stream turns with the phone; the screenshot size does not
+        if (codedSize.width > codedSize.height) != (screen.width > screen.height) {
+            screen = CGSize(width: screen.height, height: screen.width)
+        }
+        let width = bounds.width * codedSize.width / screen.width
+        let height = bounds.height * codedSize.height / screen.height
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        display.frame = CGRect(x: 0, y: display.isGeometryFlipped || layer?.isGeometryFlipped == true ? 0 : bounds.height - height,
+                               width: width, height: height)
+        CATransaction.commit()
+    }
+
+    /// Shows a frame as soon as it arrives and returns the size the window
+    /// should take: the screen's, without any padding
+    @discardableResult
+    func enqueue(_ buffer: CMSampleBuffer) -> CGSize? {
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true),
+           CFArrayGetCount(attachments) > 0 {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+        }
+        let renderer = display.sampleBufferRenderer
+        if renderer.status == .failed { renderer.flush() }
+        renderer.enqueue(buffer)
+        guard let format = CMSampleBufferGetFormatDescription(buffer) else { return nil }
+        let dims = CMVideoFormatDescriptionGetDimensions(format)
+        let coded = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+        guard var screen = screenSize, screen.width > 0 else { return coded }
+        if coded != codedSize {
+            DispatchQueue.main.async {
+                self.codedSize = coded
+                self.display.videoGravity = .resize
+                self.display.autoresizingMask = []
+                self.needsLayout = true
+            }
+        }
+        if (coded.width > coded.height) != (screen.width > screen.height) {
+            screen = CGSize(width: screen.height, height: screen.width)
+        }
+        return screen
+    }
+
+    func setStatus(_ text: String?) {
+        status.stringValue = text ?? ""
+        status.isHidden = text == nil
+    }
+
+    /// The pointer from 0 to 1 across the phone's screen
+    private func phonePoint(_ event: NSEvent) -> CGPoint {
+        let p = convert(event.locationInWindow, from: nil)
+        return CGPoint(x: min(max(p.x / max(bounds.width, 1), 0), 1),
+                       y: min(max(p.y / max(bounds.height, 1), 0), 1))
+    }
+
+    /// A round pointer like iOS's own over the phone, darker while it touches
+    static let touchCursor = circleCursor(fill: 0.42)
+    static let pressedCursor = circleCursor(fill: 0.62)
+
+    private static func circleCursor(fill: CGFloat) -> NSCursor {
+        let size: CGFloat = 18
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2))
+            NSColor(white: 0.5, alpha: fill).setFill()
+            circle.fill()
+            NSColor(white: 1, alpha: 0.9).setStroke()
+            circle.lineWidth = 1.5
+            circle.stroke()
+            // A faint dark rim keeps it visible on white
+            let rim = NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
+            NSColor(white: 0, alpha: 0.22).setStroke()
+            rim.lineWidth = 1
+            rim.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: size / 2, y: size / 2))
+    }
+
+    private var commandHeld = false
+    /// The round touch pointer over the phone, or macOS's own (`--cursor system`)
+    var touchPointer = true
+
+    private var currentCursor: NSCursor {
+        if commandPress { return .closedHand }
+        if commandHeld { return .openHand }
+        guard touchPointer else { return .arrow }
+        return pressed ? Self.pressedCursor : Self.touchCursor
+    }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: currentCursor) }
+
+    override func updateTrackingAreas() {
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect, .cursorUpdate],
+                                       owner: self))
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        guard let window, NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
+            == window.windowNumber else { return }
+        currentCursor.set()
+    }
+    override func mouseMoved(with event: NSEvent) { setCommand(event.modifierFlags.contains(.command)) }
+    override func flagsChanged(with event: NSEvent) { setCommand(event.modifierFlags.contains(.command)) }
+
+    private func setCommand(_ held: Bool) {
+        commandHeld = held
+        window?.invalidateCursorRects(for: self)
+        // Only where this window is the one under the pointer: the title bar
+        // and other windows over it keep their own cursor
+        guard let window, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)),
+              NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber
+        else { return }
+        currentCursor.set()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            commandPress = true
+            currentCursor.set()
+            window?.performDrag(with: event)
+            commandPress = false
+            setCommand(NSEvent.modifierFlags.contains(.command))
+            return
+        }
+        commandPress = false
+        pressed = true
+        window?.makeFirstResponder(self)
+        currentCursor.set()
+        input?.touch(.down, at: phonePoint(event))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard pressed else { return }
+        input?.touch(.move, at: phonePoint(event))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        commandPress = false
+        guard pressed else { return }
+        pressed = false
+        currentCursor.set()
+        input?.touch(.up, at: phonePoint(event))
+    }
+
+    /// Android's Back, as in scrcpy
+    override func rightMouseDown(with event: NSEvent) { input?.button("back") }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard !event.modifierFlags.contains(.command) else { return }
+        // The finger moves with the content, as macOS already turned the deltas
+        let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+        input?.scroll(at: phonePoint(event), by: CGVector(dx: event.scrollingDeltaX * scale / max(bounds.width, 1),
+                                                          dy: event.scrollingDeltaY * scale / max(bounds.height, 1)))
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.control) else {
+            super.keyDown(with: event)
+            return
+        }
+        switch event.keyCode {
+        case 51: input?.type("\u{8}")    // delete
+        case 117: input?.type("\u{7F}")  // forward delete
+        case 36, 76: input?.type("\n")   // return, enter
+        case 48: input?.type("\t")
+        case 53: input?.key(0x29)   // escape
+        case 123: input?.key(0x50)  // arrows: left, right, down, up
+        case 124: input?.key(0x4F)
+        case 125: input?.key(0x51)
+        case 126: input?.key(0x52)
+        default:
+            if let text = event.characters, !text.isEmpty,
+               text.unicodeScalars.allSatisfy({ $0.value >= 0x20 && !(0xF700...0xF8FF).contains($0.value) }) {
+                input?.type(text)
+            }
+        }
+    }
+}

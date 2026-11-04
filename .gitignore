@@ -1,2 +1,6 @@
 /target
 .ai
+/apple/.build/
+/apple/build/
+/apple/hid/target/
+.DS_Store

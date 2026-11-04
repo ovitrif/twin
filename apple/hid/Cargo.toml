@@ -1,0 +1,20 @@
+[package]
+name = "dmb-hid"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Live touch, keyboard and buttons for an iPhone over CoreDevice, for iOS Mirror"
+
+[dependencies]
+# Pinned: the HID and display services are reverse-engineered and change between commits
+idevice = { git = "https://github.com/jkcoxson/idevice", rev = "89702099f4d7552f704f93b4526756abda319ceb", default-features = false, features = [
+  "ring", "core_device_proxy", "display_stream", "dvt", "rsd", "usbmuxd", "tunnel_tcp_stack",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+strip = true
+lto = true
