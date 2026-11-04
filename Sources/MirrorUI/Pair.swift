@@ -19,6 +19,8 @@ import DMBCore
 //   --server <file>          scrcpy-server 5.0.1 (default: the one in this app)
 //   --parent <pid>           quit when this process ends (dmb devices --wait)
 //   --log <file>             append diagnostics here instead of stderr
+//   --android-replay <file>  play a video in the Android pane instead of a phone, for testing
+//   --iphone-replay <file>   the same for the iPhone pane
 
 public struct PairOptions {
     var serial: String?
@@ -33,6 +35,8 @@ public struct PairOptions {
     var server: String?
     var parent: pid_t?
     var log: String?
+    var androidReplay: String?
+    var iphoneReplay: String?
 
     public init(_ args: [String]) {
         var it = args.makeIterator()
@@ -50,12 +54,14 @@ public struct PairOptions {
             case "--server": server = it.next()
             case "--parent": parent = it.next().flatMap { pid_t($0) }
             case "--log": log = it.next()
+            case "--android-replay": androidReplay = it.next()
+            case "--iphone-replay": iphoneReplay = it.next()
             default: break
             }
         }
     }
 
-    public var isEmpty: Bool { serial == nil || udid == nil }
+    public var isEmpty: Bool { (serial == nil && androidReplay == nil) || (udid == nil && iphoneReplay == nil) }
 }
 
 /// Lays out the two phones: the same height, a gap apart, centered.
@@ -106,7 +112,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     private var window: MirrorWindow!
     private var pair: PairView!
     private var styler: WindowStyler!
-    private var androidSource: ScrcpySource?
+    private var androidSource: FrameSource?
     private var iphoneSource: FrameSource?
     private var hid: HIDInput?
     private var androidInput: ScrcpyInput?
@@ -167,6 +173,16 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startAndroid() {
+        if let replay = options.androidReplay {
+            let source = ReplaySource(urls: [URL(fileURLWithPath: replay)])
+            source.onFrame = { [weak self] buffer in
+                guard let self, let size = self.pair.android.enqueue(buffer) else { return }
+                DispatchQueue.main.async { if size != self.androidSize { self.resized(android: size) } }
+            }
+            androidSource = source
+            source.start()
+            return
+        }
         guard let serial = options.serial, let adb = ScrcpySession.findADB(), let server = serverPath else {
             pair.android.setStatus("adb or scrcpy-server not found")
             return
@@ -194,6 +210,10 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     /// The iPhone's screen and touch over one Device Hub session, which keeps
     /// the phone's real status bar; the capture path without one
     private func startIPhone() {
+        if let replay = options.iphoneReplay {
+            run(ReplaySource(urls: [URL(fileURLWithPath: replay)]))
+            return
+        }
         if let udid = options.udid, let helper = hidHelper {
             let hid = HIDInput(helper: helper, udid: udid, video: true)
             hid.onError = { [weak self] in self?.log($0) }
