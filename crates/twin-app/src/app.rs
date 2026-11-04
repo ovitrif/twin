@@ -2461,36 +2461,30 @@ fn dependency_row(ui: &mut Ui, row_icon: &str, name: &str, info: Option<&backend
         ui.set_height(ROW_HEIGHT);
         ui.add(Label::new(icon(row_icon, 14.0, theme::text_label())).selectable(false));
         ui.add_space(10.0);
-        ui.add(Label::new(medium(name, 12.5, theme::text_bright())).selectable(false));
+        // The version or path shows on hover; only a warning needs the space
+        let name_label =
+            ui.add(Label::new(medium(name, 12.5, theme::text_bright())).selectable(false));
+        if let Some(tool) = info {
+            name_label.on_hover_text(&tool.detail);
+        }
         ui.add_space(10.0);
 
-        let warning = info.and_then(|tool| tool.warnings.first());
-        let detail = match (info, warning) {
-            (_, Some(warning)) => warning.clone(),
-            (Some(tool), None) => tool.detail.clone(),
-            (None, None) => "checking…".to_string(),
-        };
-        let available_width = ui.available_width() - 50.0;
-        ui.scope(|ui| {
-            ui.set_max_width(available_width.max(40.0));
-            ui.add(
-                Label::new(regular(
-                    detail,
-                    11.0,
-                    if warning.is_some() {
-                        theme::amber()
-                    } else {
-                        theme::text_faint()
-                    },
-                ))
-                .truncate()
-                .selectable(false),
-            );
-        });
+        if let Some(warning) = info.and_then(|tool| tool.warnings.first()) {
+            let available_width = ui.available_width() - 50.0;
+            ui.scope(|ui| {
+                ui.set_max_width(available_width.max(40.0));
+                ui.add(
+                    Label::new(regular(warning, 11.0, theme::amber()))
+                        .truncate()
+                        .selectable(false),
+                );
+            });
+        }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| match info {
             Some(tool) if tool.available && tool.warnings.is_empty() => {
-                ui.add(Label::new(regular("Ready", 11.0, theme::green())).selectable(false));
+                ui.add(Label::new(icon(ph::CHECK, 14.0, theme::green())).selectable(false))
+                    .on_hover_text("Ready");
             }
             Some(tool) if tool.available => {
                 ui.add(Label::new(regular("Update", 11.0, theme::amber())).selectable(false));

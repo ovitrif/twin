@@ -30,11 +30,15 @@ pub struct Dmb {
 }
 
 impl Dmb {
-    /// The dmb inside Twin.app's mirror, else one on PATH (a dev build)
+    /// `TWIN_DMB` (tests and demos), else the dmb inside Twin.app's mirror,
+    /// else one on PATH (a dev build)
     pub fn resolve() -> Result<Self> {
-        let path = match bundle::find(BUNDLED_DMB) {
+        let path = match std::env::var_os("TWIN_DMB").map(PathBuf::from) {
             Some(path) => path,
-            None => resolve_program("dmb", None)?,
+            None => match bundle::find(BUNDLED_DMB) {
+                Some(path) => path,
+                None => resolve_program("dmb", None)?,
+            },
         };
         Ok(Self { path })
     }
