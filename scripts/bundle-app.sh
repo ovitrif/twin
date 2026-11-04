@@ -30,7 +30,7 @@ cp "$bin/Twin" "$app/Contents/MacOS/Twin"
 cp hid/target/release/dmb-hid "$app/Contents/MacOS/dmb-hid"
 cp "$server" "$app/Contents/Resources/scrcpy-server"
 cp "${cache}/scrcpy-LICENSE" "$app/Contents/Resources/scrcpy-LICENSE"
-# Made with scripts/make-icon.swift pair
+# Made with scripts/make-icon.swift cast
 cp assets/Twin.icns "$app/Contents/Resources/AppIcon.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

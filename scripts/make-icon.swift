@@ -1,12 +1,14 @@
-// Draws the mirror apps' icons: a phone on a dark squircle, its screen lit.
-// Usage: swift scripts/make-icon.swift iphone|android|pair OUT.icns
-// iOS Mirror uses `iphone`, awb's Android Mirror `android` and Android v iOS
-// `pair`, both phones side by side.
+// Draws the mirror apps' icons on a dark squircle: a phone with its screen
+// lit, or the cast mark.
+// Usage: swift scripts/make-icon.swift iphone|android|pair|cast OUT.icns
+// awb's Android Mirror uses `android` and Twin `cast`: theSVG's Cast icon in
+// its glass look (thesvg.org/ui/cast?v=glass, MIT), tinted from the iPhone's
+// blue to the Android green. `iphone` and `pair` are the earlier phone icons.
 import AppKit
 
 let args = CommandLine.arguments
-guard args.count == 3, ["iphone", "android", "pair"].contains(args[1]) else {
-    print("usage: make-icon.swift iphone|android|pair OUT.icns"); exit(2)
+guard args.count == 3, ["iphone", "android", "pair", "cast"].contains(args[1]) else {
+    print("usage: make-icon.swift iphone|android|pair|cast OUT.icns"); exit(2)
 }
 
 func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
@@ -46,6 +48,43 @@ func drawPhone(center: NSPoint, scale s: CGFloat, android: Bool) {
     }
 }
 
+/// theSVG's Cast mark, drawn on its 24-unit grid (y down) `unit` points per
+/// unit around `center`: a screen open at the bottom left, two waves rising
+/// into it. Stroked 2.4 units wide in a glass fade, opaque at the top.
+func drawCast(center: NSPoint, unit u: CGFloat) {
+    let path = CGMutablePath()
+    path.move(to: CGPoint(x: 3, y: 8))
+    path.addArc(tangent1End: CGPoint(x: 3, y: 5), tangent2End: CGPoint(x: 21, y: 5), radius: 1.5)
+    path.addArc(tangent1End: CGPoint(x: 21, y: 5), tangent2End: CGPoint(x: 21, y: 19), radius: 4)
+    path.addArc(tangent1End: CGPoint(x: 21, y: 19), tangent2End: CGPoint(x: 3, y: 19), radius: 3.5)
+    path.addLine(to: CGPoint(x: 14, y: 19))
+    path.move(to: CGPoint(x: 3, y: 12.5))
+    path.addCurve(to: CGPoint(x: 9.5, y: 19), control1: CGPoint(x: 6.59, y: 12.5), control2: CGPoint(x: 9.5, y: 15.41))
+    path.move(to: CGPoint(x: 3, y: 16.5))
+    path.addCurve(to: CGPoint(x: 5.5, y: 19), control1: CGPoint(x: 4.381, y: 16.5), control2: CGPoint(x: 5.5, y: 17.619))
+    var flip = CGAffineTransform(a: u, b: 0, c: 0, d: -u, tx: center.x - 12 * u, ty: center.y + 12 * u)
+    let stroke = path.copy(strokingWithWidth: 2.4, lineCap: .round, lineJoin: .round, miterLimit: 10)
+    guard let mark = stroke.copy(using: &flip), let context = NSGraphicsContext.current?.cgContext else { return }
+
+    // A soft glow under the mark lifts it off the tile
+    context.saveGState()
+    context.setShadow(offset: CGSize(width: 0, height: -0.15 * u), blur: 0.5 * u, color: color(0x000000, 0.3).cgColor)
+    context.addPath(mark)
+    context.setFillColor(color(0x15171C).cgColor)
+    context.fillPath()
+    context.restoreGState()
+
+    context.saveGState()
+    context.addPath(mark)
+    context.clip()
+    let colors = [color(0x7FD3FF).cgColor, color(0x3DDC84, 0.62).cgColor] as CFArray
+    let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colors, locations: [0, 1])!
+    context.drawLinearGradient(gradient, start: CGPoint(x: 0, y: center.y + 8.2 * u),
+                               end: CGPoint(x: 0, y: center.y - 8.2 * u),
+                               options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+    context.restoreGState()
+}
+
 func draw(_ size: CGFloat) -> NSBitmapImageRep {
     let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size), pixelsHigh: Int(size), bitsPerSample: 8,
                                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
@@ -67,7 +106,9 @@ func draw(_ size: CGFloat) -> NSBitmapImageRep {
     NSGraphicsContext.restoreGraphicsState()
     NSGradient(starting: color(0x343946), ending: color(0x101216))!.draw(in: squircle, angle: -90)
 
-    if args[1] == "pair" {
+    if args[1] == "cast" {
+        drawCast(center: NSPoint(x: 512 * s, y: 512 * s), unit: 30 * s)
+    } else if args[1] == "pair" {
         // A clear gap between the phones, so they read as two at 16 px
         drawPhone(center: NSPoint(x: 512 * s - 150 * s, y: 512 * s), scale: 0.54 * s, android: true)
         drawPhone(center: NSPoint(x: 512 * s + 150 * s, y: 512 * s), scale: 0.54 * s, android: false)
