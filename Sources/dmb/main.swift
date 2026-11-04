@@ -11,6 +11,9 @@ dmb: mirror a USB-connected iPhone in a QuickTime-style window
                                closes it, for apps that track it (awb)
   dmb devices --serial SERIAL  show this Android phone beside the iPhone in one
               [--udid UDID]    Twin window; --wait as for mirror
+  dmb pane android|iphone show|hide --udid UDID
+                               show or hide one phone of the Twin pair showing
+                               that iPhone; hiding both closes the window
   dmb --version
 """
 
@@ -163,12 +166,21 @@ func mirror(_ args: [String]) {
     print("Mirroring \(device.name)")
 }
 
+func pane(_ args: [String]) {
+    guard args.count >= 2, let phone = PaneRequest.Phone(rawValue: args[0]), ["show", "hide"].contains(args[1]),
+          let index = args.firstIndex(of: "--udid"), index + 1 < args.count else {
+        fail("usage: dmb pane android|iphone show|hide --udid UDID")
+    }
+    PaneRequest(pane: phone, visible: args[1] == "show").post(udid: args[index + 1])
+}
+
 var args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "status", "list": status(json: args.contains("--json"))
 case "mirror": mirror(Array(args.dropFirst()))
 case "android-probe": androidProbe(Array(args.dropFirst()))
 case "devices": devices(Array(args.dropFirst()))
+case "pane": pane(Array(args.dropFirst()))
 case "iphone-probe": iphoneProbe(Array(args.dropFirst()))
 case "--version", "-V": print("dmb 0.1.0")
 case nil, "-h", "--help", "help": print(usage)

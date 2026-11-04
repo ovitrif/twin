@@ -72,6 +72,9 @@ private final class PairView: NSView {
     var iphoneAspect: CGFloat = 1260.0 / 2736
     var gap: CGFloat = 12
     var cornerRatio: CGFloat = 0.14
+    /// A phone hidden from the pair (`dmb pane`) leaves the window to the other
+    var showsAndroid = true
+    var showsIPhone = true
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -84,21 +87,30 @@ private final class PairView: NSView {
 
     /// The window width for this height
     func width(forHeight height: CGFloat) -> CGFloat {
-        (height * (androidAspect + iphoneAspect) + gap).rounded()
+        (height * aspects + gaps).rounded()
     }
+
+    private var aspects: CGFloat {
+        (showsAndroid ? androidAspect : 0) + (showsIPhone ? iphoneAspect : 0)
+    }
+
+    private var gaps: CGFloat { showsAndroid && showsIPhone ? gap : 0 }
 
     override func layout() {
         super.layout()
         // Full screen leaves room around the pair; fit and center it
         var height = bounds.height
         if width(forHeight: height) > bounds.width {
-            height = (bounds.width - gap) / (androidAspect + iphoneAspect)
+            height = (bounds.width - gaps) / aspects
         }
-        let a = (height * androidAspect).rounded(), i = (height * iphoneAspect).rounded()
-        var x = ((bounds.width - (a + gap + i)) / 2).rounded()
+        let a = showsAndroid ? (height * androidAspect).rounded() : 0
+        let i = showsIPhone ? (height * iphoneAspect).rounded() : 0
+        var x = ((bounds.width - (a + gaps + i)) / 2).rounded()
         let y = ((bounds.height - height) / 2).rounded()
+        android.isHidden = !showsAndroid
+        iphone.isHidden = !showsIPhone
         android.frame = NSRect(x: x, y: y, width: a, height: height)
-        x += a + gap
+        x += a + gaps
         iphone.frame = NSRect(x: x, y: y, width: i, height: height)
         let fullScreen = window?.styleMask.contains(.fullScreen) == true
         for pane in [android, iphone] {
@@ -154,8 +166,14 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         styler = WindowStyler(window: window, title: window.title, cornerRatio: pair.cornerRatio)
         styler.panes = { [weak self] in
             guard let self else { return [] }
-            return [Pane(frame: self.pair.android.frame, title: self.options.androidTitle),
-                    Pane(frame: self.pair.iphone.frame, title: self.options.iphoneTitle)]
+            var panes: [Pane] = []
+            if self.pair.showsAndroid {
+                panes.append(Pane(frame: self.pair.android.frame, title: self.options.androidTitle))
+            }
+            if self.pair.showsIPhone {
+                panes.append(Pane(frame: self.pair.iphone.frame, title: self.options.iphoneTitle))
+            }
+            return panes
         }
         for view in [pair.android, pair.iphone] { view.touchPointer = options.cursor != "system" }
         window.makeKeyAndOrderFront(nil)
@@ -166,6 +184,26 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
 
         startAndroid()
         startIPhone()
+        listenForPanes()
+    }
+
+    /// `dmb pane` hides or shows one phone of this pair, so awb can stop or
+    /// start one side without closing the other
+    private func listenForPanes() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: PaneRequest.name, object: options.udid ?? options.iphoneReplay, queue: .main
+        ) { [weak self] note in
+            guard let self, let request = PaneRequest(note.userInfo) else { return }
+            switch request.pane {
+            case .android: self.pair.showsAndroid = request.visible
+            case .iphone: self.pair.showsIPhone = request.visible
+            }
+            if !self.pair.showsAndroid && !self.pair.showsIPhone {
+                NSApp.terminate(nil)
+                return
+            }
+            self.fitWindow()
+        }
     }
 
     private var serverPath: String? {
@@ -322,3 +360,4 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         hid?.stop()
     }
 }
+
