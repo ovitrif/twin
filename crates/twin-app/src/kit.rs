@@ -142,6 +142,8 @@ pub enum Glyph {
     Android,
     Show,
     Refresh,
+    /// A window with a sidebar: Open as window
+    Window,
     /// Into the corner of a window: back to the menu bar
     Back,
 }
@@ -257,6 +259,15 @@ pub fn paint_glyph(painter: &Painter, rect: Rect, glyph: Glyph, color: Color32) 
             polyline(&bottom, 2.0);
             polyline(&[at(21.0, 3.0), at(21.0, 8.0), at(16.0, 8.0)], 2.0);
             polyline(&[at(3.0, 21.0), at(3.0, 16.0), at(8.0, 16.0)], 2.0);
+        }
+        Glyph::Window => {
+            painter.rect_stroke(
+                Rect::from_min_max(at(3.0, 4.5), at(21.0, 19.5)),
+                2.5 * unit,
+                line(2.0),
+                StrokeKind::Middle,
+            );
+            polyline(&[at(9.0, 4.5), at(9.0, 19.5)], 2.0);
         }
         Glyph::Back => {
             polyline(&[at(10.0, 20.0), at(4.0, 20.0), at(4.0, 14.0)], 2.0);

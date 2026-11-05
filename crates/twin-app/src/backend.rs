@@ -943,15 +943,22 @@ pub fn set_pair_pane(shared: &Arc<Mutex<Shared>>, index: usize, visible: bool) {
         return;
     }
     let udid = pair.udid.clone();
+    let before = pair.shown;
+    // Shown at once; Twin Mirror is told off the UI thread, so a mirror
+    // that hangs can't freeze the popover, and a failure puts it back
+    pair.shown = shown;
+    drop(state);
     let pane = if index == 0 { "android" } else { "iphone" };
-    match Dmb::resolve().and_then(|dmb| dmb.set_pane(&udid, pane, visible)) {
-        Ok(()) => {
-            if let Some(pair) = state.pair.as_mut() {
-                pair.shown = shown;
+    let shared = shared.clone();
+    thread::spawn(move || {
+        if let Err(error) = Dmb::resolve().and_then(|dmb| dmb.set_pane(&udid, pane, visible)) {
+            let mut state = shared.lock().unwrap();
+            if let Some(pair) = state.pair.as_mut().filter(|pair| pair.udid == udid) {
+                pair.shown = before;
             }
+            state.log(format!("Twin pane failed: {error:#}"));
         }
-        Err(error) => state.log(format!("Twin pane failed: {error:#}")),
-    }
+    });
 }
 
 pub fn start_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String) {

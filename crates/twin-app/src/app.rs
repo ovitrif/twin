@@ -464,6 +464,8 @@ impl App {
         if !self.visible || self.is_disappearing() {
             return;
         }
+        // A question left open doesn't wait for the next open
+        self.pending_avd_delete = None;
 
         self.pending_show = false;
         self.animations.popover = Some(PopoverTransition {
@@ -550,6 +552,7 @@ impl App {
     /// Opens Twin as a normal window; the popover hides until it closes
     fn detach(&mut self, ctx: &Context) {
         self.detached = true;
+        self.pending_avd_delete = None;
         self.settings.detached = true;
         self.save_settings();
         if !self.headless {
@@ -567,6 +570,7 @@ impl App {
     /// `show` asks
     fn attach(&mut self, ctx: &Context, show: bool) {
         self.detached = false;
+        self.pending_avd_delete = None;
         self.settings.detached = false;
         self.save_settings();
         if !self.headless {
@@ -2671,7 +2675,7 @@ impl App {
                     egui::UiBuilder::new()
                         .max_rect(footer)
                         .layout(Layout::right_to_left(Align::Center)),
-                    |ui| kit::link_button(ui, kit::Glyph::Show, "Open as window").clicked(),
+                    |ui| kit::link_button(ui, kit::Glyph::Window, "Open as window").clicked(),
                 )
                 .inner;
             if clicked {
@@ -2898,7 +2902,7 @@ impl App {
                     empty_row(
                         ui,
                         "No phones connected",
-                        "Plug one in, or pair one over Wi-Fi in Pair",
+                        "Plug one in, or pair one over Wi-Fi with a QR code",
                     );
                 }
             });
@@ -3201,6 +3205,19 @@ impl App {
                 });
             });
 
+            ui.add_space(8.0);
+            // Indented like the headings
+            ui.horizontal(|ui| {
+                ui.add_space(4.0);
+                ui.add(
+                    Label::new(regular(
+                        "Changes apply to the mirrors you open next.",
+                        12.0,
+                        theme::heading(),
+                    ))
+                    .selectable(false),
+                );
+            });
             ui.add_space(16.0);
             kit::heading(ui, "App", theme::heading());
             kit::card(ui, |ui| {
