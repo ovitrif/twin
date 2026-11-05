@@ -1411,6 +1411,7 @@ enum Mark {
         brand: kit::Brand,
         size: f32,
     },
+    Glyph(kit::Glyph),
 }
 
 struct PhoneRow<'a> {
@@ -1514,16 +1515,11 @@ const APPLE_TILE: Mark = Mark::Apple {
     size: 21.0,
     line: 3.3 * 18.0 / 24.0,
 };
-/// Android's robot for an Android phone that is not a Pixel
-const ANDROID_TILE: Mark = Mark::Brand {
-    brand: kit::Brand::Android,
-    size: 18.0,
-};
-/// Emulators and simulators in Virtual: the Android robot and iOS
-const ANDROID_ROW: Mark = Mark::Brand {
-    brand: kit::Brand::Android,
-    size: kit::ICON,
-};
+/// Android's head, outlined, for an Android phone that is not a Pixel and
+/// for emulators
+const ANDROID_TILE: Mark = Mark::Glyph(kit::Glyph::Android);
+const ANDROID_ROW: Mark = Mark::Glyph(kit::Glyph::Android);
+/// Simulators in Virtual
 const IOS_ROW: Mark = Mark::Brand {
     brand: kit::Brand::Ios,
     size: kit::ICON,
@@ -1539,6 +1535,10 @@ fn paint_mark(painter: &egui::Painter, rect: Rect, mark: &Mark, ink: Color32) {
             let square = Rect::from_center_size(rect.center(), vec2(*size, *size));
             let units = line * 24.0 / size;
             kit::paint_brand(painter, square, kit::Brand::Apple, Some(units), ink);
+        }
+        Mark::Glyph(glyph) => {
+            let square = Rect::from_center_size(rect.center(), vec2(kit::ICON, kit::ICON));
+            kit::paint_glyph(painter, square, *glyph, ink);
         }
         Mark::Brand { brand, size } => {
             let square = Rect::from_center_size(rect.center(), vec2(*size, *size));
