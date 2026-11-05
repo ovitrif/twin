@@ -576,6 +576,7 @@ impl App {
 
     fn focus_window(&self, ctx: &Context) {
         set_dock_presence(true);
+        ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(ViewportCommand::Focus);
     }
@@ -790,7 +791,7 @@ impl App {
         let painted = ctx
             .input(|input| input.viewport().visible())
             .unwrap_or(true);
-        if self.visible
+        if (self.visible || self.detached)
             && painted
             && let Some(appearance) = self.pending_egui_theme.take()
         {
@@ -1178,15 +1179,16 @@ fn paint_window_surface(painter: &egui::Painter, rect: Rect, day_weight: f32, gr
         }
         painter.add(egui::Shape::mesh(mesh));
     };
-    let night_top = Color32::from_white_alpha(0x40);
+    // The popover shell's glints (`glyph::shell_style`)
+    let night_top = Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 0x57);
     let day_top = Color32::from_rgba_unmultiplied(0x1B, 0x22, 0x3A, 0x10);
     glint(
         rect.top(),
         0.18,
         night_top.lerp_to_gamma(day_top, day_weight),
     );
-    let night_bottom = Color32::from_rgba_unmultiplied(0xE1, 0xE6, 0xF5, 0x90);
-    let day_bottom = Color32::from_rgba_unmultiplied(0x6E, 0x8C, 0xD8, 0x70);
+    let night_bottom = Color32::from_rgba_unmultiplied(0xE1, 0xE6, 0xF5, 0xBF);
+    let day_bottom = Color32::from_rgba_unmultiplied(0x6E, 0x8C, 0xD8, 0x8C);
     glint(
         rect.bottom() - 1.0,
         0.12,
@@ -1458,17 +1460,15 @@ fn android_phone_row(
     } else {
         format!("Android {}", device.android_version)
     };
+    // Why the button is off: adb's word for the phone's state
+    let waiting = format!("The phone is {}", device.state);
     phone_row(
         ui,
         PhoneRow {
             key: &device.mirror_key,
             mark: Mark::Letter("G"),
             name: &device.name,
-            subtitle: if device.ready {
-                &subtitle
-            } else {
-                &device.state
-            },
+            subtitle: &subtitle,
             connection: if device.wireless {
                 kit::Glyph::Wifi
             } else {
@@ -1476,7 +1476,11 @@ fn android_phone_row(
             },
             mirroring,
             look: mirror_look(mirroring, (device.ready && mirror_ok) || in_pair),
-            tooltip: mirror_tooltip(mirroring, in_pair),
+            tooltip: if device.ready || mirroring {
+                mirror_tooltip(mirroring, in_pair)
+            } else {
+                &waiting
+            },
         },
     )
 }
@@ -2420,6 +2424,18 @@ impl App {
 
         let sidebar = Rect::from_min_size(rect.min, vec2(SIDEBAR_WIDTH, rect.height()));
         let painter = ui.painter();
+        // The drive server has no title bar: draw where its traffic lights
+        // sit, so captures look like the window
+        if self.headless {
+            for (index, color) in [0xFF5F57, 0xFEBC2E, 0x28C840].into_iter().enumerate() {
+                let [_, r, g, b] = (color as u32).to_be_bytes();
+                painter.circle_filled(
+                    rect.min + vec2(20.0 + 20.0 * index as f32, 22.0),
+                    6.0,
+                    Color32::from_rgb(r, g, b),
+                );
+            }
+        }
         painter.rect_filled(sidebar, 0.0, theme::sidebar_fill());
         painter.rect_filled(
             Rect::from_min_max(
@@ -2833,7 +2849,7 @@ impl App {
                         kit::row_divider(ui);
                     }
                     let deleting = deleting_avds.contains(&avd.name);
-                    let stopping = stopping.contains(&avd.name);
+                    let stopping = stopping.contains_key(&avd.name);
                     // Listed by adb in any state (booting, offline): Stop
                     // works through its console either way
                     let running = avd.device.is_some();
@@ -2888,7 +2904,7 @@ impl App {
                     if !std::mem::take(&mut first) {
                         kit::row_divider(ui);
                     }
-                    let stopping = stopping.contains(&sim.udid);
+                    let stopping = stopping.contains_key(&sim.udid);
                     let row = VirtualRow {
                         key: &sim.udid,
                         mark: Mark::Font(ph::APPLE_LOGO),
@@ -2898,7 +2914,7 @@ impl App {
                             (
                                 kit::Face::Glyph(kit::Glyph::Show),
                                 kit::ButtonLook::Normal,
-                                "Show in Simulator",
+                                "Show Simulator",
                             ),
                             if stopping {
                                 (
@@ -2965,7 +2981,7 @@ impl App {
                     ui.add_space(20.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
-                        if text_button(ui, "Delete", theme::red(), Color32::WHITE).clicked() {
+                        if text_button(ui, "Delete", theme::red(), theme::red_ink()).clicked() {
                             backend::delete_avd(self.shared.clone(), ctx.clone(), name.clone());
                             close = true;
                         }
@@ -3140,7 +3156,7 @@ impl App {
                 );
                 tool_row(
                     ui,
-                    "Emulators",
+                    "Android emulator",
                     "Android Studio",
                     true,
                     emulator,
@@ -3306,6 +3322,9 @@ fn chrome_scroll(
             .max_rect(viewport_rect)
             .layout(Layout::top_down(Align::Min)),
     );
+    // Content stops at the viewport edge, where the fade ends, not the few
+    // points past it egui allows by default
+    area_ui.visuals_mut().clip_rect_margin = 0.0;
     let chrome_id = area_ui.id().with("chrome");
     let mut chrome: ScrollChrome = ui
         .ctx()

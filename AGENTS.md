@@ -33,15 +33,15 @@ menu bar app is not left stale:
 - Replace the running instance (overwriting the binary does not update an already-running process): quit it (`osascript -e 'quit app "Twin"'`), then relaunch with `open -g /Applications/Twin.app`. Quitting closes open mirrors.
 - Verify: `/Users/ovitrif/.local/bin/twin --version`.
 
-## Spacing
-- Space the menu bar app's layouts in steps of one unit, `SPACE` (8 pt,
-  `crates/twin-app/src/app.rs`): ½, 1, 1.5, 2, 2.5 and 3 times it, never other
-  values. A heading to its content and rows within a group: 1×; a field's label
-  to the field: ½×; between checkbox columns: 2.5×; around a divider between
-  sections: 2× on each side. Rows that only list (Setup) stay compact: 4× tall.
-- Every section heading, in the Devices tab and in Settings alike, is
-  `section_header` (semibold 11 pt, the faint label color), never a
-  one-off label style.
+## Layout and spacing
+- The menu bar app follows the Twin redesign (popover 420 pt wide, grouped cards):
+  building blocks live in `crates/twin-app/src/kit.rs` (cards, 36 pt icon buttons with
+  20 pt icons, toggles, the segmented control, the device glyphs drawn as vectors).
+- Space it on the kit's grid: 20 pt popover padding, 16 pt between sections and
+  between phone rows, 8 pt from a heading to its card; card rows inset 16 pt left and
+  12 pt right; list rows 52 pt, setting rows 44 pt.
+- Section headings ("Physical", "Virtual", the Settings groups) are `kit::heading`,
+  never a one-off label style. Rows carry no status text: a button's look says it.
 
 ## Verify the app UI
 Check every UI change yourself before calling it done, without the user's
@@ -62,17 +62,26 @@ screen, mouse or keyboard: drive the real popover headlessly.
   phase. Commands: `state`, `click X Y`, `hover X Y`, `drag X1 Y1 X2 Y2`, `leave`, `scroll DY`,
   `key NAME` (egui names, `shift+Tab`), `wait MS`, `shot PATH`,
   `record DIR` / `stop` (every frame plus `times.txt`), `theme auto|day|night`,
-  `gradients on|off`, `quit`. Coordinates are window points: 380 wide, 0 at
-  the top of the beak; the header buttons sit at y 36, x 287 (Refresh), 319
-  (Settings) and 351 (Pair). The full reference is in `crates/twin-app/src/drive.rs`.
+  `gradients on|off`, `window on|off` (the detached window, 860 × 600, drawn in
+  the same frame), `quit`. Coordinates are window points: 420 wide, 0 at the top
+  of the beak; Refresh sits at (382, 48) and the tabs at y 97, x 68 (Devices),
+  162 (Pair), 257 (Logs) and 351 (Settings); in the window the sidebar pages sit
+  at x 100, y 110, 150, 190 and 230. Send `leave` before a `shot` meant for
+  sharing, so no pointer is drawn. The full reference is in
+  `crates/twin-app/src/drive.rs`.
 - The drive server isolates settings only: it uses a throwaway config folder
   (seed it with `TWIN_DRIVE_CONFIG=<config.toml>`) and never touches the login
   item. Everything else is real: adb, the emulator, `avdmanager` and scrcpy,
   so confirming a delete removes a real AVD and Play starts a real emulator or
   mirror. Run it with demo AVDs (below) unless real ones are the point, and
-  before clicking any Play put stubs for `scrcpy` (passing `--version` and
-  `--help` through to the real one) and `dmb` first on `PATH`, so no mirror
-  opens on the user's screen.
+  before clicking any Play put a stub for `scrcpy` (passing `--version` and
+  `--help` through to the real one) first on `PATH` and point `TWIN_DMB` at a
+  `dmb` stub (Twin finds the installed app's dmb before one on `PATH`) that
+  answers `status --json` with `{"devices": []}`, so no mirror opens on the
+  user's screen.
+- Demo devices (drive builds only): `TWIN_DEMO_DEVICES=1` lists a Wi-Fi Pixel,
+  a USB iPhone, a running emulator (an AVD named `Medium_Phone`) and a
+  simulator, for captures without real phones.
 - Light and dark mode: `theme day` / `theme night` / `theme auto` over the
   socket. In the running app, use the Appearance control in Settings or set
   `theme = "day"`, `"night"` or `"auto"` in `~/.config/twin/config.toml`
@@ -89,10 +98,11 @@ screen, mouse or keyboard: drive the real popover headlessly.
 - Cover every screen and state a change can reach: Devices (checking, empty,
   phones and emulators, a scrolled list with its edge fades and scrollbar),
   Logs, Settings, Pair (QR, connecting, failed, paired), the delete-emulator
-  dialog, Tab focus highlights, ← / → page navigation, and the slide of every
-  transition. Moving forward (Main → Settings → Pair) slides left, moving back
-  slides right, and both pages stay fully drawn throughout; `record` and read
-  the frames to confirm.
+  dialog, Tab focus highlights, ← / → page navigation, the detached window
+  (`window on`), and the slide of every transition. Moving right in the tabs
+  (Devices → Pair → Logs → Settings) slides left, moving left slides right, both
+  pages stay fully drawn throughout and the tab's pill slides with them;
+  `record` and read the frames to confirm.
 
 ## Verify the mirror windows
 - Check Twin Mirror changes without the user's screen: run it headless in the

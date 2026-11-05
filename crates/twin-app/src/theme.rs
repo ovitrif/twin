@@ -56,6 +56,8 @@ struct Palette {
     sidebar_fill: Color32,
     nav_on: Color32,
     dialog_fill: Color32,
+    ink_disabled: Color32,
+    red_ink: Color32,
 }
 
 impl Palette {
@@ -97,6 +99,8 @@ impl Palette {
             sidebar_fill: mix(from.sidebar_fill, to.sidebar_fill),
             nav_on: mix(from.nav_on, to.nav_on),
             dialog_fill: mix(from.dialog_fill, to.dialog_fill),
+            red_ink: mix(from.red_ink, to.red_ink),
+            ink_disabled: mix(from.ink_disabled, to.ink_disabled),
         }
     }
 }
@@ -150,6 +154,8 @@ const NIGHT: Palette = Palette {
     sidebar_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x38),
     nav_on: Color32::from_rgba_premultiplied(0x14, 0x14, 0x14, 0x14),
     dialog_fill: Color32::from_rgb(0x26, 0x26, 0x29),
+    ink_disabled: Color32::from_rgb(0x55, 0x57, 0x5C),
+    red_ink: Color32::from_rgb(0x2A, 0x08, 0x08),
 };
 
 const DAY: Palette = Palette {
@@ -188,6 +194,8 @@ const DAY: Palette = Palette {
     sidebar_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x08),
     nav_on: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x0F),
     dialog_fill: Color32::WHITE,
+    ink_disabled: Color32::from_rgb(0xB6, 0xBA, 0xC2),
+    red_ink: Color32::WHITE,
 };
 
 static ACTIVE_PALETTE: RwLock<Palette> = RwLock::new(NIGHT);
@@ -258,6 +266,8 @@ color_token!(field_stroke, field_stroke);
 color_token!(sidebar_fill, sidebar_fill);
 color_token!(nav_on, nav_on);
 color_token!(dialog_fill, dialog_fill);
+color_token!(red_ink, red_ink);
+color_token!(ink_disabled, ink_disabled);
 
 pub const MEDIUM: &str = "inter-medium";
 pub const SEMIBOLD: &str = "inter-semibold";

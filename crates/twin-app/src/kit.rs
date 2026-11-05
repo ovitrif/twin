@@ -217,9 +217,9 @@ pub fn paint_glyph(painter: &Painter, rect: Rect, glyph: Glyph, color: Color32) 
                 2.0 * std::f32::consts::PI,
             );
             head.push(at(4.0, 17.0));
-            polyline(&head, 1.8);
-            polyline(&[at(7.0, 7.0), at(9.0, 10.0)], 1.8);
-            polyline(&[at(17.0, 7.0), at(15.0, 10.0)], 1.8);
+            polyline(&head, 2.0);
+            polyline(&[at(7.0, 7.0), at(9.0, 10.0)], 2.0);
+            polyline(&[at(17.0, 7.0), at(15.0, 10.0)], 2.0);
         }
         Glyph::Show => {
             // A window with an arrow out of its corner
@@ -276,13 +276,17 @@ pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -
         ButtonLook::Active => (theme::green_fill(), theme::green()),
         _ => (theme::button_fill(), theme::button_ink()),
     };
-    let alpha = if look == ButtonLook::Disabled {
-        0.35
-    } else {
-        1.0
-    };
-    painter.rect_filled(rect, 10.0, fill.gamma_multiply(alpha));
-    if look != ButtonLook::Disabled {
+    let disabled = look == ButtonLook::Disabled;
+    painter.rect_filled(
+        rect,
+        10.0,
+        if disabled {
+            fill.gamma_multiply(0.35)
+        } else {
+            fill
+        },
+    );
+    if !matches!(look, ButtonLook::Disabled | ButtonLook::Busy) {
         painter.rect_filled(rect, 10.0, hover);
     }
     let icon_rect = Rect::from_center_size(rect.center(), vec2(ICON, ICON));
@@ -292,7 +296,9 @@ pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -
             .color(theme::icon_muted())
             .paint_at(ui, Rect::from_center_size(rect.center(), vec2(14.0, 14.0)));
     } else {
-        let ink = ink.gamma_multiply(alpha);
+        // An opaque dim ink: a translucent one would show darker dots where
+        // the glyph's strokes overlap
+        let ink = if disabled { theme::ink_disabled() } else { ink };
         let Face::Glyph(glyph) = face;
         paint_glyph(painter, icon_rect, glyph, ink);
     }

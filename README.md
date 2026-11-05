@@ -51,18 +51,22 @@ What Twin needs, which its Settings check under Setup:
 twin app
 ```
 
-Twin's icon appears in the menu bar. Left-click toggles the popover: a Devices tab
-listing your phones (with one-click mirroring, side by side when Settings say so) and configured emulators, a Logs tab,
-Settings, and QR pairing for new phones. Refresh, Settings, and Pair stay in the top-right
-corner on every page. Each configured AVD stays listed while stopped, starting, or running.
-Click the play icon to open its native Android Emulator window, or the trash icon to delete
-a stopped AVD and its saved data after confirmation. Both actions are disabled while the
-emulator is starting or running. Right-click (or control-click) offers Show, Pair, Refresh,
-and Quit.
+Twin's icon appears in the menu bar. Left-click toggles the popover, with four pages
+under its title: Devices, Pair, Logs and Settings.
 
-The popover works from the keyboard: Tab moves between controls, Return or Space activates
-the focused one, Escape closes the popover, and ← / → step back and forward through the
-pages you visited, then through Main, Settings, and Pair in order.
+- **Devices** lists your phones under Physical, each with its Android or iOS version,
+  how it is connected (Wi-Fi or USB) and a play button; with Side by side on, the first
+  Android phone and iPhone share one more button that opens both in one window. Under
+  Virtual are your Android emulators, to start, stop or delete (a stopped one, after
+  confirmation), and the iOS simulators that are running, to show or shut down.
+- **Pair** shows a QR code to pair an Android phone over Wi-Fi.
+- **Open as window**, under the list, turns the popover into a normal window with a
+  sidebar, in the Dock and the app switcher; Back to menu bar, or closing it, folds it
+  away again. Twin opens the way you left it.
+
+Right-click (or control-click) the icon for Show, Pair, Refresh, and Quit. The popover works
+from the keyboard: Tab moves between controls, Return or Space activates the focused one,
+Escape closes the popover, and ← / → step through the pages in order.
 
 Twin.app holds the menu bar app, `Twin Mirror.app` (every mirror window: an Android phone,
 an iPhone, or both side by side) and Google's `adb` under `Contents/Helpers`. Twin uses your

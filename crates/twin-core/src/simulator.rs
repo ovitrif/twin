@@ -72,13 +72,16 @@ impl Simctl {
 
 /// Brings Simulator.app forward on `udid`'s window
 pub fn show(udid: &str) -> Result<()> {
-    Command::new("/usr/bin/open")
+    let status = Command::new("/usr/bin/open")
         .args(["-a", "Simulator", "--args", "-CurrentDeviceUDID", udid])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .context("opening Simulator")?;
+    if !status.success() {
+        bail!("open -a Simulator failed (exit {status})");
+    }
     Ok(())
 }
 

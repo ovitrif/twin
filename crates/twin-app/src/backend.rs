@@ -24,6 +24,7 @@ use twin_core::wifi;
 use crate::mock;
 
 const PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
+const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 static ADB_WORK_LOCK: Mutex<()> = Mutex::new(());
 
 pub use twin_core::pairing_flow::PairingProgress;
@@ -147,7 +148,7 @@ pub struct Shared {
     pub starting_avds: HashSet<String>,
     pub deleting_avds: HashSet<String>,
     /// Emulators (by AVD name) and simulators (by udid) shutting down
-    pub stopping: HashSet<String>,
+    pub stopping: HashMap<String, Instant>,
     /// Phones "paired" by the mock pairing flow, listed with the real ones.
     pub mock_devices: Vec<DeviceInfo>,
     /// Bumped when an AVD is deleted, so a status refresh that read the AVD
@@ -248,12 +249,14 @@ pub fn refresh_status(shared: Arc<Mutex<Shared>>, ctx: Context) {
             add_demo_devices(&mut snapshot);
         }
         // A shutdown is done once its emulator or simulator is gone
-        state.stopping.retain(|key| {
-            snapshot
+        state.stopping.retain(|key, since| {
+            let present = snapshot
                 .avds
                 .iter()
                 .any(|avd| &avd.name == key && avd.device.is_some())
-                || snapshot.simulators.iter().any(|sim| &sim.udid == key)
+                || snapshot.simulators.iter().any(|sim| &sim.udid == key);
+            // One that outlives its shutdown gets its Stop button back
+            present && since.elapsed() < STOP_TIMEOUT
         });
         let device_connected = snapshot.devices.iter().any(|device| device.ready);
 
@@ -413,6 +416,7 @@ fn collect_snapshot() -> Snapshot {
         .filter(|_| adb_info.available)
         .and_then(|adb| {
             let devices = adb.devices().ok()?;
+            forget_android_versions(&devices);
             let running_avds = devices
                 .iter()
                 .filter(|device| device.serial.starts_with("emulator-"))
@@ -564,18 +568,33 @@ fn avd_rows(
 /// A phone's Android release, asked once per serial: it cannot change while
 /// the phone stays connected
 fn android_version(adb: &Adb, serial: &str) -> String {
-    static VERSIONS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
-    let mut versions = VERSIONS.lock().unwrap();
-    let versions = versions.get_or_insert_with(HashMap::new);
-    if let Some(version) = versions.get(serial) {
-        return version.clone();
+    let cached = ANDROID_VERSIONS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .get(serial)
+        .cloned();
+    if let Some(version) = cached {
+        return version;
     }
-    match adb.android_version(serial) {
-        Ok(version) => {
-            versions.insert(serial.to_string(), version.clone());
-            version
-        }
-        Err(_) => String::new(),
+    let Ok(version) = adb.android_version(serial) else {
+        return String::new();
+    };
+    ANDROID_VERSIONS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(serial.to_string(), version.clone());
+    version
+}
+
+/// Android versions by serial, for the phones adb lists now; a phone that
+/// leaves is asked again when it returns, after an update say
+static ANDROID_VERSIONS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn forget_android_versions(listed: &[adb::AdbDevice]) {
+    if let Some(versions) = ANDROID_VERSIONS.lock().unwrap().as_mut() {
+        versions.retain(|serial, _| listed.iter().any(|device| &device.serial == serial));
     }
 }
 
@@ -598,7 +617,13 @@ fn xcode_simctl(xcode: &ToolInfo) -> Option<Simctl> {
 
 /// Shuts an emulator down
 pub fn stop_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String, serial: String) {
-    if !shared.lock().unwrap().stopping.insert(name.clone()) {
+    if shared
+        .lock()
+        .unwrap()
+        .stopping
+        .insert(name.clone(), Instant::now())
+        .is_some()
+    {
         return;
     }
     ctx.request_repaint();
@@ -629,7 +654,11 @@ pub fn stop_simulator(shared: Arc<Mutex<Shared>>, ctx: Context, sim: Simulator) 
         else {
             return;
         };
-        if !state.stopping.insert(sim.udid.clone()) {
+        if state
+            .stopping
+            .insert(sim.udid.clone(), Instant::now())
+            .is_some()
+        {
             return;
         }
         simctl
@@ -654,14 +683,18 @@ pub fn stop_simulator(shared: Arc<Mutex<Shared>>, ctx: Context, sim: Simulator) 
     });
 }
 
-/// Brings a simulator's window forward in Simulator.app
+/// Brings Simulator.app forward, off the UI thread
 pub fn show_simulator(shared: &Arc<Mutex<Shared>>, sim: &Simulator) {
-    if let Err(error) = simulator::show(&sim.udid) {
-        shared
-            .lock()
-            .unwrap()
-            .log(format!("Could not show {}: {error:#}", sim.name));
-    }
+    let shared = shared.clone();
+    let sim = sim.clone();
+    thread::spawn(move || {
+        if let Err(error) = simulator::show(&sim.udid) {
+            shared
+                .lock()
+                .unwrap()
+                .log(format!("Could not show {}: {error:#}", sim.name));
+        }
+    });
 }
 
 fn is_emulator(device: &adb::AdbDevice) -> bool {
