@@ -50,12 +50,13 @@ pub fn overlay(ui: &Ui, response: &Response) -> (Color32, f32) {
         response.is_pointer_button_down_on(),
         PRESS_TIME,
     );
-    (
-        theme::control_hover()
-            .gamma_multiply(hover)
-            .blend(theme::control_pressed().gamma_multiply(press)),
-        hover,
-    )
+    (overlay_color(hover, press), hover)
+}
+
+pub fn overlay_color(hover_progress: f32, press_progress: f32) -> Color32 {
+    theme::control_hover()
+        .gamma_multiply(hover_progress)
+        .blend(theme::control_pressed().gamma_multiply(press_progress))
 }
 
 /// A section heading over a card

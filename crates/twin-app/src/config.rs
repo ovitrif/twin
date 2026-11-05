@@ -37,6 +37,9 @@ pub struct Settings {
     pub theme: ThemeMode,
     /// Light the popover surface with gradients and glows; off draws it flat.
     pub gradients: bool,
+    /// Twin was last a normal window rather than the menu bar popover, so it
+    /// opens as one again
+    pub detached: bool,
 }
 
 impl Default for Settings {
@@ -56,6 +59,7 @@ impl Default for Settings {
             touch_pointer: true,
             theme: ThemeMode::Auto,
             gradients: true,
+            detached: false,
         }
     }
 }

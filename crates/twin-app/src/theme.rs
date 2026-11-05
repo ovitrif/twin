@@ -24,13 +24,11 @@ struct Palette {
     text_strong: Color32,
     text_bright: Color32,
     text_soft: Color32,
-    text_muted: Color32,
     text_faint: Color32,
     text_check: Color32,
     green: Color32,
     green_ink: Color32,
     red: Color32,
-    surface: Color32,
     input_focus_stroke: Color32,
     control_hover: Color32,
     control_pressed: Color32,
@@ -57,6 +55,7 @@ struct Palette {
     field_stroke: Color32,
     sidebar_fill: Color32,
     nav_on: Color32,
+    dialog_fill: Color32,
 }
 
 impl Palette {
@@ -66,13 +65,11 @@ impl Palette {
             text_strong: mix(from.text_strong, to.text_strong),
             text_bright: mix(from.text_bright, to.text_bright),
             text_soft: mix(from.text_soft, to.text_soft),
-            text_muted: mix(from.text_muted, to.text_muted),
             text_faint: mix(from.text_faint, to.text_faint),
             text_check: mix(from.text_check, to.text_check),
             green: mix(from.green, to.green),
             green_ink: mix(from.green_ink, to.green_ink),
             red: mix(from.red, to.red),
-            surface: mix(from.surface, to.surface),
             input_focus_stroke: mix(from.input_focus_stroke, to.input_focus_stroke),
             control_hover: mix(from.control_hover, to.control_hover),
             control_pressed: mix(from.control_pressed, to.control_pressed),
@@ -99,6 +96,7 @@ impl Palette {
             field_stroke: mix(from.field_stroke, to.field_stroke),
             sidebar_fill: mix(from.sidebar_fill, to.sidebar_fill),
             nav_on: mix(from.nav_on, to.nav_on),
+            dialog_fill: mix(from.dialog_fill, to.dialog_fill),
         }
     }
 }
@@ -120,13 +118,11 @@ const NIGHT: Palette = Palette {
     text_strong: Color32::from_rgb(0xF2, 0xF3, 0xF7),
     text_bright: Color32::from_rgb(0xEC, 0xEE, 0xF4),
     text_soft: Color32::from_rgb(0x83, 0x87, 0x91),
-    text_muted: Color32::from_rgb(0x90, 0x94, 0xA0),
     text_faint: Color32::from_rgb(0x70, 0x74, 0x7F),
     text_check: Color32::from_rgb(0xC9, 0xCC, 0xD6),
     green: Color32::from_rgb(0x3D, 0xDC, 0x84),
     green_ink: Color32::from_rgb(0x0A, 0x2A, 0x1B),
     red: Color32::from_rgb(0xF8, 0x71, 0x71),
-    surface: Color32::from_rgba_premultiplied(0x0D, 0x0D, 0x0D, 0x0D),
     input_focus_stroke: Color32::from_rgb(0x4D, 0x9F, 0xF5),
     control_hover: Color32::from_rgba_premultiplied(0x18, 0x18, 0x18, 0x18),
     control_pressed: Color32::from_rgba_premultiplied(0x25, 0x25, 0x25, 0x25),
@@ -153,19 +149,18 @@ const NIGHT: Palette = Palette {
     field_stroke: Color32::from_rgba_premultiplied(0x14, 0x14, 0x14, 0x14),
     sidebar_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x38),
     nav_on: Color32::from_rgba_premultiplied(0x14, 0x14, 0x14, 0x14),
+    dialog_fill: Color32::from_rgb(0x26, 0x26, 0x29),
 };
 
 const DAY: Palette = Palette {
     text_strong: Color32::from_rgb(0x17, 0x19, 0x23),
     text_bright: Color32::from_rgb(0x22, 0x24, 0x2E),
     text_soft: Color32::from_rgb(0x62, 0x68, 0x74),
-    text_muted: Color32::from_rgb(0x54, 0x5B, 0x68),
     text_faint: Color32::from_rgb(0x75, 0x7D, 0x8A),
     text_check: Color32::from_rgb(0x2F, 0x33, 0x3D),
     green: Color32::from_rgb(0x14, 0x84, 0x47),
     green_ink: Color32::WHITE,
     red: Color32::from_rgb(0xD6, 0x3A, 0x3A),
-    surface: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x08),
     input_focus_stroke: Color32::from_rgb(0x3E, 0x8F, 0xE8),
     control_hover: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x0C),
     control_pressed: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x18),
@@ -192,6 +187,7 @@ const DAY: Palette = Palette {
     field_stroke: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x1C),
     sidebar_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x08),
     nav_on: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x0F),
+    dialog_fill: Color32::WHITE,
 };
 
 static ACTIVE_PALETTE: RwLock<Palette> = RwLock::new(NIGHT);
@@ -230,13 +226,11 @@ macro_rules! color_token {
 color_token!(text_strong, text_strong);
 color_token!(text_bright, text_bright);
 color_token!(text_soft, text_soft);
-color_token!(text_muted, text_muted);
 color_token!(text_faint, text_faint);
 color_token!(text_check, text_check);
 color_token!(green, green);
 color_token!(green_ink, green_ink);
 color_token!(red, red);
-color_token!(surface, surface);
 color_token!(input_focus_stroke, input_focus_stroke);
 color_token!(control_hover, control_hover);
 color_token!(control_pressed, control_pressed);
@@ -263,6 +257,7 @@ color_token!(field_fill, field_fill);
 color_token!(field_stroke, field_stroke);
 color_token!(sidebar_fill, sidebar_fill);
 color_token!(nav_on, nav_on);
+color_token!(dialog_fill, dialog_fill);
 
 pub const MEDIUM: &str = "inter-medium";
 pub const SEMIBOLD: &str = "inter-semibold";

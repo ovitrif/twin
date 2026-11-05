@@ -45,8 +45,6 @@ const SCREEN_TOP_BLEED: f32 = 6.0;
 const QR_CARD_SIZE: f32 = 164.0;
 /// How long the Pair page shows a successful pairing before going back.
 const PAIRED_HOLD: Duration = Duration::from_millis(1100);
-const CONTROL_HOVER_TRANSITION: f32 = 0.14;
-const CONTROL_PRESS_TRANSITION: f32 = 0.07;
 /// How long after launch to keep forcing the window hidden, in case the
 /// platform surfaces it despite `with_visible(false)`.
 const STARTUP_HIDE: Duration = Duration::from_millis(800);
@@ -306,6 +304,13 @@ pub struct App {
     pending_page_step: Option<i8>,
     /// Shown as a normal window instead of the menu bar popover
     detached: bool,
+    /// Last run ended as a window: open it again once the app is up
+    reopen_detached: bool,
+    /// A window mode change for the next frame, which has the native window
+    pending_mode: Option<bool>,
+    /// Open the popover once the window has turned back into it
+    pending_attach_show: bool,
+    quitting: bool,
 }
 
 impl App {
@@ -375,6 +380,7 @@ impl App {
             backend::refresh_connection_state(shared.clone(), ctx.clone());
         }
 
+        let settings_detached = settings.detached && !headless;
         let width_text = settings.window_width.to_string();
         let height_text = settings.window_height.to_string();
         let gap_text = settings.gap.to_string();
@@ -412,6 +418,10 @@ impl App {
             shell,
             pending_page_step: None,
             detached: false,
+            reopen_detached: settings_detached,
+            pending_mode: None,
+            pending_attach_show: false,
+            quitting: false,
         })
     }
 
@@ -475,6 +485,7 @@ impl App {
     }
 
     fn quit(&mut self, ctx: &Context) {
+        self.quitting = true;
         backend::cancel_pairing(&self.shared);
         backend::stop_all_mirrors(&self.shared);
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
@@ -534,11 +545,13 @@ impl App {
     /// Opens Twin as a normal window; the popover hides until it closes
     fn detach(&mut self, ctx: &Context) {
         self.detached = true;
+        self.settings.detached = true;
+        self.save_settings();
         if !self.headless {
             self.visible = false;
             self.animations.popover = None;
             self.pending_show = false;
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            self.pending_mode = Some(true);
             self.show_item.set_text("Show Twin");
             set_dock_presence(true);
         }
@@ -549,10 +562,13 @@ impl App {
     /// `show` asks
     fn attach(&mut self, ctx: &Context, show: bool) {
         self.detached = false;
+        self.settings.detached = false;
+        self.save_settings();
         if !self.headless {
+            self.pending_mode = Some(false);
             set_dock_presence(false);
             if show {
-                self.show(ctx, self.menu_anchor());
+                self.pending_attach_show = true;
             }
         }
         ctx.request_repaint();
@@ -560,8 +576,41 @@ impl App {
 
     fn focus_window(&self, ctx: &Context) {
         set_dock_presence(true);
-        ctx.send_viewport_cmd_to(window_viewport_id(), ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd_to(window_viewport_id(), ViewportCommand::Focus);
+        ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+    }
+
+    /// Turns the one native window into the detached window or back into
+    /// the popover, once `detach` or `attach` asked for it
+    fn apply_window_mode(&mut self, ctx: &Context, frame: &eframe::Frame) {
+        let Some(detached) = self.pending_mode.take() else {
+            return;
+        };
+        set_native_window_mode(frame, detached);
+        if detached {
+            let size = WINDOW_SIZE;
+            let monitor = ctx.input(|input| input.viewport().monitor_size);
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(WINDOW_MIN_SIZE));
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
+            if let Some(monitor) = monitor {
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(
+                    ((monitor.x - size.x) / 2.0).max(0.0),
+                    ((monitor.y - size.y) / 3.0).max(24.0),
+                )));
+            }
+            set_native_window_opacity(frame, 1.0);
+            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(ViewportCommand::Focus);
+        } else {
+            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(egui::Vec2::ZERO));
+            ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
+                theme::WINDOW_WIDTH,
+                theme::WINDOW_FULL_HEIGHT,
+            )));
+        }
     }
 
     fn handle_events(&mut self, ctx: &Context) {
@@ -1052,10 +1101,6 @@ const SIDEBAR_WIDTH: f32 = 208.0;
 const NAV_ITEM: f32 = 36.0;
 const PHONE_ROW: f32 = 40.0;
 
-fn window_viewport_id() -> egui::ViewportId {
-    egui::ViewportId::from_hash_of("twin-window")
-}
-
 fn tab_label(screen: Screen) -> &'static str {
     match screen {
         Screen::Devices => "Devices",
@@ -1198,6 +1243,25 @@ fn put<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
         add,
     )
     .inner
+}
+
+/// A filled text button for a dialog
+fn text_button(ui: &mut Ui, label: &str, fill: Color32, ink: Color32) -> egui::Response {
+    let font = kit::font(13.0, theme::SEMIBOLD);
+    let width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), ink)
+        .size()
+        .x
+        .max(48.0)
+        + 28.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
+    let (hover, _) = kit::overlay(ui, &response);
+    ui.painter().rect_filled(rect, 9.0, fill);
+    ui.painter().rect_filled(rect, 9.0, hover);
+    ui.painter()
+        .text(rect.center(), egui::Align2::CENTER_CENTER, label, font, ink);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// The Side by side row over a pair: its name, and one button for both
@@ -1801,6 +1865,52 @@ fn set_native_window_opacity(_frame: &eframe::Frame, _opacity: f32) -> bool {
     false
 }
 
+/// The window's chrome: a titled, resizable window with the traffic lights
+/// over a full-size content view, or the popover's borderless panel
+#[cfg(target_os = "macos")]
+fn set_native_window_mode(frame: &eframe::Frame, detached: bool) {
+    use objc2_app_kit::{NSWindowStyleMask, NSWindowTitleVisibility};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = frame.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return;
+    };
+    let ns_view_ptr = handle.ns_view.as_ptr().cast::<objc2_app_kit::NSView>();
+    // SAFETY: as in `set_native_window_opacity`
+    let Some(ns_view) = (unsafe { ns_view_ptr.as_ref() }) else {
+        return;
+    };
+    let Some(window) = ns_view.window() else {
+        return;
+    };
+    // The popover's own mask, as winit made it, to return to
+    static POPOVER_MASK: Mutex<Option<NSWindowStyleMask>> = Mutex::new(None);
+    let mut popover_mask = POPOVER_MASK.lock().unwrap();
+    if detached {
+        popover_mask.get_or_insert(window.styleMask());
+        window.setStyleMask(
+            NSWindowStyleMask::Titled
+                | NSWindowStyleMask::Closable
+                | NSWindowStyleMask::Miniaturizable
+                | NSWindowStyleMask::Resizable
+                | NSWindowStyleMask::FullSizeContentView,
+        );
+        window.setTitlebarAppearsTransparent(true);
+        window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+    } else {
+        window.setStyleMask(popover_mask.unwrap_or(NSWindowStyleMask::Borderless));
+        window.setTitlebarAppearsTransparent(false);
+    }
+    window.setHasShadow(true);
+    window.invalidateShadow();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_window_mode(_frame: &eframe::Frame, _detached: bool) {}
+
 fn display_for_physical_menu_anchor(
     anchor: MenuAnchor,
     displays: &[DisplayBounds],
@@ -1963,7 +2073,7 @@ impl eframe::App for App {
         let editing_text = ctx
             .memory(|memory| memory.focused())
             .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
-        if !self.visible || self.pending_avd_delete.is_some() || editing_text {
+        if (!self.visible && !self.detached) || self.pending_avd_delete.is_some() || editing_text {
             return;
         }
         raw_input.events.retain(|event| match event {
@@ -2012,6 +2122,16 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(ViewportCommand::Focus);
         }
 
+        if self.reopen_detached {
+            let wait = STARTUP_HIDE.saturating_sub(self.created_at.elapsed());
+            if wait.is_zero() {
+                self.reopen_detached = false;
+                self.detach(ctx);
+            } else {
+                ctx.request_repaint_after(wait);
+            }
+        }
+
         self.handle_events(ctx);
         self.handle_focus(ctx);
         self.handle_escape(ctx);
@@ -2022,7 +2142,7 @@ impl eframe::App for App {
         // a lightweight ADB-only probe is enough to update the menu bar icon.
         if self.last_poll.elapsed() > STATUS_POLL {
             self.last_poll = Instant::now();
-            if needs_full_status_refresh(self.visible, self.settings.auto_mirror) {
+            if needs_full_status_refresh(self.visible || self.detached, self.settings.auto_mirror) {
                 backend::refresh_status(self.shared.clone(), ctx.clone());
             } else {
                 backend::refresh_connection_state(self.shared.clone(), ctx.clone());
@@ -2031,8 +2151,14 @@ impl eframe::App for App {
 
         self.maybe_auto_mirror(ctx);
         self.sync_menu_icon();
+        // The window's close button: back to the menu bar, not quit
+        if self.detached && !self.quitting && ctx.input(|input| input.viewport().close_requested())
+        {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            self.attach(ctx, false);
+        }
 
-        let interval = if self.visible {
+        let interval = if self.visible || self.detached {
             Duration::from_secs(1)
         } else {
             STATUS_POLL
@@ -2065,13 +2191,15 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         let rect = ui.max_rect();
 
-        if self.detached && !self.headless {
-            self.show_window(&ctx);
+        self.apply_window_mode(&ctx, frame);
+        if self.pending_attach_show && self.pending_mode.is_none() {
+            self.pending_attach_show = false;
+            self.show(&ctx, self.menu_anchor());
         }
-        // The drive server has no second window: it draws the detached
-        // window in its own frame instead of the popover
-        if self.detached && self.headless {
-            self.window_ui(ui, &ctx);
+        if self.detached {
+            if self.window_ui(ui, &ctx) {
+                self.attach(&ctx, true);
+            }
             return;
         }
 
@@ -2279,31 +2407,6 @@ impl App {
             Screen::Pair => self.pair_screen(&mut screen_ui, ctx),
             Screen::Logs => self.logs_tab(&mut screen_ui, fade),
             Screen::Settings => self.settings_screen(&mut screen_ui, ctx, fade),
-        }
-    }
-
-    /// The detached window, as its own viewport beside the hidden popover
-    fn show_window(&mut self, ctx: &Context) {
-        let builder = egui::ViewportBuilder::default()
-            .with_title("Twin")
-            .with_inner_size(WINDOW_SIZE)
-            .with_min_inner_size(WINDOW_MIN_SIZE)
-            .with_fullsize_content_view(true)
-            .with_titlebar_shown(false)
-            .with_title_shown(false);
-        let mut closed = false;
-        let mut back = false;
-        ctx.show_viewport_immediate(window_viewport_id(), builder, |ctx, _class| {
-            #[allow(deprecated)]
-            egui::CentralPanel::default()
-                .frame(Frame::NONE)
-                .show(ctx, |ui| {
-                    back = self.window_ui(ui, ctx);
-                });
-            closed = ctx.input(|input| input.viewport().close_requested());
-        });
-        if back || closed {
-            self.attach(ctx, back);
         }
     }
 
@@ -2729,10 +2832,13 @@ impl App {
                     if !std::mem::take(&mut first) {
                         kit::row_divider(ui);
                     }
-                    let starting = starting_avds.contains(&avd.name);
                     let deleting = deleting_avds.contains(&avd.name);
                     let stopping = stopping.contains(&avd.name);
+                    // Listed by adb in any state (booting, offline): Stop
+                    // works through its console either way
                     let running = avd.device.is_some();
+                    // Launched and not listed by adb yet
+                    let starting = !running && starting_avds.contains(&avd.name);
                     let name = avd.name.replace('_', " ");
                     let delete = if deleting {
                         kit::ButtonLook::Busy
@@ -2822,32 +2928,54 @@ impl App {
 
         if let Some(name) = self.pending_avd_delete.clone() {
             let mut close = false;
-            let modal = egui::Modal::new(egui::Id::new("delete-avd")).show(ctx, |ui| {
-                ui.set_width(280.0);
-                ui.label(semibold("Delete emulator?", 14.0, theme::text_bright()));
-                ui.label(regular(&name, 12.0, theme::text_bright()));
-                ui.label(regular(
-                    "This permanently deletes the AVD and its saved data.",
-                    11.0,
-                    theme::text_muted(),
-                ));
-                ui.add_space(8.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icon_button(ui, ph::TRASH, 16.0, theme::red())
-                        .on_hover_text("Delete emulator and its saved data")
-                        .clicked()
-                    {
-                        backend::delete_avd(self.shared.clone(), ctx.clone(), name.clone());
-                        close = true;
-                    }
-                    if icon_button(ui, ph::X, 16.0, theme::text_bright())
-                        .on_hover_text("Cancel")
-                        .clicked()
-                    {
-                        close = true;
-                    }
+            let frame = Frame::new()
+                .fill(theme::dialog_fill())
+                .stroke(Stroke::new(1.0_f32, theme::card_stroke()))
+                .corner_radius(16)
+                .inner_margin(Margin::same(20))
+                .shadow(egui::Shadow {
+                    offset: [0, 12],
+                    blur: 32,
+                    spread: 0,
+                    color: Color32::from_black_alpha(90),
                 });
-            });
+            let modal = egui::Modal::new(egui::Id::new("delete-avd"))
+                .frame(frame)
+                .backdrop_color(Color32::from_black_alpha(110))
+                .show(ctx, |ui| {
+                    ui.set_width(280.0);
+                    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                    ui.add(
+                        Label::new(semibold("Delete emulator?", 15.0, theme::text_strong()))
+                            .selectable(false),
+                    );
+                    ui.add_space(8.0);
+                    ui.add(
+                        Label::new(regular(
+                            format!(
+                                "{} and its saved data are deleted for good.",
+                                name.replace('_', " ")
+                            ),
+                            13.0,
+                            theme::heading(),
+                        ))
+                        .wrap()
+                        .selectable(false),
+                    );
+                    ui.add_space(20.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+                        if text_button(ui, "Delete", theme::red(), Color32::WHITE).clicked() {
+                            backend::delete_avd(self.shared.clone(), ctx.clone(), name.clone());
+                            close = true;
+                        }
+                        if text_button(ui, "Cancel", theme::button_fill(), theme::button_ink())
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                    });
+                });
             if close || modal.should_close() {
                 self.pending_avd_delete = None;
             }
@@ -3130,59 +3258,23 @@ impl App {
                     ui.add_space(12.0);
 
                     ui.horizontal(|ui| {
-                        let buttons_width = 2.0 * 70.0 + 10.0;
+                        ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+                        let buttons_width = 2.0 * (48.0 + 28.0) + 8.0;
                         let pad = (ui.available_width() - buttons_width) / 2.0;
                         ui.add_space(pad.max(0.0));
-
-                        if pill_button(
-                            ui,
-                            Some(ph::ARROW_CLOCKWISE),
-                            "Retry",
-                            theme::green(),
-                            theme::green_ink(),
-                            true,
-                        )
-                        .clicked()
-                        {
-                            backend::start_pairing(self.shared.clone(), ctx.clone());
-                        }
-                        ui.add_space(10.0);
-                        if pill_button(
-                            ui,
-                            None,
-                            "Cancel",
-                            theme::surface(),
-                            theme::text_check(),
-                            false,
-                        )
-                        .clicked()
+                        if text_button(ui, "Cancel", theme::button_fill(), theme::button_ink())
+                            .clicked()
                         {
                             self.go(Screen::Devices, ctx);
+                        }
+                        if text_button(ui, "Retry", theme::green(), theme::green_ink()).clicked() {
+                            backend::start_pairing(self.shared.clone(), ctx.clone());
                         }
                     });
                 });
             }
         }
     }
-}
-
-fn icon_button(ui: &mut Ui, glyph: &str, size: f32, color: Color32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(size + 8.0, size + 8.0), Sense::click());
-    let interaction = interaction_visual(
-        ui,
-        response.id,
-        response.hovered(),
-        response.is_pointer_button_down_on(),
-    );
-    ui.painter().rect_filled(rect, 6.0, interaction.overlay);
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        glyph,
-        theme::icon_font(size),
-        color,
-    );
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -3368,14 +3460,6 @@ fn keyboard_focus_id() -> egui::Id {
     egui::Id::new("twin-keyboard-focus")
 }
 
-fn keyboard_focused(ui: &Ui, id: egui::Id) -> bool {
-    ui.memory(|memory| memory.has_focus(id))
-        && ui
-            .ctx()
-            .data(|data| data.get_temp::<bool>(keyboard_focus_id()))
-            .unwrap_or(false)
-}
-
 fn paint_qr_card(ui: &Ui, rect: Rect, modules: &twin_core::qr::QrModules) {
     let painter = ui.painter();
     painter.rect_filled(rect, 14.0, theme::qr_card());
@@ -3556,95 +3640,6 @@ fn display_remaining_seconds(deadline: Instant) -> u64 {
     }
 }
 
-fn pill_button(
-    ui: &mut Ui,
-    leading_icon: Option<&str>,
-    label: &str,
-    fill: Color32,
-    text_color: Color32,
-    bold: bool,
-) -> egui::Response {
-    let family = if bold {
-        FontFamily::Name(theme::SEMIBOLD.into())
-    } else {
-        FontFamily::Name(theme::MEDIUM.into())
-    };
-    let font = FontId::new(11.5, family);
-    let text_width = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font.clone(), text_color)
-        .size()
-        .x;
-
-    let icon_width = if leading_icon.is_some() {
-        11.0 + 6.0
-    } else {
-        0.0
-    };
-    let size = vec2(14.0 + icon_width + text_width + 14.0, 28.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let painter = ui.painter();
-    painter.rect_filled(rect, 7.0, fill);
-    let interaction = interaction_visual(
-        ui,
-        response.id,
-        response.hovered(),
-        response.is_pointer_button_down_on(),
-    );
-    painter.rect_filled(rect, 7.0, interaction.overlay);
-
-    let mut cursor_x = rect.min.x + 14.0;
-    if let Some(glyph) = leading_icon {
-        painter.text(
-            egui::pos2(cursor_x, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            glyph,
-            theme::icon_font(11.0),
-            text_color,
-        );
-        cursor_x += icon_width;
-    }
-    painter.text(
-        egui::pos2(cursor_x, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font,
-        text_color,
-    );
-
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-struct InteractionVisual {
-    overlay: Color32,
-}
-
-/// Hover and press feedback. A control focused from the keyboard takes the
-/// hover highlight, so focus reads as a lit background rather than an outline.
-fn interaction_visual(ui: &Ui, id: egui::Id, hovered: bool, pressed: bool) -> InteractionVisual {
-    let hovered = hovered || keyboard_focused(ui, id);
-    let hover_progress = ui.ctx().animate_bool_with_time(
-        id.with("control-hover"),
-        hovered,
-        CONTROL_HOVER_TRANSITION,
-    );
-    let press_progress = ui.ctx().animate_bool_with_time(
-        id.with("control-press"),
-        pressed,
-        CONTROL_PRESS_TRANSITION,
-    );
-
-    InteractionVisual {
-        overlay: interaction_overlay_color(hover_progress, press_progress),
-    }
-}
-
-fn interaction_overlay_color(hover_progress: f32, press_progress: f32) -> Color32 {
-    theme::control_hover()
-        .gamma_multiply(hover_progress)
-        .blend(theme::control_pressed().gamma_multiply(press_progress))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3654,9 +3649,9 @@ mod tests {
 
     #[test]
     fn interaction_overlay_fades_fully_to_transparent() {
-        let hidden = interaction_overlay_color(0.0, 0.0);
-        let hovered = interaction_overlay_color(1.0, 0.0);
-        let pressed = interaction_overlay_color(1.0, 1.0);
+        let hidden = kit::overlay_color(0.0, 0.0);
+        let hovered = kit::overlay_color(1.0, 0.0);
+        let pressed = kit::overlay_color(1.0, 1.0);
 
         assert_eq!(hidden, Color32::TRANSPARENT);
         assert!(hovered.a() > hidden.a());
