@@ -10,12 +10,16 @@
 //!
 //! - `state`: current screen, tab, transition, theme, pairing phase.
 //! - `click X Y`, `hover X Y`, `leave`, `scroll DY` (at the pointer),
+//!   `glide X Y MS` (ease the pointer there over MS, a step per frame),
 //!   `drag X1 Y1 X2 Y2` (press, move over a few frames, release).
 //! - `key NAME` with egui key names (`Tab`, `Enter`, `ArrowLeft`, ...);
 //!   prefix `shift+` for Shift.
 //! - `wait MS`: let time pass, running frames at 60 fps.
 //! - `shot PATH`: save the current frame as a PNG with transparency.
 //! - `record DIR` / `stop`: save every frame and `times.txt` (seconds).
+//!   With `TWIN_DRIVE_CURSOR=<png>` frames show that image as the pointer,
+//!   its tip at `TWIN_DRIVE_CURSOR_TIP=X,Y` pixels, instead of the
+//!   harness's triangle.
 //! - `theme auto|day|night`, `gradients on|off`.
 //! - `window on|off`: the detached window (860 × 600) instead of the
 //!   popover, drawn in the same frame.
@@ -69,6 +73,7 @@ pub fn serve(socket: &Path) -> anyhow::Result<()> {
         harness,
         pointer: None,
         recording: None,
+        cursor: Cursor::from_env(),
     };
     println!("twin drive: listening on {}", socket.display());
 
@@ -127,6 +132,28 @@ struct Driver<'a> {
     harness: Harness<'a, App>,
     pointer: Option<Pos2>,
     recording: Option<Recording>,
+    cursor: Option<Cursor>,
+}
+
+/// A pointer image for recordings, and where its tip is in pixels
+struct Cursor {
+    image: image::RgbaImage,
+    tip: (i64, i64),
+}
+
+impl Cursor {
+    fn from_env() -> Option<Self> {
+        let path = std::env::var_os("TWIN_DRIVE_CURSOR")?;
+        let image = image::open(&path).ok()?.to_rgba8();
+        let tip = std::env::var("TWIN_DRIVE_CURSOR_TIP")
+            .ok()
+            .and_then(|tip| {
+                let (x, y) = tip.split_once(',')?;
+                Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+            })
+            .unwrap_or((0, 0));
+        Some(Self { image, tip })
+    }
 }
 
 impl Driver<'_> {
@@ -163,6 +190,25 @@ impl Driver<'_> {
         match name {
             "state" => {}
             "hover" => self.pointer_to(point(&args)?)?,
+            "glide" => {
+                let [x, y, ms] = args.as_slice() else {
+                    bail!("expected X Y MS");
+                };
+                let to = egui::pos2(x.parse()?, y.parse()?);
+                let from = self.pointer.unwrap_or(to);
+                let ms: f32 = ms.parse()?;
+                let steps = ((ms / 1000.0) / FRAME.as_secs_f32()).round().max(1.0) as usize;
+                for step in 1..=steps {
+                    // Ease in and out, like a hand on a trackpad
+                    let t = step as f32 / steps as f32;
+                    let eased = if t < 0.5 {
+                        4.0 * t * t * t
+                    } else {
+                        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+                    };
+                    self.pointer_to(from.lerp(to, eased))?;
+                }
+            }
             "click" => {
                 let pos = point(&args)?;
                 self.pointer_to(pos)?;
@@ -350,7 +396,22 @@ impl Driver<'_> {
     }
 
     fn save_frame(&mut self, path: &Path) -> anyhow::Result<()> {
-        let image = self.harness.render().map_err(|error| anyhow!(error))?;
+        let image = match (&self.cursor, self.pointer) {
+            (Some(cursor), Some(pointer)) => {
+                // Render without the harness's own pointer, then lay ours on
+                let ctx = self.harness.ctx.clone();
+                let held = ctx.input_mut(|input| std::mem::take(&mut input.pointer));
+                let rendered = self.harness.render();
+                ctx.input_mut(|input| input.pointer = held);
+                let mut image = rendered.map_err(|error| anyhow!(error))?;
+                let scale = ctx.pixels_per_point();
+                let x = (pointer.x * scale).round() as i64 - cursor.tip.0;
+                let y = (pointer.y * scale).round() as i64 - cursor.tip.1;
+                image::imageops::overlay(&mut image, &cursor.image, x, y);
+                image
+            }
+            _ => self.harness.render().map_err(|error| anyhow!(error))?,
+        };
         image
             .save(path)
             .with_context(|| format!("failed to save {}", path.display()))
