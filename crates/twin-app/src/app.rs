@@ -1376,7 +1376,7 @@ fn pair_header(ui: &mut Ui, label: Color32, look: kit::ButtonLook, tooltip: &str
         vec2(kit::BUTTON, kit::BUTTON),
     );
     put(ui, button, |ui| {
-        kit::bare_button(ui, kit::Face::Glyph(pair_glyph(look)), look, tooltip).clicked()
+        kit::square_button(ui, kit::Face::Glyph(pair_glyph(look)), look, tooltip).clicked()
     })
 }
 

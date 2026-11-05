@@ -18,6 +18,15 @@ pub const ROW_LEFT: f32 = 16.0;
 pub const ROW_RIGHT: f32 = 12.0;
 pub const BUTTON: f32 = 36.0;
 pub const ICON: f32 = 20.0;
+/// A button's hover highlight: as tall as a tab pill (the 34 pt track less
+/// 3 pt each side), centred in its 36 pt hit area so it keeps clear of a
+/// card's edge
+pub const HIGHLIGHT: f32 = 28.0;
+pub const HIGHLIGHT_RADIUS: f32 = 7.0;
+
+fn highlight_rect(rect: Rect) -> Rect {
+    Rect::from_center_size(rect.center(), vec2(HIGHLIGHT, HIGHLIGHT))
+}
 /// A list row in Virtual and in Settings
 pub const LIST_ROW: f32 = 52.0;
 pub const SETTING_ROW: f32 = 44.0;
@@ -335,16 +344,6 @@ pub enum Face {
 
 /// A 36-point icon button
 pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -> Response {
-    button(ui, face, look, tooltip, true)
-}
-
-/// A square button with no fill until hovered, for a header row where a
-/// filled one would crowd the card's edge
-pub fn bare_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -> Response {
-    button(ui, face, look, tooltip, false)
-}
-
-fn button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str, filled: bool) -> Response {
     let sense = if matches!(look, ButtonLook::Disabled | ButtonLook::Busy) {
         Sense::hover()
     } else {
@@ -353,26 +352,17 @@ fn button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str, filled: bool
     let (rect, response) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), sense);
     let (hover, _) = overlay(ui, &response);
     let painter = ui.painter();
-    let (fill, ink) = match look {
-        ButtonLook::Active => (theme::green_fill(), theme::green()),
-        _ => (theme::button_fill(), theme::button_ink()),
+    // No background at rest; Active shows in the icon's green
+    let ink = match look {
+        ButtonLook::Active => theme::green(),
+        _ => theme::button_ink(),
     };
     let disabled = look == ButtonLook::Disabled;
-    if filled {
-        painter.rect_filled(
-            rect,
-            10.0,
-            if disabled {
-                fill.gamma_multiply(0.35)
-            } else {
-                fill
-            },
-        );
-    }
+    let highlight = highlight_rect(rect);
     if !matches!(look, ButtonLook::Disabled | ButtonLook::Busy) {
-        painter.rect_filled(rect, 10.0, hover);
+        painter.rect_filled(highlight, HIGHLIGHT_RADIUS, hover);
     }
-    focus_ring(ui, &response, rect, 10.0);
+    focus_ring(ui, &response, highlight, HIGHLIGHT_RADIUS);
     let icon_rect = Rect::from_center_size(rect.center(), vec2(ICON, ICON));
     if look == ButtonLook::Busy {
         egui::Spinner::new()
@@ -402,8 +392,9 @@ fn button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str, filled: bool
 pub fn ghost_button(ui: &mut Ui, glyph: Glyph, tooltip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), Sense::click());
     let (hover, progress) = overlay(ui, &response);
-    ui.painter().rect_filled(rect, 10.0, hover);
-    focus_ring(ui, &response, rect, 10.0);
+    let highlight = highlight_rect(rect);
+    ui.painter().rect_filled(highlight, HIGHLIGHT_RADIUS, hover);
+    focus_ring(ui, &response, highlight, HIGHLIGHT_RADIUS);
     paint_glyph(
         ui.painter(),
         Rect::from_center_size(rect.center(), vec2(ICON, ICON)),
@@ -428,9 +419,10 @@ pub fn link_button(ui: &mut Ui, glyph: Glyph, label: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let (hover, progress) = overlay(ui, &response);
     let ink = theme::tab_inactive().lerp_to_gamma(theme::text_strong(), progress);
-    focus_ring(ui, &response, rect, 10.0);
+    let highlight = Rect::from_center_size(rect.center(), vec2(rect.width(), HIGHLIGHT));
+    focus_ring(ui, &response, highlight, HIGHLIGHT_RADIUS);
     let painter = ui.painter();
-    painter.rect_filled(rect, 10.0, hover);
+    painter.rect_filled(highlight, HIGHLIGHT_RADIUS, hover);
     paint_glyph(
         painter,
         Rect::from_center_size(

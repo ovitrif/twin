@@ -41,7 +41,6 @@ struct Palette {
     card_stroke: Color32,
     button_fill: Color32,
     tile_fill: Color32,
-    green_fill: Color32,
     green_tile: Color32,
     heading: Color32,
     button_ink: Color32,
@@ -83,7 +82,6 @@ impl Palette {
             card_stroke: mix(from.card_stroke, to.card_stroke),
             button_fill: mix(from.button_fill, to.button_fill),
             tile_fill: mix(from.tile_fill, to.tile_fill),
-            green_fill: mix(from.green_fill, to.green_fill),
             green_tile: mix(from.green_tile, to.green_tile),
             heading: mix(from.heading, to.heading),
             button_ink: mix(from.button_ink, to.button_ink),
@@ -137,7 +135,6 @@ const NIGHT: Palette = Palette {
     card_stroke: Color32::from_rgba_premultiplied(0x0F, 0x0F, 0x0F, 0x0F),
     button_fill: Color32::from_rgba_premultiplied(0x12, 0x12, 0x12, 0x12),
     tile_fill: Color32::from_rgba_premultiplied(0x0F, 0x0F, 0x0F, 0x0F),
-    green_fill: Color32::from_rgba_premultiplied(0x0A, 0x23, 0x15, 0x29),
     green_tile: Color32::from_rgba_premultiplied(0x09, 0x1F, 0x12, 0x24),
     heading: Color32::from_rgb(0x8E, 0x91, 0x99),
     button_ink: Color32::from_rgb(0xE6, 0xE7, 0xEA),
@@ -176,7 +173,6 @@ const DAY: Palette = Palette {
     card_stroke: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x14),
     button_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x0D),
     tile_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x0B),
-    green_fill: Color32::from_rgba_premultiplied(0x02, 0x10, 0x09, 0x1F),
     green_tile: Color32::from_rgba_premultiplied(0x02, 0x0E, 0x08, 0x1A),
     heading: Color32::from_rgb(0x6B, 0x71, 0x7D),
     button_ink: Color32::from_rgb(0x2A, 0x2D, 0x36),
@@ -247,7 +243,6 @@ color_token!(card_fill, card_fill);
 color_token!(card_stroke, card_stroke);
 color_token!(button_fill, button_fill);
 color_token!(tile_fill, tile_fill);
-color_token!(green_fill, green_fill);
 color_token!(green_tile, green_tile);
 color_token!(heading, heading);
 color_token!(button_ink, button_ink);
