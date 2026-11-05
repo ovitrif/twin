@@ -18,6 +18,7 @@ use twin_core::pairing_flow::{
 };
 use twin_core::qr::{PairingQr, QrModules};
 use twin_core::scrcpy::Scrcpy;
+use twin_core::simulator::{self, Simctl, Simulator};
 use twin_core::wifi;
 
 use crate::mock;
@@ -42,6 +43,10 @@ pub struct DeviceInfo {
     pub ready: bool,
     pub state: String,
     pub is_emulator: bool,
+    /// The Android release, "16"; empty until the phone answers
+    pub android_version: String,
+    /// Connected over Wi-Fi rather than USB
+    pub wireless: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +56,7 @@ pub struct AvdInfo {
 }
 
 impl AvdInfo {
+    #[cfg(test)]
     pub fn status(&self, launching: bool) -> &str {
         match &self.device {
             Some(device) if device.ready => "Running",
@@ -67,7 +73,6 @@ impl AvdInfo {
 
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    pub adb: ToolInfo,
     pub emulator: ToolInfo,
     /// What opens an Android phone's mirror: Twin Mirror, else scrcpy
     pub mirror: ToolInfo,
@@ -77,6 +82,8 @@ pub struct Snapshot {
     pub avds: Vec<AvdInfo>,
     /// iPhones on USB, when dmb is installed.
     pub iphones: Vec<Iphone>,
+    /// iOS simulators that are running
+    pub simulators: Vec<Simulator>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +146,8 @@ pub struct Shared {
     pub starting_mirrors: HashSet<String>,
     pub starting_avds: HashSet<String>,
     pub deleting_avds: HashSet<String>,
+    /// Emulators (by AVD name) and simulators (by udid) shutting down
+    pub stopping: HashSet<String>,
     /// Phones "paired" by the mock pairing flow, listed with the real ones.
     pub mock_devices: Vec<DeviceInfo>,
     /// Bumped when an AVD is deleted, so a status refresh that read the AVD
@@ -235,6 +244,17 @@ pub fn refresh_status(shared: Arc<Mutex<Shared>>, ctx: Context) {
             snapshot.avds = current.avds.clone();
         }
         snapshot.devices.extend(state.mock_devices.iter().cloned());
+        if mock::demo_devices() {
+            add_demo_devices(&mut snapshot);
+        }
+        // A shutdown is done once its emulator or simulator is gone
+        state.stopping.retain(|key| {
+            snapshot
+                .avds
+                .iter()
+                .any(|avd| &avd.name == key && avd.device.is_some())
+                || snapshot.simulators.iter().any(|sim| &sim.udid == key)
+        });
         let device_connected = snapshot.devices.iter().any(|device| device.ready);
 
         state.reap_finished_mirrors();
@@ -274,6 +294,47 @@ pub fn refresh_connection_state(shared: Arc<Mutex<Shared>>, ctx: Context) {
         drop(state);
         ctx.request_repaint();
     });
+}
+
+/// `TWIN_DEMO_DEVICES` (drive builds): a Wi-Fi Pixel, a USB iPhone, a
+/// running emulator and a simulator, for screenshots without real phones
+fn add_demo_devices(snapshot: &mut Snapshot) {
+    let device = |serial: &str, name: &str, emulator: bool, wireless: bool| DeviceInfo {
+        serial: serial.to_string(),
+        mirror_key: serial.to_string(),
+        name: name.to_string(),
+        ready: true,
+        state: "device".to_string(),
+        is_emulator: emulator,
+        android_version: "16".to_string(),
+        wireless,
+    };
+    snapshot
+        .devices
+        .insert(0, device("192.168.1.42:41235", "Pixel 10 Pro", false, true));
+    let running = device("emulator-5554", "Medium Phone", true, false);
+    if let Some(avd) = snapshot
+        .avds
+        .iter_mut()
+        .find(|avd| avd.name == "Medium_Phone")
+    {
+        avd.device = Some(running.clone());
+    }
+    snapshot.devices.push(running);
+    snapshot.iphones.insert(
+        0,
+        Iphone {
+            udid: "00008150-DEMO".to_string(),
+            name: "iPhone".to_string(),
+            model: "iPhone Air".to_string(),
+            os_version: "27.0".to_string(),
+        },
+    );
+    snapshot.simulators = vec![Simulator {
+        udid: "SIM-DEMO".to_string(),
+        name: "iPhone 17 Pro".to_string(),
+        runtime: "iOS 27.0".to_string(),
+    }];
 }
 
 fn collect_snapshot() -> Snapshot {
@@ -374,6 +435,12 @@ fn collect_snapshot() -> Snapshot {
                     ready: device.state == adb::DeviceState::Device,
                     state: state_label(&device.state).to_string(),
                     is_emulator: is_emulator(&device),
+                    android_version: if device.state == adb::DeviceState::Device {
+                        android_version(adb, &device.serial)
+                    } else {
+                        String::new()
+                    },
+                    wireless: is_wireless(&device.serial),
                     serial: device.serial,
                 })
                 .collect();
@@ -385,15 +452,19 @@ fn collect_snapshot() -> Snapshot {
     let iphones = Dmb::resolve()
         .and_then(|dmb| dmb.iphones())
         .unwrap_or_default();
+    let xcode = xcode_info();
+    let simulators = xcode_simctl(&xcode)
+        .and_then(|simctl| simctl.booted().ok())
+        .unwrap_or_default();
 
     Snapshot {
-        adb: adb_info,
         emulator: emulator_info,
         mirror: mirror_info,
-        xcode: xcode_info(),
+        xcode,
         devices,
         avds,
         iphones,
+        simulators,
     }
 }
 
@@ -488,6 +559,109 @@ fn avd_rows(
     }
 
     avds
+}
+
+/// A phone's Android release, asked once per serial: it cannot change while
+/// the phone stays connected
+fn android_version(adb: &Adb, serial: &str) -> String {
+    static VERSIONS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+    let mut versions = VERSIONS.lock().unwrap();
+    let versions = versions.get_or_insert_with(HashMap::new);
+    if let Some(version) = versions.get(serial) {
+        return version.clone();
+    }
+    match adb.android_version(serial) {
+        Ok(version) => {
+            versions.insert(serial.to_string(), version.clone());
+            version
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// A serial adb gives a phone on Wi-Fi: an address with a port, or an mDNS
+/// service name
+fn is_wireless(serial: &str) -> bool {
+    !serial.starts_with("emulator-")
+        && (serial.contains(':') || adb::is_mdns_wireless_serial(serial))
+}
+
+/// simctl in the Xcode `xcode` found, never through `xcrun`
+fn xcode_simctl(xcode: &ToolInfo) -> Option<Simctl> {
+    if !xcode.available {
+        return None;
+    }
+    // detail is …/Xcode.app/Contents/Developer/usr/bin/devicectl
+    let developer = std::path::Path::new(&xcode.detail).ancestors().nth(3)?;
+    Simctl::in_developer_dir(developer)
+}
+
+/// Shuts an emulator down
+pub fn stop_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String, serial: String) {
+    if !shared.lock().unwrap().stopping.insert(name.clone()) {
+        return;
+    }
+    ctx.request_repaint();
+    thread::spawn(move || {
+        let result = Adb::resolve(None).and_then(|adb| adb.emu_kill(&serial));
+        let mut state = shared.lock().unwrap();
+        match result {
+            Ok(()) => state.log(format!("Stopping AVD {name}")),
+            Err(error) => {
+                state.stopping.remove(&name);
+                state.log(format!("Could not stop AVD {name}: {error:#}"));
+            }
+        }
+        drop(state);
+        ctx.request_repaint();
+        refresh_status(shared, ctx);
+    });
+}
+
+/// Shuts an iOS simulator down
+pub fn stop_simulator(shared: Arc<Mutex<Shared>>, ctx: Context, sim: Simulator) {
+    let simctl = {
+        let mut state = shared.lock().unwrap();
+        let Some(simctl) = state
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| xcode_simctl(&snapshot.xcode))
+        else {
+            return;
+        };
+        if !state.stopping.insert(sim.udid.clone()) {
+            return;
+        }
+        simctl
+    };
+    ctx.request_repaint();
+    thread::spawn(move || {
+        let result = simctl.shutdown(&sim.udid);
+        let mut state = shared.lock().unwrap();
+        state.stopping.remove(&sim.udid);
+        match result {
+            Ok(()) => {
+                if let Some(snapshot) = &mut state.snapshot {
+                    snapshot.simulators.retain(|other| other.udid != sim.udid);
+                }
+                state.log(format!("Shut down simulator {}", sim.name));
+            }
+            Err(error) => state.log(format!("Could not shut down {}: {error:#}", sim.name)),
+        }
+        drop(state);
+        ctx.request_repaint();
+        refresh_status(shared, ctx);
+    });
+}
+
+/// Brings a simulator's window forward in Simulator.app
+pub fn show_simulator(shared: &Arc<Mutex<Shared>>, sim: &Simulator) {
+    if let Err(error) = simulator::show(&sim.udid) {
+        shared
+            .lock()
+            .unwrap()
+            .log(format!("Could not show {}: {error:#}", sim.name));
+    }
 }
 
 fn is_emulator(device: &adb::AdbDevice) -> bool {
@@ -1093,6 +1267,8 @@ fn run_mock_pairing(
                     ready: true,
                     state: "device".to_string(),
                     is_emulator: false,
+                    android_version: "16".to_string(),
+                    wireless: true,
                 });
             }
             Ok(mock::PHONE_NAME.to_string())
@@ -1268,7 +1444,6 @@ mod tests {
         ] {
             let shared = Arc::new(Mutex::new(Shared {
                 snapshot: Some(Snapshot {
-                    adb: tool.clone(),
                     emulator: tool.clone(),
                     mirror: tool.clone(),
                     xcode: tool.clone(),
@@ -1278,6 +1453,7 @@ mod tests {
                         device,
                     }],
                     iphones: vec![],
+                    simulators: Vec::new(),
                 }),
                 starting_avds: if starting {
                     HashSet::from(["Pixel_9a".to_string()])
@@ -1384,6 +1560,8 @@ mod tests {
             ready,
             state: if ready { "device" } else { "offline" }.to_string(),
             is_emulator,
+            android_version: String::new(),
+            wireless: false,
         }
     }
 

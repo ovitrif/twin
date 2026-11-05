@@ -37,6 +37,12 @@ pub fn pairing() -> Option<MockPairing> {
     *MOCK.get_or_init(|| parse(&std::env::var("TWIN_MOCK_PAIRING").ok()?))
 }
 
+/// `TWIN_DEMO_DEVICES=1` lists demo phones, an emulator and a simulator
+/// beside the real ones (drive builds only)
+pub fn demo_devices() -> bool {
+    cfg!(feature = "drive") && std::env::var_os("TWIN_DEMO_DEVICES").is_some()
+}
+
 fn parse(value: &str) -> Option<MockPairing> {
     let (outcome, seconds) = value
         .split_once(':')

@@ -5,9 +5,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::containers::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Color32, Context, CornerRadius, FontFamily, FontId, Frame, Label, Layout, Margin,
-    Rect, Sense, Shadow, Stroke, TextEdit, TextureHandle, TextureOptions, Theme, Ui,
-    ViewportCommand, vec2,
+    self, Align, Color32, Context, FontFamily, FontId, Frame, Label, Layout, Margin, Rect, Sense,
+    Stroke, TextEdit, TextureHandle, TextureOptions, Theme, Ui, ViewportCommand, vec2,
 };
 use egui_phosphor::regular as ph;
 use menu_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
@@ -18,8 +17,9 @@ use menu_icon::{
 use crate::backend::{self, PairingPhase, PairingProgress, Shared};
 use crate::config::{Settings, ThemeMode};
 use crate::glyph;
+use crate::kit;
 use crate::login_item;
-use crate::theme::{self, icon, medium, regular, semibold};
+use crate::theme::{self, icon, regular, semibold};
 
 const FOCUS_GRACE: Duration = Duration::from_millis(300);
 const STATUS_POLL: Duration = Duration::from_secs(5);
@@ -27,7 +27,6 @@ const SCREEN_TRANSITION_DURATION: Duration = Duration::from_millis(280);
 const SKIN_TRANSITION_DURATION: Duration = Duration::from_millis(180);
 const POPOVER_APPEAR_DURATION: Duration = Duration::from_millis(160);
 const POPOVER_HIDE_DURATION: Duration = Duration::from_millis(120);
-const THEME_MODE_GROUP_SIZE: egui::Vec2 = vec2(172.0, 28.0);
 const SCROLL_EDGE_FADE_HEIGHT: f32 = 22.0;
 /// How far scroll viewports reach into the side margins: room for hover
 /// shapes and focus rings at the content edge, and for the scrollbar.
@@ -40,36 +39,7 @@ const SCROLLBAR_TRACK_INSET: f32 = 4.0;
 /// Seconds the scrollbar stays after scrolling stops, then its fade length.
 const SCROLLBAR_LINGER: f64 = 0.8;
 const SCROLLBAR_FADE: f64 = 0.25;
-const HEADER_HEIGHT: f32 = 26.0;
-const HEADER_GAP: f32 = 10.0;
-const HEADER_BUTTON_SIZE: f32 = 26.0;
-/// Width of the logo or back caret ahead of the page title.
-const HEADER_LEADING_WIDTH: f32 = 32.0;
-const HEADER_BUTTON_GAP: f32 = 6.0;
 const SHELL_OVERSAMPLE: u32 = 3;
-/// The spacing unit: layouts space things in its steps (½, 1, 1.5, 2, 2.5
-/// and 3 times it), never in other values; see AGENTS.md
-const SPACE: f32 = 8.0;
-const ROW_HEIGHT: f32 = 38.0;
-/// A Setup row in Settings: a name and a check or a button
-const SETUP_ROW_HEIGHT: f32 = SPACE * 4.0;
-const ROW_ACTION_SIZE: f32 = 22.0;
-const ROW_ACTION_GAP: f32 = 4.0;
-const STATUS_COLUMN_WIDTH: f32 = 66.0;
-const ROW_ICON_SIZE: f32 = 16.0;
-/// Where a row's name starts, past its icon
-const ROW_TEXT_INSET: f32 = 26.0;
-/// Space above the Physical heading, under the tabs
-const PHYSICAL_TOP_SPACE: f32 = 8.0;
-/// How far the Google logo's ink reaches below its row's center, and the
-/// Apple logo's above, measured on the rendered glyphs
-const LINK_TOP_INK: f32 = 5.5;
-const LINK_BOTTOM_INK: f32 = 7.5;
-/// From each icon's ink to the center of the link's end dot: 6 points of
-/// space plus the dot's radius
-const LINK_SPACE: f32 = 7.6;
-/// How far a row's hover highlight reaches past the content column.
-const ROW_HOVER_BLEED: f32 = 7.0;
 /// How far pages may draw above the body, into the gap under the header.
 const SCREEN_TOP_BLEED: f32 = 6.0;
 const QR_CARD_SIZE: f32 = 164.0;
@@ -134,9 +104,10 @@ struct LogicalMenuAnchor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Screen {
-    Main,
-    Settings,
+    Devices,
     Pair,
+    Logs,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -146,6 +117,13 @@ struct ScreenTransition {
     direction: f32,
     started_at: Instant,
     cancel_pairing_on_complete: bool,
+}
+
+impl ScreenTransition {
+    fn progress(&self) -> f32 {
+        (self.started_at.elapsed().as_secs_f32() / SCREEN_TRANSITION_DURATION.as_secs_f32())
+            .clamp(0.0, 1.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,12 +269,6 @@ fn skin_day_weight(transition: SkinTransition, progress: f32) -> f32 {
     transition.from_day_weight + (target - transition.from_day_weight) * eased
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    Devices,
-    Logs,
-}
-
 pub struct App {
     shared: Arc<Mutex<Shared>>,
     settings: Settings,
@@ -305,7 +277,6 @@ pub struct App {
     gap_text: String,
     screen: Screen,
     animations: AnimationState,
-    tab: Tab,
     logo: TextureHandle,
     day_shell: TextureHandle,
     night_shell: TextureHandle,
@@ -332,9 +303,9 @@ pub struct App {
     auto_mirrored: HashSet<String>,
     pending_avd_delete: Option<String>,
     shell: Arc<ShellSampler>,
-    back_stack: Vec<Screen>,
-    forward_stack: Vec<Screen>,
     pending_page_step: Option<i8>,
+    /// Shown as a normal window instead of the menu bar popover
+    detached: bool,
 }
 
 impl App {
@@ -413,9 +384,8 @@ impl App {
             width_text,
             height_text,
             gap_text,
-            screen: Screen::Main,
+            screen: Screen::Devices,
             animations: AnimationState::new(appearance),
-            tab: Tab::Devices,
             logo,
             day_shell,
             night_shell,
@@ -440,9 +410,8 @@ impl App {
             auto_mirrored: HashSet::new(),
             pending_avd_delete: None,
             shell,
-            back_stack: Vec::new(),
-            forward_stack: Vec::new(),
             pending_page_step: None,
+            detached: false,
         })
     }
 
@@ -512,75 +481,9 @@ impl App {
         ctx.send_viewport_cmd(ViewportCommand::Close);
     }
 
-    /// Opens `screen` as a new step in the navigation history.
-    fn navigate(&mut self, screen: Screen, ctx: &Context) {
-        if self.screen == screen {
-            return;
-        }
-        self.back_stack.push(self.screen);
-        self.forward_stack.clear();
-        self.go(screen, ctx);
-    }
-
-    /// Leaves Pair for the device list as a step back, the way ← does: the
-    /// history before Main is kept and Pair becomes the step forward.
-    fn return_to_main(&mut self, ctx: &Context) {
-        while let Some(screen) = self.back_stack.pop() {
-            if screen == Screen::Main {
-                break;
-            }
-        }
-        self.forward_stack.clear();
-        self.forward_stack.push(self.screen);
-        self.go(Screen::Main, ctx);
-    }
-
-    /// Steps back through history; with none left, `ordered` moves to the
-    /// previous page in Main → Settings → Pair order instead of to Main.
-    fn nav_back(&mut self, ctx: &Context, ordered: bool) {
-        let target = self.back_stack.pop().or_else(|| {
-            if ordered {
-                screen_in_order(self.screen, -1)
-            } else {
-                (self.screen != Screen::Main).then_some(Screen::Main)
-            }
-        });
-        if let Some(target) = target {
-            self.forward_stack.push(self.screen);
-            self.go(target, ctx);
-        }
-    }
-
-    /// Steps forward through history, or to the next page in order.
-    fn nav_forward(&mut self, ctx: &Context) {
-        if let Some(target) = self
-            .forward_stack
-            .pop()
-            .or_else(|| screen_in_order(self.screen, 1))
-        {
-            self.back_stack.push(self.screen);
-            self.go(target, ctx);
-        }
-    }
-
-    /// Moves to `screen`, starting pairing on entering Pair and cancelling it
-    /// once the transition away from Pair completes.
+    /// Moves to `screen` with a slide: Pair starts pairing on entry and
+    /// cancels it once the slide away from it completes.
     fn go(&mut self, screen: Screen, ctx: &Context) {
-        let leaving_pair = self.screen == Screen::Pair && screen != Screen::Pair;
-        self.navigate_to(screen, ctx);
-        if leaving_pair {
-            if let Some(transition) = &mut self.animations.screen {
-                transition.cancel_pairing_on_complete = true;
-            } else {
-                backend::cancel_pairing(&self.shared);
-            }
-        }
-        if screen == Screen::Pair {
-            backend::start_pairing(self.shared.clone(), ctx.clone());
-        }
-    }
-
-    fn navigate_to(&mut self, screen: Screen, ctx: &Context) {
         if self.screen == screen {
             return;
         }
@@ -595,16 +498,70 @@ impl App {
         {
             backend::cancel_pairing(&self.shared);
         }
-
         self.animations.screen = Some(ScreenTransition {
             from: self.screen,
             to: screen,
             direction: screen_transition_direction(self.screen, screen),
             started_at: Instant::now(),
-            cancel_pairing_on_complete: false,
+            cancel_pairing_on_complete: self.screen == Screen::Pair,
         });
         self.screen = screen;
+        if screen == Screen::Pair {
+            backend::start_pairing(self.shared.clone(), ctx.clone());
+        }
         ctx.request_repaint();
+    }
+
+    /// ← and →: the previous or next page, without wrapping
+    fn step_page(&mut self, step: isize, ctx: &Context) {
+        if let Some(screen) = screen_in_order(self.screen, step) {
+            self.go(screen, ctx);
+        }
+    }
+
+    /// Where the selection sits in the page order, between two pages while
+    /// sliding, for the segmented control and the sidebar
+    fn page_position(&self) -> f32 {
+        match self.animations.screen {
+            Some(transition) => egui::lerp(
+                screen_index(transition.from) as f32..=screen_index(transition.to) as f32,
+                egui::emath::easing::cubic_in_out(transition.progress()),
+            ),
+            None => screen_index(self.screen) as f32,
+        }
+    }
+
+    /// Opens Twin as a normal window; the popover hides until it closes
+    fn detach(&mut self, ctx: &Context) {
+        self.detached = true;
+        if !self.headless {
+            self.visible = false;
+            self.animations.popover = None;
+            self.pending_show = false;
+            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            self.show_item.set_text("Show Twin");
+            set_dock_presence(true);
+        }
+        ctx.request_repaint();
+    }
+
+    /// Back to the menu bar: closes the window, then opens the popover when
+    /// `show` asks
+    fn attach(&mut self, ctx: &Context, show: bool) {
+        self.detached = false;
+        if !self.headless {
+            set_dock_presence(false);
+            if show {
+                self.show(ctx, self.menu_anchor());
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn focus_window(&self, ctx: &Context) {
+        set_dock_presence(true);
+        ctx.send_viewport_cmd_to(window_viewport_id(), ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd_to(window_viewport_id(), ViewportCommand::Focus);
     }
 
     fn handle_events(&mut self, ctx: &Context) {
@@ -623,7 +580,11 @@ impl App {
                 self.last_menu_anchor = Some(anchor);
 
                 if button == MouseButton::Left && button_state == MouseButtonState::Up {
-                    self.toggle(ctx, Some(anchor));
+                    if self.detached {
+                        self.focus_window(ctx);
+                    } else {
+                        self.toggle(ctx, Some(anchor));
+                    }
                 }
             }
         }
@@ -632,12 +593,18 @@ impl App {
             self.last_menu_anchor = None;
             let anchor = self.menu_anchor();
             self.last_menu_anchor = anchor;
-            self.toggle(ctx, anchor);
+            if self.detached {
+                self.focus_window(ctx);
+            } else {
+                self.toggle(ctx, anchor);
+            }
         }
 
         let menu_events: Vec<MenuEvent> = std::mem::take(&mut *MENU_EVENTS.lock().unwrap());
         for event in menu_events {
-            if event.id == self.show_item.id() {
+            if event.id == self.show_item.id() && self.detached {
+                self.focus_window(ctx);
+            } else if event.id == self.show_item.id() {
                 if self.visible && !self.is_disappearing() {
                     self.hide(ctx);
                 } else {
@@ -649,9 +616,13 @@ impl App {
                 if self.screen == Screen::Pair {
                     backend::start_pairing(self.shared.clone(), ctx.clone());
                 } else {
-                    self.navigate(Screen::Pair, ctx);
+                    self.go(Screen::Pair, ctx);
                 }
-                self.show(ctx, self.menu_anchor());
+                if self.detached {
+                    self.focus_window(ctx);
+                } else {
+                    self.show(ctx, self.menu_anchor());
+                }
             } else if event.id == self.refresh_id {
                 backend::refresh_status(self.shared.clone(), ctx.clone());
             } else if event.id == self.quit_id {
@@ -661,7 +632,7 @@ impl App {
     }
 
     fn handle_focus(&mut self, ctx: &Context) {
-        if !self.visible || self.is_disappearing() {
+        if !self.visible || self.is_disappearing() || self.detached {
             return;
         }
 
@@ -703,12 +674,8 @@ impl App {
         }
 
         match self.pending_page_step.take() {
-            Some(step) if self.visible && !self.is_disappearing() => {
-                if step < 0 {
-                    self.nav_back(ctx, true);
-                } else {
-                    self.nav_forward(ctx);
-                }
+            Some(step) if (self.visible && !self.is_disappearing()) || self.detached => {
+                self.step_page(isize::from(step), ctx);
             }
             _ => {}
         }
@@ -879,9 +846,26 @@ impl App {
                 format!("{:?}->{:?}", transition.from, transition.to)
             });
         format!(
-            "screen={:?} tab={:?} transition={transition} theme={:?} gradients={} pairing={pairing}",
-            self.screen, self.tab, self.settings.theme, self.settings.gradients,
+            "screen={:?} window={} transition={transition} theme={:?} gradients={} pairing={pairing}",
+            self.screen, self.detached, self.settings.theme, self.settings.gradients,
         )
+    }
+
+    /// The drive window's size: the popover's, or the detached window's
+    pub fn drive_size(&self) -> egui::Vec2 {
+        if self.detached {
+            WINDOW_SIZE
+        } else {
+            vec2(theme::WINDOW_WIDTH, theme::WINDOW_FULL_HEIGHT)
+        }
+    }
+
+    pub fn drive_set_window(&mut self, ctx: &Context, on: bool) {
+        if on {
+            self.detach(ctx);
+        } else {
+            self.attach(ctx, false);
+        }
     }
 
     pub fn drive_set_theme(&mut self, mode: ThemeMode) {
@@ -1045,7 +1029,667 @@ fn resolved_appearance(mode: ThemeMode, system_theme: Option<Theme>) -> theme::A
     }
 }
 
-const SCREEN_ORDER: [Screen; 3] = [Screen::Main, Screen::Settings, Screen::Pair];
+const SCREEN_ORDER: [Screen; 4] = [
+    Screen::Devices,
+    Screen::Pair,
+    Screen::Logs,
+    Screen::Settings,
+];
+
+fn screen_index(screen: Screen) -> usize {
+    SCREEN_ORDER
+        .iter()
+        .position(|candidate| *candidate == screen)
+        .unwrap_or(0)
+}
+
+const TITLE_HEIGHT: f32 = 32.0;
+const TABS_HEIGHT: f32 = 34.0;
+/// The detached window's opening size and the smallest it resizes to
+const WINDOW_SIZE: egui::Vec2 = vec2(860.0, 600.0);
+const WINDOW_MIN_SIZE: egui::Vec2 = vec2(700.0, 480.0);
+const SIDEBAR_WIDTH: f32 = 208.0;
+const NAV_ITEM: f32 = 36.0;
+const PHONE_ROW: f32 = 40.0;
+
+fn window_viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("twin-window")
+}
+
+fn tab_label(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Devices => "Devices",
+        Screen::Pair => "Pair",
+        Screen::Logs => "Logs",
+        Screen::Settings => "Settings",
+    }
+}
+
+fn window_title(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Pair => "Pair a phone",
+        screen => tab_label(screen),
+    }
+}
+
+/// The window's surface at `t` (0 at the top, 1 at the bottom): the
+/// popover's gradient, or its middle color with gradients off
+fn window_surface_color(t: f32, day_weight: f32, gradients: bool) -> Color32 {
+    let night = [
+        Color32::from_rgb(0x2A, 0x2A, 0x2C),
+        Color32::from_rgb(0x1F, 0x1F, 0x21),
+        Color32::from_rgb(0x1B, 0x1B, 0x1D),
+    ];
+    let day = [
+        Color32::from_rgb(0xFF, 0xFF, 0xFF),
+        Color32::from_rgb(0xF7, 0xF8, 0xFB),
+        Color32::from_rgb(0xEF, 0xF1, 0xF6),
+    ];
+    let at = |stops: [Color32; 3]| {
+        if !gradients {
+            stops[1]
+        } else if t < 0.6 {
+            stops[0].lerp_to_gamma(stops[1], (t / 0.6).clamp(0.0, 1.0))
+        } else {
+            stops[1].lerp_to_gamma(stops[2], ((t - 0.6) / 0.4).clamp(0.0, 1.0))
+        }
+    };
+    at(night).lerp_to_gamma(at(day), day_weight)
+}
+
+/// The window's surface with the glints along its top and bottom edges
+fn paint_window_surface(painter: &egui::Painter, rect: Rect, day_weight: f32, gradients: bool) {
+    let mut mesh = egui::Mesh::default();
+    for t in [0.0, 0.3, 0.6, 0.8, 1.0] {
+        let color = window_surface_color(t, day_weight, gradients);
+        let y = egui::lerp(rect.top()..=rect.bottom(), t);
+        mesh.colored_vertex(egui::pos2(rect.left(), y), color);
+        mesh.colored_vertex(egui::pos2(rect.right(), y), color);
+    }
+    for band in 0..4 {
+        let index = band * 2;
+        mesh.add_triangle(index, index + 1, index + 2);
+        mesh.add_triangle(index + 1, index + 3, index + 2);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+    if !gradients {
+        return;
+    }
+    let glint = |y: f32, edge: f32, color: Color32| {
+        let mut mesh = egui::Mesh::default();
+        for (share, color) in [
+            (edge, Color32::TRANSPARENT),
+            (0.5, color),
+            (1.0 - edge, Color32::TRANSPARENT),
+        ] {
+            let x = egui::lerp(rect.left()..=rect.right(), share);
+            mesh.colored_vertex(egui::pos2(x, y), color);
+            mesh.colored_vertex(egui::pos2(x, y + 1.0), color);
+        }
+        for segment in 0..2 {
+            let index = segment * 2;
+            mesh.add_triangle(index, index + 1, index + 2);
+            mesh.add_triangle(index + 1, index + 3, index + 2);
+        }
+        painter.add(egui::Shape::mesh(mesh));
+    };
+    let night_top = Color32::from_white_alpha(0x40);
+    let day_top = Color32::from_rgba_unmultiplied(0x1B, 0x22, 0x3A, 0x10);
+    glint(
+        rect.top(),
+        0.18,
+        night_top.lerp_to_gamma(day_top, day_weight),
+    );
+    let night_bottom = Color32::from_rgba_unmultiplied(0xE1, 0xE6, 0xF5, 0x90);
+    let day_bottom = Color32::from_rgba_unmultiplied(0x6E, 0x8C, 0xD8, 0x70);
+    glint(
+        rect.bottom() - 1.0,
+        0.12,
+        night_bottom.lerp_to_gamma(day_bottom, day_weight),
+    );
+}
+
+/// With the window open, Twin shows in the Dock and the app switcher like
+/// any app; as a menu bar popover it stays out of both
+#[cfg(target_os = "macos")]
+fn set_dock_presence(shown: bool) {
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    let Some(main_thread) = objc2::MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(main_thread);
+    app.setActivationPolicy(if shown {
+        NSApplicationActivationPolicy::Regular
+    } else {
+        NSApplicationActivationPolicy::Accessory
+    });
+    if shown {
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_presence(_shown: bool) {}
+
+/// Text cut to `width` with an ellipsis
+fn paint_fitted(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    anchor: egui::Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: f32,
+) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(1.0));
+    let galley = painter.layout_job(job);
+    let rect = anchor.anchor_size(pos, galley.size());
+    painter.galley(rect.min, galley, color);
+}
+
+/// Places one widget in `rect`
+fn put<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+        add,
+    )
+    .inner
+}
+
+/// The Side by side row over a pair: its name, and one button for both
+fn pair_header(ui: &mut Ui, label: Color32, look: kit::ButtonLook, tooltip: &str) -> bool {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+    ui.painter().text(
+        egui::pos2(rect.left() + kit::ROW_LEFT, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        "Side by side",
+        kit::font(12.0, theme::SEMIBOLD),
+        label,
+    );
+    let button = Rect::from_min_size(
+        egui::pos2(
+            rect.right() - kit::ROW_RIGHT - kit::BUTTON,
+            rect.center().y - kit::BUTTON / 2.0,
+        ),
+        vec2(kit::BUTTON, kit::BUTTON),
+    );
+    put(ui, button, |ui| {
+        kit::square_button(ui, kit::Face::Glyph(pair_glyph(look)), look, tooltip).clicked()
+    })
+}
+
+fn pair_glyph(look: kit::ButtonLook) -> kit::Glyph {
+    if look == kit::ButtonLook::Active {
+        kit::Glyph::Stop
+    } else {
+        kit::Glyph::Play
+    }
+}
+
+/// Phone rows, 16 points apart, inside the card's padding
+fn phones_block(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.add_space(16.0);
+    let width = ui.available_width();
+    ui.scope(|ui| {
+        ui.set_width(width);
+        add(ui);
+    });
+    ui.add_space(16.0);
+}
+
+enum Mark<'a> {
+    Letter(&'a str),
+    Font(&'a str),
+    Glyph(kit::Glyph),
+}
+
+struct PhoneRow<'a> {
+    key: &'a str,
+    mark: Mark<'a>,
+    name: &'a str,
+    subtitle: &'a str,
+    connection: kit::Glyph,
+    mirroring: bool,
+    look: kit::ButtonLook,
+    tooltip: &'a str,
+}
+
+/// A phone: its mark on a tile, name and version, how it is connected, and
+/// its mirror button. Returns whether the button was clicked.
+fn phone_row(ui: &mut Ui, row: PhoneRow<'_>) -> bool {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), PHONE_ROW), Sense::hover());
+    let painter = ui.painter().clone();
+    let tile = Rect::from_min_size(
+        egui::pos2(rect.left() + kit::ROW_LEFT, rect.top()),
+        vec2(PHONE_ROW, PHONE_ROW),
+    );
+    kit::paint_tile(&painter, tile, row.mirroring);
+    let ink = if row.mirroring {
+        theme::green()
+    } else {
+        theme::tab_inactive()
+    };
+    paint_mark(&painter, tile, &row.mark, ink);
+
+    let button = Rect::from_min_size(
+        egui::pos2(
+            rect.right() - kit::ROW_RIGHT - kit::BUTTON,
+            rect.center().y - kit::BUTTON / 2.0,
+        ),
+        vec2(kit::BUTTON, kit::BUTTON),
+    );
+    let connection = Rect::from_center_size(
+        egui::pos2(button.left() - 12.0 - 14.0, rect.center().y),
+        vec2(kit::ICON, kit::ICON),
+    );
+    kit::paint_glyph(&painter, connection, row.connection, theme::icon_muted());
+
+    let text_left = tile.right() + 12.0;
+    let text_width = connection.left() - 12.0 - text_left;
+    let has_subtitle = !row.subtitle.is_empty();
+    paint_fitted(
+        &painter,
+        egui::pos2(
+            text_left,
+            if has_subtitle {
+                rect.center().y - 9.0
+            } else {
+                rect.center().y
+            },
+        ),
+        egui::Align2::LEFT_CENTER,
+        row.name,
+        kit::font(14.0, theme::MEDIUM),
+        theme::text_strong(),
+        text_width,
+    );
+    if has_subtitle {
+        paint_fitted(
+            &painter,
+            egui::pos2(text_left, rect.center().y + 10.0),
+            egui::Align2::LEFT_CENTER,
+            row.subtitle,
+            kit::regular_font(12.0),
+            theme::heading(),
+            text_width,
+        );
+    }
+    let glyph = if row.mirroring {
+        kit::Glyph::Stop
+    } else {
+        kit::Glyph::Play
+    };
+    ui.push_id(("phone", row.key), |ui| {
+        put(ui, button, |ui| {
+            kit::square_button(ui, kit::Face::Glyph(glyph), row.look, row.tooltip).clicked()
+        })
+    })
+    .inner
+}
+
+fn paint_mark(painter: &egui::Painter, rect: Rect, mark: &Mark<'_>, ink: Color32) {
+    match mark {
+        Mark::Letter(letter) => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                *letter,
+                kit::font(20.0, theme::BOLD),
+                ink,
+            );
+        }
+        Mark::Font(glyph) => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                *glyph,
+                theme::icon_font(kit::ICON),
+                ink,
+            );
+        }
+        Mark::Glyph(glyph) => {
+            kit::paint_glyph(
+                painter,
+                Rect::from_center_size(rect.center(), vec2(kit::ICON, kit::ICON)),
+                *glyph,
+                ink,
+            );
+        }
+    }
+}
+
+fn mirror_look(mirroring: bool, ready: bool) -> kit::ButtonLook {
+    if mirroring {
+        kit::ButtonLook::Active
+    } else if ready {
+        kit::ButtonLook::Normal
+    } else {
+        kit::ButtonLook::Disabled
+    }
+}
+
+/// `in_pair`: the button hides or shows this phone's side of an open pair
+fn mirror_tooltip(mirroring: bool, in_pair: bool) -> &'static str {
+    match (mirroring, in_pair) {
+        (true, true) => "Hide from Side by side",
+        (false, true) => "Show in Side by side",
+        (true, false) => "Stop mirroring",
+        (false, false) => "Mirror screen",
+    }
+}
+
+fn android_phone_row(
+    ui: &mut Ui,
+    device: &backend::DeviceInfo,
+    mirroring: bool,
+    mirror_ok: bool,
+    in_pair: bool,
+) -> bool {
+    let subtitle = if device.android_version.is_empty() {
+        String::new()
+    } else {
+        format!("Android {}", device.android_version)
+    };
+    phone_row(
+        ui,
+        PhoneRow {
+            key: &device.mirror_key,
+            mark: Mark::Letter("G"),
+            name: &device.name,
+            subtitle: if device.ready {
+                &subtitle
+            } else {
+                &device.state
+            },
+            connection: if device.wireless {
+                kit::Glyph::Wifi
+            } else {
+                kit::Glyph::Usb
+            },
+            mirroring,
+            look: mirror_look(mirroring, (device.ready && mirror_ok) || in_pair),
+            tooltip: mirror_tooltip(mirroring, in_pair),
+        },
+    )
+}
+
+fn iphone_phone_row(
+    ui: &mut Ui,
+    iphone: &twin_core::dmb::Iphone,
+    mirroring: bool,
+    in_pair: bool,
+) -> bool {
+    let subtitle = if iphone.os_version.is_empty() {
+        String::new()
+    } else {
+        // "27.0" reads "iOS 27"
+        let version = iphone
+            .os_version
+            .strip_suffix(".0")
+            .unwrap_or(&iphone.os_version);
+        format!("iOS {version}")
+    };
+    phone_row(
+        ui,
+        PhoneRow {
+            key: &iphone.udid,
+            mark: Mark::Font(ph::APPLE_LOGO),
+            name: &iphone.name,
+            subtitle: &subtitle,
+            connection: kit::Glyph::Usb,
+            mirroring,
+            look: mirror_look(mirroring, true),
+            tooltip: mirror_tooltip(mirroring, in_pair),
+        },
+    )
+}
+
+fn empty_row(ui: &mut Ui, title: &str, hint: &str) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
+    let painter = ui.painter();
+    painter.text(
+        egui::pos2(rect.left() + kit::ROW_LEFT, rect.center().y - 9.0),
+        egui::Align2::LEFT_CENTER,
+        title,
+        kit::font(13.0, theme::MEDIUM),
+        theme::text_bright(),
+    );
+    paint_fitted(
+        painter,
+        egui::pos2(rect.left() + kit::ROW_LEFT, rect.center().y + 10.0),
+        egui::Align2::LEFT_CENTER,
+        hint,
+        kit::regular_font(12.0),
+        theme::heading(),
+        rect.width() - 2.0 * kit::ROW_LEFT,
+    );
+}
+
+struct VirtualRow<'a> {
+    key: &'a str,
+    mark: Mark<'a>,
+    running: bool,
+    name: &'a str,
+    buttons: [(kit::Face, kit::ButtonLook, &'a str); 2],
+}
+
+/// An emulator or a simulator: its mark, its name and two buttons. Returns
+/// the clicked button's index.
+fn virtual_row(ui: &mut Ui, row: VirtualRow<'_>) -> Option<usize> {
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), kit::LIST_ROW), Sense::hover());
+    let painter = ui.painter().clone();
+    let mark = Rect::from_min_size(
+        egui::pos2(
+            rect.left() + kit::ROW_LEFT,
+            rect.center().y - kit::ICON / 2.0,
+        ),
+        vec2(kit::ICON, kit::ICON),
+    );
+    paint_mark(
+        &painter,
+        mark,
+        &row.mark,
+        if row.running {
+            theme::green()
+        } else {
+            theme::icon_muted()
+        },
+    );
+    let buttons_left = rect.right() - kit::ROW_RIGHT - 2.0 * kit::BUTTON - 8.0;
+    paint_fitted(
+        &painter,
+        egui::pos2(mark.right() + 12.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        row.name,
+        kit::font(14.0, theme::MEDIUM),
+        theme::text_strong(),
+        buttons_left - 12.0 - (mark.right() + 12.0),
+    );
+    let mut clicked = None;
+    ui.push_id(("virtual", row.key), |ui| {
+        for (index, (face, look, tooltip)) in row.buttons.into_iter().enumerate() {
+            let button = Rect::from_min_size(
+                egui::pos2(
+                    buttons_left + index as f32 * (kit::BUTTON + 8.0),
+                    rect.center().y - kit::BUTTON / 2.0,
+                ),
+                vec2(kit::BUTTON, kit::BUTTON),
+            );
+            if put(ui, button, |ui| {
+                kit::square_button(ui, face, look, tooltip).clicked()
+            }) {
+                clicked = Some(index);
+            }
+        }
+    });
+    clicked
+}
+
+/// A Settings row: its label on the left and `control` on the right
+fn setting_row(ui: &mut Ui, label: &str, divider: bool, control: impl FnOnce(&mut Ui)) {
+    if divider {
+        kit::row_divider(ui);
+    }
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), kit::SETTING_ROW), Sense::hover());
+    ui.painter().text(
+        egui::pos2(rect.left() + kit::ROW_LEFT, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        kit::regular_font(13.0),
+        theme::text_bright(),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(vec2(kit::ROW_LEFT, 0.0)))
+            .layout(Layout::right_to_left(Align::Center)),
+        control,
+    );
+}
+
+/// A one-line text field, right-aligned, with an optional unit inside it
+fn field(ui: &mut Ui, id: &str, value: &mut String, width: f32, unit: &str) -> bool {
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
+    let unit_width = if unit.is_empty() { 0.0 } else { 20.0 };
+    let edit = Rect::from_min_max(
+        egui::pos2(rect.left() + 10.0, rect.top()),
+        egui::pos2(rect.right() - 10.0 - unit_width, rect.bottom()),
+    );
+    let background = ui.painter().add(egui::Shape::Noop);
+    let output = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(edit), |ui| {
+            ui.add_sized(
+                edit.size(),
+                TextEdit::singleline(value)
+                    .id_salt(id)
+                    .frame(Frame::NONE)
+                    .font(kit::font(13.0, theme::MEDIUM))
+                    .text_color(theme::text_strong())
+                    .horizontal_align(if unit.is_empty() {
+                        Align::Min
+                    } else {
+                        Align::Max
+                    })
+                    .vertical_align(Align::Center)
+                    .margin(Margin::ZERO),
+            )
+        })
+        .inner;
+    let stroke = if output.has_focus() {
+        Stroke::new(1.5_f32, theme::input_focus_stroke())
+    } else {
+        Stroke::new(1.0_f32, theme::field_stroke())
+    };
+    ui.painter().set(
+        background,
+        egui::Shape::rect_filled(rect, 7.0, theme::field_fill()),
+    );
+    ui.painter()
+        .rect_stroke(rect, 7.0, stroke, egui::StrokeKind::Inside);
+    if !unit.is_empty() {
+        ui.painter().text(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            unit,
+            kit::font(13.0, theme::MEDIUM),
+            theme::heading(),
+        );
+    }
+    output.changed()
+}
+
+/// A tool Twin uses: Ready, its warning, or a button that opens `get` (an
+/// App Store or download page, or the app to open once)
+fn tool_row(
+    ui: &mut Ui,
+    name: &str,
+    tool_name: &str,
+    divider: bool,
+    info: Option<&backend::ToolInfo>,
+    get: (&str, &str),
+) {
+    if divider {
+        kit::row_divider(ui);
+    }
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(ui.available_width(), kit::SETTING_ROW), Sense::hover());
+    let painter = ui.painter();
+    let name_galley = painter.layout_no_wrap(
+        name.to_owned(),
+        kit::regular_font(13.0),
+        theme::text_bright(),
+    );
+    let name_width = name_galley.size().x;
+    painter.galley(
+        egui::pos2(
+            rect.left() + kit::ROW_LEFT,
+            rect.center().y - name_galley.size().y / 2.0,
+        ),
+        name_galley,
+        theme::text_bright(),
+    );
+    painter.text(
+        egui::pos2(
+            rect.left() + kit::ROW_LEFT + name_width + 8.0,
+            rect.center().y,
+        ),
+        egui::Align2::LEFT_CENTER,
+        format!("· {tool_name}"),
+        kit::regular_font(13.0),
+        theme::heading(),
+    );
+    let ready = info.is_some_and(|tool| tool.available && tool.warnings.is_empty());
+    let right = egui::pos2(rect.right() - kit::ROW_LEFT, rect.center().y);
+    if ready {
+        painter.text(
+            right,
+            egui::Align2::RIGHT_CENTER,
+            "Ready",
+            kit::font(12.0, theme::MEDIUM),
+            theme::green(),
+        );
+    } else if info.is_some() {
+        let (label, target) = get;
+        let width = painter
+            .layout_no_wrap(
+                label.to_owned(),
+                kit::font(12.0, theme::MEDIUM),
+                Color32::WHITE,
+            )
+            .size()
+            .x
+            + 24.0;
+        let button = Rect::from_min_size(
+            egui::pos2(right.x - width, rect.center().y - 14.0),
+            vec2(width, 28.0),
+        );
+        let response = ui.interact(button, ui.id().with(("get", name)), Sense::click());
+        let (hover, _) = kit::overlay(ui, &response);
+        ui.painter().rect_filled(button, 8.0, theme::button_fill());
+        ui.painter().rect_filled(button, 8.0, hover);
+        ui.painter().text(
+            button.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            kit::font(12.0, theme::MEDIUM),
+            theme::button_ink(),
+        );
+        let warning = info.and_then(|tool| tool.warnings.first()).cloned();
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let response = match warning {
+            Some(warning) => response.on_hover_text(warning),
+            None => response,
+        };
+        if response.clicked() {
+            let _ = std::process::Command::new("open").arg(target).spawn();
+        }
+    }
+}
 
 fn screen_in_order(from: Screen, step: isize) -> Option<Screen> {
     let index = SCREEN_ORDER.iter().position(|screen| *screen == from)?;
@@ -1413,13 +2057,24 @@ impl eframe::App for App {
             }
         };
         if self.screen == Screen::Pair && pairing_done {
-            self.return_to_main(ctx);
+            self.go(Screen::Devices, ctx);
         }
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let rect = ui.max_rect();
+
+        if self.detached && !self.headless {
+            self.show_window(&ctx);
+        }
+        // The drive server has no second window: it draws the detached
+        // window in its own frame instead of the popover
+        if self.detached && self.headless {
+            self.window_ui(ui, &ctx);
+            return;
+        }
+
         let opacity = if !self.visible {
             0.0
         } else if let Some(transition) = self.animations.popover {
@@ -1451,26 +2106,109 @@ impl eframe::App for App {
         }
 
         let content = Rect::from_min_max(
-            egui::pos2(rect.left() + 16.0, rect.top() + theme::BEAK_HEIGHT + 14.0),
-            egui::pos2(rect.right() - 16.0, rect.bottom() - 14.0),
+            egui::pos2(
+                rect.left() + kit::PAD,
+                rect.top() + theme::BEAK_HEIGHT + kit::PAD,
+            ),
+            egui::pos2(rect.right() - kit::PAD, rect.bottom() - kit::PAD),
         );
-        let header = Rect::from_min_size(content.min, vec2(content.width(), HEADER_HEIGHT));
+        let title = Rect::from_min_size(content.min, vec2(content.width(), TITLE_HEIGHT));
+        let tabs = Rect::from_min_size(
+            egui::pos2(content.left(), title.bottom() + 16.0),
+            vec2(content.width(), TABS_HEIGHT),
+        );
         let body = Rect::from_min_max(
-            egui::pos2(content.left(), header.bottom() + HEADER_GAP),
+            egui::pos2(content.left(), tabs.bottom() + 20.0),
             content.max,
         );
 
-        let transition = self.animations.screen.map(|transition| {
-            let progress = (transition.started_at.elapsed().as_secs_f32()
-                / SCREEN_TRANSITION_DURATION.as_secs_f32())
-            .clamp(0.0, 1.0);
-            (transition, progress)
-        });
+        // The header goes first, so a click on a tab starts its slide in this
+        // same frame instead of drawing the new page unmoved for one frame.
+        self.popover_header(ui, &ctx, title, tabs);
+        let window = Rect::from_min_max(
+            egui::pos2(rect.left() + 1.0, body.top() - SCREEN_TOP_BLEED),
+            egui::pos2(rect.right() - 1.0, rect.bottom() - 1.0),
+        );
+        let day_weight = self.animations.skin.day_weight;
+        let shell = Arc::clone(&self.shell);
+        let fade = move |pos: egui::Pos2| shell.color_at(pos, day_weight);
+        self.render_pages(ui, &ctx, body, window, &fade, false);
+    }
+}
+
+impl App {
+    /// The mark, "Twin" and Refresh, then the pages as a segmented control.
+    /// Both stay put while the pages slide under them; the control's
+    /// selection slides with the pages.
+    fn popover_header(&mut self, ui: &mut Ui, ctx: &Context, title: Rect, tabs: Rect) {
+        let painter = ui.painter();
+        let logo = Rect::from_min_size(
+            egui::pos2(title.left() + 4.0, title.center().y - 13.0),
+            vec2(26.0, 26.0),
+        );
+        painter.image(
+            self.logo.id(),
+            logo,
+            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        painter.text(
+            egui::pos2(logo.right() + 12.0, title.center().y),
+            egui::Align2::LEFT_CENTER,
+            "Twin",
+            kit::font(17.0, theme::BOLD),
+            theme::text_strong(),
+        );
+        let refresh = Rect::from_min_size(
+            egui::pos2(
+                title.right() - kit::BUTTON,
+                title.center().y - kit::BUTTON / 2.0,
+            ),
+            vec2(kit::BUTTON, kit::BUTTON),
+        );
+        let clicked = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(refresh), |ui| {
+                kit::ghost_button(ui, ph::ARROWS_CLOCKWISE, "Refresh").clicked()
+            })
+            .inner;
+        if clicked {
+            backend::refresh_status(self.shared.clone(), ctx.clone());
+        }
+
+        let labels = SCREEN_ORDER.map(tab_label);
+        if let Some(index) = kit::segmented(
+            ui,
+            tabs,
+            &labels,
+            screen_index(self.screen),
+            self.page_position(),
+            12.0,
+        ) {
+            self.go(SCREEN_ORDER[index], ctx);
+        }
+    }
+
+    /// The current page, or both pages of a slide side by side. `clip` is
+    /// how far content may draw: the surface edge to edge, so hover shapes
+    /// and sliding pages run past the content column.
+    fn render_pages(
+        &mut self,
+        ui: &mut Ui,
+        ctx: &Context,
+        body: Rect,
+        clip: Rect,
+        fade: &dyn Fn(egui::Pos2) -> Color32,
+        in_window: bool,
+    ) {
+        let transition = self
+            .animations
+            .screen
+            .map(|transition| (transition, transition.progress()));
         if let Some((transition, progress)) = transition
             && progress >= 1.0
         {
             self.animations.screen = None;
-            if transition.cancel_pairing_on_complete {
+            if transition.cancel_pairing_on_complete && self.screen != Screen::Pair {
                 backend::cancel_pairing(&self.shared);
             }
         }
@@ -1480,182 +2218,54 @@ impl eframe::App for App {
                 let eased = egui::emath::easing::cubic_in_out(progress);
                 // A push: both pages stay opaque and move side by side, so
                 // they never draw over each other.
-                let distance = body.width() + 2.0 * SCROLL_BLEED + 16.0;
+                let distance = body.width() + 2.0 * SCROLL_BLEED + 2.0 * kit::PAD;
                 let outgoing_x = -transition.direction * distance * eased;
                 let incoming_x = transition.direction * distance * (1.0 - eased);
-
-                self.header(ui, &ctx, header, transition.from, transition.to, eased);
-                self.render_screen(ui, body, &ctx, transition.from, outgoing_x, 1.0);
-                self.render_screen(ui, body, &ctx, transition.to, incoming_x, 1.0);
+                self.render_screen(
+                    ui,
+                    body,
+                    clip,
+                    ctx,
+                    transition.from,
+                    outgoing_x,
+                    fade,
+                    in_window,
+                );
+                self.render_screen(
+                    ui,
+                    body,
+                    clip,
+                    ctx,
+                    transition.to,
+                    incoming_x,
+                    fade,
+                    in_window,
+                );
                 ctx.request_repaint();
             }
-            _ => {
-                self.header(ui, &ctx, header, self.screen, self.screen, 1.0);
-                self.render_screen(ui, body, &ctx, self.screen, 0.0, 1.0);
-            }
-        }
-    }
-}
-
-impl App {
-    /// The header stays put across pages: its title cross-fades with the page
-    /// while refresh, settings and pairing remain in the top-right corner.
-    /// `progress` runs from `from` to `to`; equal screens mean a settled page.
-    /// Titles fade out and then in rather than overlapping, and the back caret
-    /// stays put when moving between two sub-pages.
-    fn header(
-        &mut self,
-        ui: &mut Ui,
-        ctx: &Context,
-        rect: Rect,
-        from: Screen,
-        to: Screen,
-        progress: f32,
-    ) {
-        let settled = from == to;
-        let out_opacity = (1.0 - 2.0 * progress).max(0.0);
-        let in_opacity = if settled {
-            1.0
-        } else {
-            (2.0 * progress - 1.0).max(0.0)
-        };
-        let has_back = |screen| screen != Screen::Main;
-        let shared_back = has_back(from) && has_back(to);
-
-        let mut title_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt("header-title")
-                .max_rect(rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        if !settled {
-            title_ui.disable();
-        }
-        let leading = Rect::from_min_size(rect.min, vec2(HEADER_LEADING_WIDTH, rect.height()));
-        let mut lead_ui = |ui: &mut Ui, screen: Screen, opacity: f32| {
-            let mut lead = ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt(("header-leading", has_back(screen)))
-                    .max_rect(leading)
-                    .layout(Layout::left_to_right(Align::Center)),
-            );
-            lead.set_opacity(opacity);
-            if has_back(screen) {
-                let back = icon_button(&mut lead, ph::CARET_LEFT, 14.0, theme::text_muted())
-                    .on_hover_text("Back");
-                if back.clicked() {
-                    self.nav_back(ctx, false);
-                }
-            } else {
-                lead.add(
-                    egui::Image::new(&self.logo)
-                        .fit_to_exact_size(vec2(24.0, 24.0))
-                        .corner_radius(0.0),
-                );
-            }
-        };
-        if settled || shared_back {
-            lead_ui(&mut title_ui, to, 1.0);
-        } else {
-            lead_ui(&mut title_ui, from, out_opacity);
-            lead_ui(&mut title_ui, to, in_opacity);
-        }
-
-        let text_rect = Rect::from_min_max(
-            egui::pos2(rect.left() + HEADER_LEADING_WIDTH, rect.top()),
-            rect.max,
-        );
-        let titles: &[(Screen, f32)] = if settled {
-            &[(to, 1.0)]
-        } else {
-            &[(from, out_opacity), (to, in_opacity)]
-        };
-        for &(screen, opacity) in titles {
-            if opacity <= 0.0 {
-                continue;
-            }
-            let mut text_ui = title_ui.new_child(
-                egui::UiBuilder::new()
-                    .id_salt(("header-text", screen))
-                    .max_rect(text_rect)
-                    .layout(Layout::left_to_right(Align::Center)),
-            );
-            text_ui.set_opacity(opacity);
-            text_ui.add(
-                Label::new(semibold(screen_title(screen), 14.0, theme::text_strong()))
-                    .selectable(false),
-            );
-        }
-
-        // Laid out left to right so Tab visits them in reading order.
-        let actions_width = 3.0 * HEADER_BUTTON_SIZE + 2.0 * HEADER_BUTTON_GAP;
-        let mut actions_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt("header-actions")
-                .max_rect(Rect::from_min_max(
-                    egui::pos2(rect.right() - actions_width, rect.top()),
-                    rect.max,
-                ))
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        if header_button(&mut actions_ui, ph::ARROWS_CLOCKWISE, false)
-            .on_hover_text("Refresh")
-            .clicked()
-        {
-            backend::refresh_status(self.shared.clone(), ctx.clone());
-        }
-        actions_ui.add_space(HEADER_BUTTON_GAP);
-        if header_button(
-            &mut actions_ui,
-            ph::GEAR_SIX,
-            self.screen == Screen::Settings,
-        )
-        .on_hover_text("Settings")
-        .clicked()
-        {
-            if self.screen == Screen::Settings {
-                self.nav_back(ctx, false);
-            } else {
-                self.navigate(Screen::Settings, ctx);
-            }
-        }
-        actions_ui.add_space(HEADER_BUTTON_GAP);
-        if header_button(&mut actions_ui, ph::QR_CODE, self.screen == Screen::Pair)
-            .on_hover_text("Pair new device")
-            .clicked()
-        {
-            if self.screen == Screen::Pair {
-                self.nav_back(ctx, false);
-            } else {
-                self.navigate(Screen::Pair, ctx);
-            }
+            _ => self.render_screen(ui, body, clip, ctx, self.screen, 0.0, fade, in_window),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_screen(
         &mut self,
         ui: &mut Ui,
         content: Rect,
+        clip: Rect,
         ctx: &Context,
         screen: Screen,
         offset_x: f32,
-        opacity: f32,
+        fade: &dyn Fn(egui::Pos2) -> Color32,
+        in_window: bool,
     ) {
         let mut screen_ui = ui.new_child(
             egui::UiBuilder::new()
-                .id_salt(("screen", screen))
+                .id_salt(("screen", screen, in_window))
                 .max_rect(content.translate(vec2(offset_x, 0.0)))
                 .layout(Layout::top_down(Align::Min)),
         );
-        // Hover shapes and scroll edges may bleed into the side margins, and
-        // sliding pages run edge to edge, so the clip spans the window width
-        // (inside its hairline border) rather than the content column.
-        let window = ui.max_rect();
-        screen_ui.set_clip_rect(Rect::from_min_max(
-            egui::pos2(window.left() + 1.0, content.top() - SCREEN_TOP_BLEED),
-            egui::pos2(window.right() - 1.0, content.bottom()),
-        ));
-        screen_ui.set_opacity(opacity);
+        screen_ui.set_clip_rect(clip.intersect(ui.clip_rect()));
         if self.animations.screen.is_some() {
             // Both screens are painted during the transition. Keep their
             // visual treatment intact while preventing clicks from reaching
@@ -1665,36 +2275,228 @@ impl App {
         }
 
         match screen {
-            Screen::Main => self.main_screen(&mut screen_ui, ctx),
-            Screen::Settings => self.settings_screen(&mut screen_ui, ctx),
+            Screen::Devices => self.devices_page(&mut screen_ui, ctx, fade, in_window),
             Screen::Pair => self.pair_screen(&mut screen_ui, ctx),
+            Screen::Logs => self.logs_tab(&mut screen_ui, fade),
+            Screen::Settings => self.settings_screen(&mut screen_ui, ctx, fade),
         }
     }
 
-    fn main_screen(&mut self, ui: &mut Ui, ctx: &Context) {
-        self.tab_bar(ui);
-
-        match self.tab {
-            Tab::Devices => self.devices_tab(ui, ctx),
-            Tab::Logs => self.logs_tab(ui),
-        }
-    }
-
-    fn tab_bar(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            if tab_item(ui, "Devices", self.tab == Tab::Devices).clicked() {
-                self.tab = Tab::Devices;
-            }
-            ui.add_space(18.0);
-            if tab_item(ui, "Logs", self.tab == Tab::Logs).clicked() {
-                self.tab = Tab::Logs;
-            }
+    /// The detached window, as its own viewport beside the hidden popover
+    fn show_window(&mut self, ctx: &Context) {
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Twin")
+            .with_inner_size(WINDOW_SIZE)
+            .with_min_inner_size(WINDOW_MIN_SIZE)
+            .with_fullsize_content_view(true)
+            .with_titlebar_shown(false)
+            .with_title_shown(false);
+        let mut closed = false;
+        let mut back = false;
+        ctx.show_viewport_immediate(window_viewport_id(), builder, |ctx, _class| {
+            #[allow(deprecated)]
+            egui::CentralPanel::default()
+                .frame(Frame::NONE)
+                .show(ctx, |ui| {
+                    back = self.window_ui(ui, ctx);
+                });
+            closed = ctx.input(|input| input.viewport().close_requested());
         });
-        divider(ui);
+        if back || closed {
+            self.attach(ctx, back);
+        }
     }
 
-    fn devices_tab(&mut self, ui: &mut Ui, ctx: &Context) {
-        let (snapshot, (mirrors, pair_keys), starting_avds, deleting_avds) = {
+    /// The window: a sidebar with the pages, and the page under its title.
+    /// Returns whether "Back to menu bar" was clicked.
+    fn window_ui(&mut self, ui: &mut Ui, ctx: &Context) -> bool {
+        let rect = ui.max_rect();
+        let day_weight = self.animations.skin.day_weight;
+        let gradients = self.settings.gradients;
+        paint_window_surface(ui.painter(), rect, day_weight, gradients);
+
+        let sidebar = Rect::from_min_size(rect.min, vec2(SIDEBAR_WIDTH, rect.height()));
+        let painter = ui.painter();
+        painter.rect_filled(sidebar, 0.0, theme::sidebar_fill());
+        painter.rect_filled(
+            Rect::from_min_max(
+                egui::pos2(sidebar.right() - 1.0, sidebar.top()),
+                sidebar.max,
+            ),
+            0.0,
+            theme::card_stroke(),
+        );
+        // Under the traffic lights: the mark and the name
+        let brand_y = rect.top() + 64.0;
+        let logo = Rect::from_min_size(
+            egui::pos2(sidebar.left() + 20.0, brand_y - 12.0),
+            vec2(24.0, 24.0),
+        );
+        painter.image(
+            self.logo.id(),
+            logo,
+            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        painter.text(
+            egui::pos2(logo.right() + 12.0, brand_y),
+            egui::Align2::LEFT_CENTER,
+            "Twin",
+            kit::font(16.0, theme::BOLD),
+            theme::text_strong(),
+        );
+
+        let nav_left = sidebar.left() + 12.0;
+        let nav_width = SIDEBAR_WIDTH - 24.0;
+        let nav_top = brand_y + 28.0;
+        let position = self.page_position();
+        let item = |index: f32| {
+            Rect::from_min_size(
+                egui::pos2(nav_left, nav_top + index * (NAV_ITEM + 4.0)),
+                vec2(nav_width, NAV_ITEM),
+            )
+        };
+        ui.painter()
+            .rect_filled(item(position), 8.0, theme::nav_on());
+        let mut target = None;
+        for (index, screen) in SCREEN_ORDER.iter().enumerate() {
+            let rect = item(index as f32);
+            let response = ui.interact(rect, ui.id().with(("nav", index)), Sense::click());
+            let (hover, _) = kit::overlay(ui, &response);
+            if *screen != self.screen {
+                ui.painter().rect_filled(rect, 8.0, hover);
+            }
+            let under = (1.0 - (position - index as f32).abs()).clamp(0.0, 1.0);
+            ui.painter().text(
+                egui::pos2(rect.left() + 12.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                window_title(*screen),
+                if under > 0.5 {
+                    kit::font(13.0, theme::MEDIUM)
+                } else {
+                    kit::regular_font(13.0)
+                },
+                theme::tab_inactive().lerp_to_gamma(theme::text_strong(), under),
+            );
+            if response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                target = Some(*screen);
+            }
+        }
+        if let Some(screen) = target {
+            self.go(screen, ctx);
+        }
+
+        let back_rect = Rect::from_min_size(
+            egui::pos2(nav_left, rect.bottom() - 16.0 - kit::BUTTON),
+            vec2(nav_width, kit::BUTTON),
+        );
+        let back = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(back_rect), |ui| {
+                kit::link_button(ui, ph::ARROW_SQUARE_IN, "Back to menu bar").clicked()
+            })
+            .inner;
+
+        // The page, under its title and Refresh
+        let main = Rect::from_min_max(
+            egui::pos2(sidebar.right() + 32.0, rect.top() + 28.0),
+            egui::pos2(rect.right() - 32.0, rect.bottom() - 24.0),
+        );
+        let title = Rect::from_min_size(main.min, vec2(main.width(), kit::BUTTON));
+        let progress = self
+            .animations
+            .screen
+            .map(|transition| (transition, transition.progress()));
+        let titles: Vec<(Screen, f32)> = match progress {
+            Some((transition, progress)) if progress < 1.0 => vec![
+                (transition.from, (1.0 - 2.0 * progress).max(0.0)),
+                (transition.to, (2.0 * progress - 1.0).max(0.0)),
+            ],
+            _ => vec![(self.screen, 1.0)],
+        };
+        for (screen, opacity) in titles {
+            if opacity > 0.0 {
+                ui.painter().text(
+                    egui::pos2(title.left(), title.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    window_title(screen),
+                    kit::font(20.0, theme::BOLD),
+                    theme::text_strong().gamma_multiply(opacity),
+                );
+            }
+        }
+        let refresh = Rect::from_min_size(
+            egui::pos2(title.right() - kit::BUTTON, title.top()),
+            vec2(kit::BUTTON, kit::BUTTON),
+        );
+        if ui
+            .scope_builder(egui::UiBuilder::new().max_rect(refresh), |ui| {
+                kit::ghost_button(ui, ph::ARROWS_CLOCKWISE, "Refresh").clicked()
+            })
+            .inner
+        {
+            backend::refresh_status(self.shared.clone(), ctx.clone());
+        }
+
+        let body = Rect::from_min_max(egui::pos2(main.left(), title.bottom() + 20.0), main.max);
+        let clip = Rect::from_min_max(
+            egui::pos2(sidebar.right() + 1.0, body.top() - SCREEN_TOP_BLEED),
+            rect.max,
+        );
+        let height = rect.height();
+        let fade =
+            move |pos: egui::Pos2| window_surface_color(pos.y / height, day_weight, gradients);
+        self.render_pages(ui, ctx, body, clip, &fade, true);
+        back
+    }
+
+    fn devices_page(
+        &mut self,
+        ui: &mut Ui,
+        ctx: &Context,
+        fade: &dyn Fn(egui::Pos2) -> Color32,
+        in_window: bool,
+    ) {
+        let body = ui.available_rect_before_wrap();
+        let list = if in_window {
+            body
+        } else {
+            Rect::from_min_max(
+                body.min,
+                egui::pos2(body.right(), body.bottom() - kit::BUTTON - 8.0),
+            )
+        };
+        let mut list_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("devices-list")
+                .max_rect(list)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        self.devices_list(&mut list_ui, ctx, fade);
+
+        if !in_window {
+            let footer = Rect::from_min_max(
+                egui::pos2(body.left(), body.bottom() - kit::BUTTON),
+                body.max,
+            );
+            let clicked = ui
+                .scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(footer)
+                        .layout(Layout::right_to_left(Align::Center)),
+                    |ui| kit::link_button(ui, ph::ARROW_SQUARE_OUT, "Open as window").clicked(),
+                )
+                .inner;
+            if clicked {
+                self.detach(ctx);
+            }
+        }
+    }
+
+    fn devices_list(&mut self, ui: &mut Ui, ctx: &Context, fade: &dyn Fn(egui::Pos2) -> Color32) {
+        let (snapshot, (mirrors, pair_keys), starting_avds, deleting_avds, stopping) = {
             let state = self.shared.lock().unwrap();
             let mut mirrors = state.mirrors.keys().cloned().collect::<Vec<_>>();
             mirrors.extend(state.starting_mirrors.iter().cloned());
@@ -1710,6 +2512,7 @@ impl App {
                 (mirrors, pair_keys),
                 state.starting_avds.clone(),
                 state.deleting_avds.clone(),
+                state.stopping.clone(),
             )
         };
 
@@ -1724,44 +2527,23 @@ impl App {
         }
 
         let Some(snapshot) = snapshot else {
-            ui.add_space(24.0);
+            ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.add(Label::new(regular(
-                    "Checking devices…",
-                    11.0,
-                    theme::text_faint(),
-                )));
+                ui.add(egui::Spinner::new().size(18.0).color(theme::icon_muted()));
+                ui.add_space(12.0);
+                ui.add(
+                    Label::new(regular("Checking devices…", 12.0, theme::heading()))
+                        .selectable(false),
+                );
             });
             return;
         };
 
-        if snapshot.devices.is_empty() && snapshot.avds.is_empty() && snapshot.iphones.is_empty() {
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.add(Label::new(regular(
-                    "No devices connected",
-                    12.5,
-                    theme::text_muted(),
-                )));
-                ui.add_space(6.0);
-                ui.add(Label::new(regular(
-                    "Tap the QR icon to pair a phone over Wi-Fi",
-                    11.0,
-                    theme::text_faint(),
-                )));
-            });
-            return;
-        }
-
         let scrcpy_ok = snapshot.mirror.available;
-        let day_weight = self.animations.skin.day_weight;
-        let shell = Arc::clone(&self.shell);
         let settings = &self.settings;
         let shared = &self.shared;
         let pending_avd_delete = &mut self.pending_avd_delete;
-        chrome_scroll(ui, "devices-scroll", &shell, day_weight, false, |ui| {
-            let has_phones = snapshot.devices.iter().any(|device| !device.is_emulator)
-                || !snapshot.iphones.is_empty();
+        chrome_scroll(ui, "devices-scroll", fade, false, |ui| {
             // Side by side: the first ready Android phone and the first
             // iPhone open together, so they show as one unit with one button
             let pair = settings
@@ -1774,53 +2556,53 @@ impl App {
                     Some((android, snapshot.iphones.first()?))
                 })
                 .flatten();
-            if has_phones {
-                ui.add_space(PHYSICAL_TOP_SPACE);
-                section_header(ui, "Physical");
-            }
-            let mut first = true;
-            if let Some((android, iphone)) = pair {
-                first = false;
-                let iphone_key = backend::iphone_mirror_key(iphone);
-                let paired = pair_keys.contains(&android.mirror_key);
-                let android_mirroring = mirrors.contains(&android.mirror_key);
-                let iphone_mirroring = mirrors.contains(&iphone_key);
-                let one = |mirroring: bool, ready: bool| {
-                    if mirroring {
-                        RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
-                    } else if ready {
-                        RowAction::enabled(ph::PLAY, theme::text_bright())
-                            .with_tooltip("Mirror screen")
+            let paired_android = pair.map(|(android, _)| android.mirror_key.as_str());
+            let androids: Vec<_> = snapshot
+                .devices
+                .iter()
+                .filter(|device| {
+                    !device.is_emulator && Some(device.mirror_key.as_str()) != paired_android
+                })
+                .collect();
+            let iphones: Vec<_> = snapshot
+                .iphones
+                .iter()
+                .skip(usize::from(pair.is_some()))
+                .collect();
+
+            kit::heading(ui, "Physical", theme::heading());
+            kit::card(ui, |ui| {
+                if let Some((android, iphone)) = pair {
+                    let iphone_key = backend::iphone_mirror_key(iphone);
+                    let paired = pair_keys.contains(&android.mirror_key);
+                    let android_mirroring = mirrors.contains(&android.mirror_key);
+                    let iphone_mirroring = mirrors.contains(&iphone_key);
+                    let any = android_mirroring || iphone_mirroring;
+                    let both = if any {
+                        kit::ButtonLook::Active
+                    } else if scrcpy_ok {
+                        kit::ButtonLook::Normal
                     } else {
-                        RowAction::disabled(ph::PLAY)
-                    }
-                };
-                let both = if android_mirroring || iphone_mirroring {
-                    RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop both")
-                } else if scrcpy_ok {
-                    RowAction::enabled(ph::PLAY, theme::text_bright())
-                        .with_tooltip("Mirror both side by side")
-                } else {
-                    RowAction::disabled(ph::PLAY)
-                };
-                let top = android_row(android, android_mirroring);
-                let bottom = iphone_row(iphone, &iphone_key, iphone_mirroring);
-                let link = if android_mirroring && iphone_mirroring && paired {
-                    theme::green()
-                } else {
-                    theme::text_faint()
-                };
-                let actions = [
-                    one(android_mirroring, scrcpy_ok),
-                    one(iphone_mirroring, true),
-                    both,
-                ];
-                match pair_rows(ui, &top, &bottom, &actions, link) {
-                    // Both: stop whatever shows, or open the pair
-                    Some(PairClick::Both) => {
+                        kit::ButtonLook::Disabled
+                    };
+                    let clicked = pair_header(
+                        ui,
+                        if any {
+                            theme::green()
+                        } else {
+                            theme::heading()
+                        },
+                        both,
+                        if any {
+                            "Stop both"
+                        } else {
+                            "Mirror both side by side"
+                        },
+                    );
+                    if clicked {
                         if paired {
                             backend::stop_pair(shared);
-                        } else if android_mirroring || iphone_mirroring {
+                        } else if any {
                             if android_mirroring {
                                 backend::stop_mirror(shared, &android.mirror_key);
                             }
@@ -1837,167 +2619,205 @@ impl App {
                             );
                         }
                     }
-                    // One phone, as with Side by side off; in an open pair it
-                    // hides or shows that phone's side of Twin
-                    Some(PairClick::Android) => {
-                        if paired {
-                            backend::set_pair_pane(shared, 0, !android_mirroring);
-                        } else if android_mirroring {
-                            backend::stop_mirror(shared, &android.mirror_key);
-                        } else {
-                            backend::start_mirror(
-                                shared.clone(),
-                                ctx.clone(),
-                                android.clone(),
-                                settings.scrcpy_options(),
-                                settings.pair_options(),
-                            );
+                    kit::row_divider(ui);
+                    phones_block(ui, |ui| {
+                        // In an open pair, a phone's button hides or shows
+                        // its side of the window
+                        if android_phone_row(ui, android, android_mirroring, scrcpy_ok, paired) {
+                            if paired {
+                                backend::set_pair_pane(shared, 0, !android_mirroring);
+                            } else if android_mirroring {
+                                backend::stop_mirror(shared, &android.mirror_key);
+                            } else {
+                                backend::start_mirror(
+                                    shared.clone(),
+                                    ctx.clone(),
+                                    android.clone(),
+                                    settings.scrcpy_options(),
+                                    settings.pair_options(),
+                                );
+                            }
                         }
-                    }
-                    Some(PairClick::IPhone) => {
-                        if paired {
-                            backend::set_pair_pane(shared, 1, !iphone_mirroring);
-                        } else if iphone_mirroring {
-                            backend::stop_mirror(shared, &iphone_key);
-                        } else {
-                            backend::start_iphone_mirror(
-                                shared.clone(),
-                                ctx.clone(),
-                                iphone.clone(),
-                                settings.window_height,
-                                &settings.iphone_title,
-                                settings.touch_pointer,
-                            );
+                        ui.add_space(16.0);
+                        if iphone_phone_row(ui, iphone, iphone_mirroring, paired) {
+                            if paired {
+                                backend::set_pair_pane(shared, 1, !iphone_mirroring);
+                            } else if iphone_mirroring {
+                                backend::stop_mirror(shared, &iphone_key);
+                            } else {
+                                backend::start_iphone_mirror(
+                                    shared.clone(),
+                                    ctx.clone(),
+                                    iphone.clone(),
+                                    settings.window_height,
+                                    &settings.iphone_title,
+                                    settings.touch_pointer,
+                                );
+                            }
                         }
+                    });
+                    if !androids.is_empty() || !iphones.is_empty() {
+                        kit::row_divider(ui);
                     }
-                    None => {}
                 }
-            }
 
-            let paired_android = pair.map(|(android, _)| android.mirror_key.as_str());
-            let devices = snapshot.devices.iter().filter(|device| {
-                !device.is_emulator && Some(device.mirror_key.as_str()) != paired_android
+                if !androids.is_empty() || !iphones.is_empty() {
+                    phones_block(ui, |ui| {
+                        let mut first = true;
+                        for device in &androids {
+                            if !std::mem::take(&mut first) {
+                                ui.add_space(16.0);
+                            }
+                            let mirroring = mirrors.contains(&device.mirror_key);
+                            if android_phone_row(ui, device, mirroring, scrcpy_ok, false) {
+                                if pair_keys.contains(&device.mirror_key) {
+                                    backend::stop_pair(shared);
+                                } else if mirroring {
+                                    backend::stop_mirror(shared, &device.mirror_key);
+                                } else {
+                                    backend::start_mirror(
+                                        shared.clone(),
+                                        ctx.clone(),
+                                        (*device).clone(),
+                                        settings.scrcpy_options(),
+                                        settings.pair_options(),
+                                    );
+                                }
+                            }
+                        }
+                        for iphone in &iphones {
+                            if !std::mem::take(&mut first) {
+                                ui.add_space(16.0);
+                            }
+                            let key = backend::iphone_mirror_key(iphone);
+                            let mirroring = mirrors.contains(&key);
+                            if iphone_phone_row(ui, iphone, mirroring, false) {
+                                if pair_keys.contains(&key) {
+                                    backend::stop_pair(shared);
+                                } else if mirroring {
+                                    backend::stop_mirror(shared, &key);
+                                } else {
+                                    backend::start_iphone_mirror(
+                                        shared.clone(),
+                                        ctx.clone(),
+                                        (*iphone).clone(),
+                                        settings.window_height,
+                                        &settings.iphone_title,
+                                        settings.touch_pointer,
+                                    );
+                                }
+                            }
+                        }
+                    });
+                } else if pair.is_none() {
+                    empty_row(
+                        ui,
+                        "No phones connected",
+                        "Plug one in, or pair one over Wi-Fi in Pair",
+                    );
+                }
             });
-            for device in devices {
-                if !std::mem::take(&mut first) {
-                    row_divider(ui);
-                }
-                let mirroring = mirrors.contains(&device.mirror_key);
-                let action = if mirroring {
-                    RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
-                } else if device.ready && scrcpy_ok {
-                    RowAction::enabled(ph::PLAY, theme::text_bright()).with_tooltip("Mirror screen")
-                } else {
-                    RowAction::disabled(ph::PLAY)
-                };
-                if list_row_with(ui, &android_row(device, mirroring), &[action]).is_some() {
-                    if pair_keys.contains(&device.mirror_key) {
-                        backend::stop_pair(shared);
-                    } else if mirroring {
-                        backend::stop_mirror(shared, &device.mirror_key);
+
+            if snapshot.avds.is_empty() && snapshot.simulators.is_empty() {
+                return;
+            }
+            ui.add_space(16.0);
+            kit::heading(ui, "Virtual", theme::heading());
+            kit::card(ui, |ui| {
+                let mut first = true;
+                for avd in &snapshot.avds {
+                    if !std::mem::take(&mut first) {
+                        kit::row_divider(ui);
+                    }
+                    let starting = starting_avds.contains(&avd.name);
+                    let deleting = deleting_avds.contains(&avd.name);
+                    let stopping = stopping.contains(&avd.name);
+                    let running = avd.device.is_some();
+                    let name = avd.name.replace('_', " ");
+                    let delete = if deleting {
+                        kit::ButtonLook::Busy
+                    } else if running || starting || stopping {
+                        kit::ButtonLook::Disabled
                     } else {
-                        backend::start_mirror(
-                            shared.clone(),
-                            ctx.clone(),
-                            device.clone(),
-                            settings.scrcpy_options(),
-                            settings.pair_options(),
-                        );
+                        kit::ButtonLook::Normal
+                    };
+                    let (main, main_glyph, main_tip) = if starting || stopping {
+                        (kit::ButtonLook::Busy, kit::Glyph::Play, "")
+                    } else if running {
+                        (kit::ButtonLook::Active, kit::Glyph::Stop, "Stop emulator")
+                    } else if deleting {
+                        (kit::ButtonLook::Disabled, kit::Glyph::Play, "")
+                    } else {
+                        (kit::ButtonLook::Normal, kit::Glyph::Play, "Start emulator")
+                    };
+                    let row = VirtualRow {
+                        key: &avd.name,
+                        mark: Mark::Glyph(kit::Glyph::Android),
+                        running: running && !stopping,
+                        name: &name,
+                        buttons: [
+                            (kit::Face::Glyph(kit::Glyph::Bin), delete, "Delete emulator"),
+                            (kit::Face::Glyph(main_glyph), main, main_tip),
+                        ],
+                    };
+                    match virtual_row(ui, row) {
+                        Some(0) => *pending_avd_delete = Some(avd.name.clone()),
+                        Some(1) if running => {
+                            if let Some(device) = &avd.device {
+                                backend::stop_avd(
+                                    shared.clone(),
+                                    ctx.clone(),
+                                    avd.name.clone(),
+                                    device.serial.clone(),
+                                );
+                            }
+                        }
+                        Some(1) => {
+                            backend::start_avd(shared.clone(), ctx.clone(), avd.name.clone())
+                        }
+                        _ => {}
                     }
                 }
-            }
-
-            let iphones = snapshot.iphones.iter().skip(usize::from(pair.is_some()));
-            for iphone in iphones {
-                if !std::mem::take(&mut first) {
-                    row_divider(ui);
-                }
-                let key = backend::iphone_mirror_key(iphone);
-                let mirroring = mirrors.contains(&key);
-                let action = if mirroring {
-                    RowAction::enabled(ph::STOP, theme::green()).with_tooltip("Stop mirroring")
-                } else {
-                    RowAction::enabled(ph::PLAY, theme::text_bright()).with_tooltip("Mirror screen")
-                };
-                if list_row_with(ui, &iphone_row(iphone, &key, mirroring), &[action]).is_some() {
-                    if pair_keys.contains(&key) {
-                        backend::stop_pair(shared);
-                    } else if mirroring {
-                        backend::stop_mirror(shared, &key);
-                    } else {
-                        backend::start_iphone_mirror(
-                            shared.clone(),
-                            ctx.clone(),
-                            iphone.clone(),
-                            settings.window_height,
-                            &settings.iphone_title,
-                            settings.touch_pointer,
-                        );
+                for sim in &snapshot.simulators {
+                    if !std::mem::take(&mut first) {
+                        kit::row_divider(ui);
+                    }
+                    let stopping = stopping.contains(&sim.udid);
+                    let row = VirtualRow {
+                        key: &sim.udid,
+                        mark: Mark::Font(ph::APPLE_LOGO),
+                        running: !stopping,
+                        name: &sim.name,
+                        buttons: [
+                            (
+                                kit::Face::Glyph(kit::Glyph::Show),
+                                kit::ButtonLook::Normal,
+                                "Show in Simulator",
+                            ),
+                            if stopping {
+                                (
+                                    kit::Face::Glyph(kit::Glyph::Stop),
+                                    kit::ButtonLook::Busy,
+                                    "",
+                                )
+                            } else {
+                                (
+                                    kit::Face::Glyph(kit::Glyph::Stop),
+                                    kit::ButtonLook::Active,
+                                    "Shut down simulator",
+                                )
+                            },
+                        ],
+                    };
+                    match virtual_row(ui, row) {
+                        Some(0) => backend::show_simulator(shared, sim),
+                        Some(1) => {
+                            backend::stop_simulator(shared.clone(), ctx.clone(), sim.clone())
+                        }
+                        _ => {}
                     }
                 }
-            }
-
-            if !snapshot.avds.is_empty() {
-                if has_phones {
-                    ui.add_space(14.0);
-                }
-                section_header(ui, "Virtual");
-                first = true;
-            }
-            for avd in &snapshot.avds {
-                if !std::mem::take(&mut first) {
-                    row_divider(ui);
-                }
-
-                let starting = starting_avds.contains(&avd.name);
-                let deleting = deleting_avds.contains(&avd.name);
-                let idle = avd.can_launch(starting) && !deleting;
-                // Play sits on the right edge; actions are laid out from the
-                // right, so it is also the first to take Tab focus.
-                let actions = [
-                    if idle {
-                        RowAction::enabled(ph::TRASH, theme::text_muted())
-                    } else {
-                        RowAction::disabled(ph::TRASH)
-                    }
-                    .with_tooltip("Delete emulator"),
-                    if idle {
-                        RowAction::enabled(ph::PLAY, theme::text_bright())
-                    } else {
-                        RowAction::disabled(ph::PLAY)
-                    }
-                    .with_tooltip("Start emulator"),
-                ];
-                let name = avd.name.replace('_', " ");
-                // A stopped emulator needs no label; its play button says it
-                let status = match avd.status(starting) {
-                    _ if deleting => "Deleting…",
-                    "Stopped" => "",
-                    status => status,
-                };
-                let row = Row {
-                    key: avd
-                        .device
-                        .as_ref()
-                        .map_or(avd.name.as_str(), |device| device.serial.as_str()),
-                    icon: ph::ANDROID_LOGO,
-                    icon_color: theme::text_label(),
-                    name: &name,
-                    tooltip: &name,
-                    status,
-                    status_color: if status == "Running" {
-                        theme::green()
-                    } else {
-                        theme::text_faint()
-                    },
-                };
-
-                match list_row_with(ui, &row, &actions) {
-                    Some(0) => *pending_avd_delete = Some(avd.name.clone()),
-                    Some(1) => backend::start_avd(shared.clone(), ctx.clone(), avd.name.clone()),
-                    _ => {}
-                }
-            }
+            });
         });
 
         if let Some(name) = self.pending_avd_delete.clone() {
@@ -2034,7 +2854,7 @@ impl App {
         }
     }
 
-    fn logs_tab(&mut self, ui: &mut Ui) {
+    fn logs_tab(&mut self, ui: &mut Ui, fade: &dyn Fn(egui::Pos2) -> Color32) {
         let logs: Vec<String> = self.shared.lock().unwrap().logs.clone();
         let empty = logs.is_empty();
         let mut log_text = if empty {
@@ -2043,181 +2863,183 @@ impl App {
             logs.join("\n")
         };
 
-        let shell = Arc::clone(&self.shell);
-        chrome_scroll(
-            ui,
-            "logs-scroll",
-            &shell,
-            self.animations.skin.day_weight,
-            true,
-            |ui| {
-                // Keep breathing room in the resting state while letting
-                // scrolled output disappear directly beneath the tab divider.
-                ui.add_space(8.0);
-                ui.add(
-                    TextEdit::multiline(&mut log_text)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(logs.len().max(1))
-                        .font(FontId::new(10.5, FontFamily::Monospace))
-                        .text_color(if empty {
-                            theme::text_faint()
-                        } else {
-                            theme::text_check()
-                        })
-                        .frame(Frame::NONE),
-                );
-            },
-        );
-    }
-
-    fn settings_screen(&mut self, ui: &mut Ui, ctx: &Context) {
-        let day_weight = self.animations.skin.day_weight;
-        let shell = Arc::clone(&self.shell);
-        chrome_scroll(ui, "settings-scroll", &shell, day_weight, false, |ui| {
-            section_header(ui, "Screen Mirroring");
-
-            let mut changed = false;
-            ui.horizontal(|ui| {
-                let total = ui.available_width();
-                // The width follows each phone's shape, so only the height is set
-                let title_width = (total - 2.0 * 56.0 - 3.0 * SPACE) / 2.0;
-                changed |=
-                    labeled_input(ui, "Android", title_width, &mut self.settings.window_title);
-                ui.add_space(SPACE);
-                changed |=
-                    labeled_input(ui, "iPhone", title_width, &mut self.settings.iphone_title);
-                ui.add_space(SPACE);
-                changed |= labeled_input(ui, "H", 56.0, &mut self.height_text);
-                ui.add_space(SPACE);
-                changed |= labeled_input(ui, "Gap", 56.0, &mut self.gap_text);
-            });
-
-            ui.add_space(SPACE * 1.5);
-            // The second row's columns line up with the first's
-            let mut second_column = 0.0;
-            ui.horizontal(|ui| {
-                changed |= check_item(ui, "Always on top", &mut self.settings.always_on_top);
-                ui.add_space(SPACE * 2.5);
-                second_column = ui.cursor().min.x;
-                changed |= check_item(ui, "Auto mirror", &mut self.settings.auto_mirror);
-            });
-            ui.add_space(SPACE);
-            ui.horizontal(|ui| {
-                changed |= check_item(ui, "Side by side", &mut self.settings.side_by_side);
-                ui.add_space((second_column - ui.cursor().min.x).max(SPACE * 2.5));
-                changed |= check_item(ui, "Touch pointer", &mut self.settings.touch_pointer);
-            });
-
-            ui.add_space(SPACE * 2.0);
-            divider(ui);
-            ui.add_space(SPACE * 2.0);
-
-            section_header(ui, "General");
-
-            let mut theme_changed = false;
-            ui.allocate_ui_with_layout(
-                vec2(ui.available_width(), THEME_MODE_GROUP_SIZE.y),
-                Layout::left_to_right(Align::Center),
-                |ui| {
-                    ui.add(
-                        Label::new(regular("Appearance", 12.0, theme::text_check()))
-                            .selectable(false),
-                    );
-                    theme_changed |= ui
-                        .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            theme_mode_group(ui, &mut self.settings.theme)
-                        })
-                        .inner;
-                },
-            );
-            changed |= theme_changed;
-
-            ui.add_space(SPACE * 1.5);
-            // Queried when Settings opens, off the UI thread, so opening it
-            // never stutters.
-            if self.open_at_login.is_none() && self.login_query.is_none() {
-                let (sender, receiver) = std::sync::mpsc::channel();
-                let repaint = ctx.clone();
-                let headless = self.headless;
-                std::thread::spawn(move || {
-                    let _ = sender.send(!headless && login_item::is_enabled());
-                    repaint.request_repaint();
-                });
-                self.login_query = Some(receiver);
-            }
-            if let Some(enabled) = self
-                .login_query
-                .as_ref()
-                .and_then(|receiver| receiver.try_recv().ok())
-            {
-                self.open_at_login = Some(enabled);
-                self.login_query = None;
-            }
-            let mut open_at_login = self.open_at_login.unwrap_or(false);
-            let mut gradients_changed = false;
-            ui.horizontal(|ui| {
-                if check_item(ui, "Open at Login", &mut open_at_login) {
-                    if !self.headless {
-                        login_item::set_enabled(open_at_login);
-                    }
-                    self.open_at_login = Some(open_at_login);
-                    self.login_query = None;
-                }
-                ui.add_space(SPACE * 2.5);
-                gradients_changed = check_item(ui, "Gradients", &mut self.settings.gradients);
-            });
-            if gradients_changed {
-                changed = true;
-                (self.day_shell, self.night_shell, self.shell) =
-                    load_shells(ctx, self.settings.gradients);
-            }
-
-            if changed {
-                self.save_settings();
-            }
-            if theme_changed {
-                ctx.request_repaint();
-            }
-
-            ui.add_space(SPACE * 2.0);
-            divider(ui);
-            ui.add_space(SPACE * 2.0);
-
-            section_header(ui, "Setup");
-
-            let snapshot = self.shared.lock().unwrap().snapshot.clone();
-            let (adb, xcode, emulator) = match &snapshot {
-                Some(snapshot) => (
-                    Some(&snapshot.adb),
-                    Some(&snapshot.xcode),
-                    Some(&snapshot.emulator),
-                ),
-                None => (None, None, None),
-            };
-
-            // Nothing installs or opens until its button is pressed
-            dependency_row(ui, ph::TERMINAL_WINDOW, "ADB", adb, None);
-            divider(ui);
-            dependency_row(
-                ui,
-                ph::APPLE_LOGO,
-                "Xcode, for iPhones",
-                xcode,
-                Some(if xcode.is_some_and(|tool| tool.available) {
-                    ("Open Xcode", "/Applications/Xcode.app")
-                } else {
-                    ("Get Xcode", "macappstore://apps.apple.com/app/id497799835")
-                }),
-            );
-            divider(ui);
-            dependency_row(
-                ui,
-                ph::DESKTOP,
-                "Android Emulator (optional)",
-                emulator,
-                Some(("Get Android Studio", "https://developer.android.com/studio")),
+        chrome_scroll(ui, "logs-scroll", fade, true, |ui| {
+            ui.add(
+                TextEdit::multiline(&mut log_text)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(logs.len().max(1))
+                    .font(FontId::new(10.5, FontFamily::Monospace))
+                    .text_color(if empty {
+                        theme::text_faint()
+                    } else {
+                        theme::text_check()
+                    })
+                    .frame(Frame::NONE),
             );
         });
+    }
+
+    fn settings_screen(
+        &mut self,
+        ui: &mut Ui,
+        ctx: &Context,
+        fade: &dyn Fn(egui::Pos2) -> Color32,
+    ) {
+        // Queried when Settings opens, off the UI thread, so opening it
+        // never stutters.
+        if self.open_at_login.is_none() && self.login_query.is_none() {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let repaint = ctx.clone();
+            let headless = self.headless;
+            std::thread::spawn(move || {
+                let _ = sender.send(!headless && login_item::is_enabled());
+                repaint.request_repaint();
+            });
+            self.login_query = Some(receiver);
+        }
+        if let Some(enabled) = self
+            .login_query
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok())
+        {
+            self.open_at_login = Some(enabled);
+            self.login_query = None;
+        }
+        let snapshot = self.shared.lock().unwrap().snapshot.clone();
+
+        let mut changed = false;
+        let mut gradients_changed = false;
+        let mut theme_changed = false;
+        let mut login_changed = None;
+        chrome_scroll(ui, "settings-scroll", fade, false, |ui| {
+            kit::heading(ui, "Mirror windows", theme::heading());
+            kit::card(ui, |ui| {
+                setting_row(ui, "Android title", false, |ui| {
+                    changed |= field(
+                        ui,
+                        "android-title",
+                        &mut self.settings.window_title,
+                        160.0,
+                        "",
+                    );
+                });
+                setting_row(ui, "iPhone title", true, |ui| {
+                    changed |= field(
+                        ui,
+                        "iphone-title",
+                        &mut self.settings.iphone_title,
+                        160.0,
+                        "",
+                    );
+                });
+                setting_row(ui, "Height", true, |ui| {
+                    changed |= field(ui, "height", &mut self.height_text, 80.0, "pt");
+                });
+                setting_row(ui, "Gap between phones", true, |ui| {
+                    changed |= field(ui, "gap", &mut self.gap_text, 80.0, "pt");
+                });
+                setting_row(ui, "Side by side", true, |ui| {
+                    changed |= kit::toggle(ui, &mut self.settings.side_by_side, "Side by side");
+                });
+                setting_row(ui, "Touch pointer", true, |ui| {
+                    changed |= kit::toggle(ui, &mut self.settings.touch_pointer, "Touch pointer");
+                });
+                setting_row(ui, "Always on top", true, |ui| {
+                    changed |= kit::toggle(ui, &mut self.settings.always_on_top, "Always on top");
+                });
+                setting_row(ui, "Mirror when connected", true, |ui| {
+                    changed |=
+                        kit::toggle(ui, &mut self.settings.auto_mirror, "Mirror when connected");
+                });
+            });
+
+            ui.add_space(16.0);
+            kit::heading(ui, "App", theme::heading());
+            kit::card(ui, |ui| {
+                setting_row(ui, "Appearance", false, |ui| {
+                    let modes = [ThemeMode::Auto, ThemeMode::Day, ThemeMode::Night];
+                    let selected = modes
+                        .iter()
+                        .position(|mode| *mode == self.settings.theme)
+                        .unwrap_or(0);
+                    let (rect, _) = ui.allocate_exact_size(vec2(168.0, 30.0), Sense::hover());
+                    let position = ui.ctx().animate_value_with_time(
+                        ui.id().with("appearance-pill"),
+                        selected as f32,
+                        0.18,
+                    );
+                    if let Some(index) = kit::segmented(
+                        ui,
+                        rect,
+                        &["Auto", "Day", "Night"],
+                        selected,
+                        position,
+                        12.0,
+                    ) && index != selected
+                    {
+                        self.settings.theme = modes[index];
+                        theme_changed = true;
+                    }
+                });
+                let mut open_at_login = self.open_at_login.unwrap_or(false);
+                setting_row(ui, "Open at login", true, |ui| {
+                    if kit::toggle(ui, &mut open_at_login, "Open at login") {
+                        login_changed = Some(open_at_login);
+                    }
+                });
+                setting_row(ui, "Gradients", true, |ui| {
+                    gradients_changed = kit::toggle(ui, &mut self.settings.gradients, "Gradients");
+                });
+            });
+
+            ui.add_space(16.0);
+            kit::heading(ui, "Setup", theme::heading());
+            kit::card(ui, |ui| {
+                let xcode = snapshot.as_ref().map(|snapshot| &snapshot.xcode);
+                let emulator = snapshot.as_ref().map(|snapshot| &snapshot.emulator);
+                // Nothing installs or opens until its button is pressed
+                tool_row(
+                    ui,
+                    "iPhone",
+                    "Xcode",
+                    false,
+                    xcode,
+                    if xcode.is_some_and(|tool| tool.available) {
+                        ("Open Xcode", "/Applications/Xcode.app")
+                    } else {
+                        ("Get Xcode", "macappstore://apps.apple.com/app/id497799835")
+                    },
+                );
+                tool_row(
+                    ui,
+                    "Emulators",
+                    "Android Studio",
+                    true,
+                    emulator,
+                    ("Get Android Studio", "https://developer.android.com/studio"),
+                );
+            });
+            ui.add_space(4.0);
+        });
+
+        if let Some(enabled) = login_changed {
+            if !self.headless {
+                login_item::set_enabled(enabled);
+            }
+            self.open_at_login = Some(enabled);
+            self.login_query = None;
+        }
+        if gradients_changed {
+            changed = true;
+            (self.day_shell, self.night_shell, self.shell) =
+                load_shells(ctx, self.settings.gradients);
+        }
+        if changed || theme_changed {
+            self.save_settings();
+        }
+        if theme_changed {
+            ctx.request_repaint();
+        }
     }
 
     fn pair_screen(&mut self, ui: &mut Ui, ctx: &Context) {
@@ -2335,44 +3157,12 @@ impl App {
                         )
                         .clicked()
                         {
-                            self.return_to_main(ctx);
+                            self.go(Screen::Devices, ctx);
                         }
                     });
                 });
             }
         }
-    }
-}
-
-struct RowAction {
-    glyph: &'static str,
-    tooltip: Option<&'static str>,
-    color: Color32,
-    enabled: bool,
-}
-
-impl RowAction {
-    fn enabled(glyph: &'static str, color: Color32) -> Self {
-        Self {
-            glyph,
-            tooltip: None,
-            color,
-            enabled: true,
-        }
-    }
-
-    fn disabled(glyph: &'static str) -> Self {
-        Self {
-            glyph,
-            tooltip: None,
-            color: theme::text_faint(),
-            enabled: false,
-        }
-    }
-
-    fn with_tooltip(mut self, tooltip: &'static str) -> Self {
-        self.tooltip = Some(tooltip);
-        self
     }
 }
 
@@ -2395,204 +3185,6 @@ fn icon_button(ui: &mut Ui, glyph: &str, size: f32, color: Color32) -> egui::Res
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-fn tab_item(ui: &mut Ui, label: &str, active: bool) -> egui::Response {
-    let text = if active {
-        semibold(label, 12.5, theme::text_strong())
-    } else {
-        medium(label, 12.5, theme::text_muted())
-    };
-
-    let response = ui
-        .vertical(|ui| {
-            let background = ui.painter().add(egui::Shape::Noop);
-            // The label only shows text; a separate click area takes focus so
-            // egui does not underline the focused label.
-            let label = ui.add(Label::new(text).selectable(false));
-            let response = ui.interact(label.rect, label.id.with("tab"), Sense::click());
-            let interaction = interaction_visual(
-                ui,
-                response.id,
-                response.hovered(),
-                response.is_pointer_button_down_on(),
-            );
-            ui.painter().set(
-                background,
-                egui::Shape::rect_filled(
-                    response.rect.expand2(vec2(6.0, 4.0)),
-                    5.0,
-                    interaction.overlay,
-                ),
-            );
-            ui.add_space(6.0);
-            let (rect, _) =
-                ui.allocate_exact_size(vec2(response.rect.width(), 2.0), Sense::hover());
-            if active {
-                ui.painter().rect_filled(rect, 1.0, theme::green());
-            }
-            response
-        })
-        .inner;
-
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-/// A section's heading, the same everywhere: "Physical" and "Virtual" in the
-/// Devices tab, the groups of Settings
-fn section_header(ui: &mut Ui, text: &str) {
-    ui.add_space(SPACE * 0.5);
-    ui.add(Label::new(semibold(text, 11.0, theme::text_faint())).selectable(false));
-    ui.add_space(SPACE * 0.5);
-}
-
-/// A dot, a line and a dot from one row's icon down to another's, linking
-/// the two phones Side by side opens together, with the same space to each
-/// icon's ink
-fn link_line(ui: &Ui, x: f32, top: Rect, bottom: Rect, color: Color32) {
-    let start = egui::pos2(x, top.center().y + LINK_TOP_INK + LINK_SPACE);
-    let end = egui::pos2(x, bottom.center().y - LINK_BOTTOM_INK - LINK_SPACE);
-    let painter = ui.painter();
-    painter.circle_filled(start, 1.6, color);
-    painter.circle_filled(end, 1.6, color);
-    painter.line_segment([start, end], Stroke::new(1.0_f32, color));
-}
-
-/// A separator between device rows, starting where their names start so it
-/// stays clear of the icons and the pair's link
-fn row_divider(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    let rect = Rect::from_min_max(
-        egui::pos2(rect.left() + ROW_TEXT_INSET, rect.top()),
-        rect.max,
-    );
-    ui.painter().rect_filled(rect, 0.0, theme::hairline());
-}
-
-fn divider(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, theme::hairline());
-}
-
-/// A tool Twin uses: a check when ready; else its warning or a button that
-/// opens `get` (an App Store or download page, or the app to open once)
-fn dependency_row(
-    ui: &mut Ui,
-    row_icon: &str,
-    name: &str,
-    info: Option<&backend::ToolInfo>,
-    get: Option<(&str, &str)>,
-) {
-    ui.horizontal(|ui| {
-        ui.set_height(SETUP_ROW_HEIGHT);
-        ui.add(Label::new(icon(row_icon, 14.0, theme::text_label())).selectable(false));
-        ui.add_space(SPACE * 1.5);
-        // The version or path shows on hover; only a warning needs the space
-        let name_label =
-            ui.add(Label::new(medium(name, 12.5, theme::text_bright())).selectable(false));
-        if let Some(tool) = info {
-            name_label.on_hover_text(&tool.detail);
-        }
-        ui.add_space(SPACE);
-
-        if let Some(warning) = info.and_then(|tool| tool.warnings.first()) {
-            let available_width = ui.available_width() - 50.0;
-            ui.scope(|ui| {
-                ui.set_max_width(available_width.max(40.0));
-                ui.add(
-                    Label::new(regular(warning, 11.0, theme::amber()))
-                        .truncate()
-                        .selectable(false),
-                );
-            });
-        }
-
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            match (info, get) {
-                (Some(tool), _) if tool.available && tool.warnings.is_empty() => {
-                    ui.add(Label::new(icon(ph::CHECK, 14.0, theme::green())).selectable(false))
-                        .on_hover_text("Ready");
-                }
-                (Some(_), Some((label, target))) => {
-                    if pill_button(
-                        ui,
-                        None,
-                        label,
-                        theme::control_selected(),
-                        theme::text_bright(),
-                        false,
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                    {
-                        let _ = std::process::Command::new("open").arg(target).spawn();
-                    }
-                }
-                (Some(tool), None) if tool.available => {
-                    ui.add(Label::new(regular("Update", 11.0, theme::amber())).selectable(false));
-                }
-                (Some(_), None) => {
-                    ui.add(Label::new(regular("Missing", 11.0, theme::red())).selectable(false));
-                }
-                (None, _) => {}
-            }
-        });
-    });
-}
-
-fn labeled_input(ui: &mut Ui, label: &str, width: f32, value: &mut String) -> bool {
-    ui.vertical(|ui| {
-        ui.set_width(width);
-        ui.add(Label::new(regular(label, 10.5, theme::text_label())).selectable(false));
-        ui.add_space(4.0);
-
-        let frame = Frame::new()
-            .fill(theme::input_bg())
-            .stroke(Stroke::new(1.0_f32, Color32::TRANSPARENT))
-            .shadow(Shadow {
-                offset: [0, 1],
-                blur: 4,
-                spread: 0,
-                color: theme::control_shadow(),
-            })
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(Margin::symmetric(9, 6));
-
-        let output = frame.show(ui, |ui| {
-            ui.set_width(width - 20.0);
-            ui.add(
-                TextEdit::singleline(value)
-                    .frame(Frame::NONE)
-                    .font(FontId::new(12.0, FontFamily::Proportional))
-                    .text_color(theme::text_bright())
-                    .margin(Margin::ZERO)
-                    .desired_width(width - 20.0),
-            )
-        });
-        let hovered = output.response.hovered() || output.inner.hovered();
-        let hover_progress = ui.ctx().animate_bool_with_time(
-            output.response.id.with("input-hover"),
-            hovered,
-            CONTROL_HOVER_TRANSITION,
-        );
-        let (stroke_width, stroke_color) = if output.inner.has_focus() {
-            (1.5_f32, theme::input_focus_stroke())
-        } else {
-            (
-                1.0_f32,
-                theme::input_stroke().lerp_to_gamma(theme::input_hover_stroke(), hover_progress),
-            )
-        };
-        ui.painter().rect_stroke(
-            output.response.rect,
-            6.0,
-            Stroke::new(stroke_width, stroke_color),
-            egui::StrokeKind::Inside,
-        );
-
-        output.inner.changed()
-    })
-    .inner
-}
-
 #[derive(Clone, Copy, Default)]
 struct ScrollChrome {
     offset: f32,
@@ -2610,8 +3202,7 @@ struct ScrollChrome {
 fn chrome_scroll(
     ui: &mut Ui,
     salt: &str,
-    shell: &ShellSampler,
-    day_weight: f32,
+    fade: &dyn Fn(egui::Pos2) -> Color32,
     stick_to_bottom: bool,
     add_contents: impl FnOnce(&mut Ui),
 ) {
@@ -2698,7 +3289,7 @@ fn chrome_scroll(
                 egui::pos2(viewport.left(), top),
                 egui::pos2(viewport.right(), top + SCROLL_EDGE_FADE_HEIGHT),
             );
-            paint_edge_fade(&painter, shell, day_weight, rect, solid_at_top, strength);
+            paint_edge_fade(&painter, fade, rect, solid_at_top, strength);
         };
         if top_strength > 0.0 {
             fade(viewport.top(), top_strength, true);
@@ -2740,8 +3331,7 @@ fn scrollbar_handle(track_height: f32, viewport_height: f32, content_height: f32
 /// across the width so the band matches the lit surface beneath it.
 fn paint_edge_fade(
     painter: &egui::Painter,
-    shell: &ShellSampler,
-    day_weight: f32,
+    fade: &dyn Fn(egui::Pos2) -> Color32,
     rect: Rect,
     solid_at_top: bool,
     strength: f32,
@@ -2755,9 +3345,7 @@ fn paint_edge_fade(
     let mut mesh = egui::Mesh::default();
     for column in 0..=columns {
         let x = rect.left() + rect.width() * column as f32 / columns as f32;
-        let solid = shell
-            .color_at(egui::pos2(x, edge_y), day_weight)
-            .gamma_multiply(strength);
+        let solid = fade(egui::pos2(x, edge_y)).gamma_multiply(strength);
         let (top, bottom) = if solid_at_top {
             (solid, Color32::TRANSPARENT)
         } else {
@@ -2786,332 +3374,6 @@ fn keyboard_focused(ui: &Ui, id: egui::Id) -> bool {
             .ctx()
             .data(|data| data.get_temp::<bool>(keyboard_focus_id()))
             .unwrap_or(false)
-}
-
-fn screen_title(screen: Screen) -> &'static str {
-    match screen {
-        Screen::Main => "Twin",
-        Screen::Settings => "Settings",
-        Screen::Pair => "Pair device",
-    }
-}
-
-/// A header action; `active` marks the page it opened.
-fn header_button(ui: &mut Ui, glyph: &str, active: bool) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE), Sense::click());
-    let active_progress = ui
-        .ctx()
-        .animate_bool_with_time(response.id.with("active"), active, 0.16);
-    if active_progress > 0.0 {
-        ui.painter().rect_filled(
-            rect,
-            7.0,
-            theme::control_selected().gamma_multiply(active_progress),
-        );
-    }
-    let interaction = interaction_visual(
-        ui,
-        response.id,
-        response.hovered(),
-        response.is_pointer_button_down_on(),
-    );
-    ui.painter().rect_filled(rect, 7.0, interaction.overlay);
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        glyph,
-        theme::icon_font(15.0),
-        theme::text_muted().lerp_to_gamma(
-            theme::text_strong(),
-            active_progress.max(interaction.hover_progress),
-        ),
-    );
-    response.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-struct Row<'a> {
-    /// Stable identity for widget ids: a device serial or an AVD name, since
-    /// two phones of the same model share a display name.
-    key: &'a str,
-    icon: &'a str,
-    /// Green while the device is mirrored, as its status is
-    icon_color: Color32,
-    name: &'a str,
-    tooltip: &'a str,
-    status: &'a str,
-    status_color: Color32,
-}
-
-/// One device row: icon, name, a status column at a fixed position so the
-/// statuses line up, then the action buttons on the right edge.
-fn list_row_with(ui: &mut Ui, row: &Row<'_>, actions: &[RowAction]) -> Option<usize> {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
-    paint_row_hover(ui, rect, row.key);
-    paint_row(ui, rect, row, actions_width(actions.len()));
-    row_actions(ui, rect, row.key, actions)
-}
-
-/// Which button of a pair block was clicked
-enum PairClick {
-    Android,
-    IPhone,
-    Both,
-}
-
-/// Two device rows that act as one, as the phones Side by side opens
-/// together: one hover, a link between their icons, each phone's own button
-/// while the pointer is on its row, and one button centered on both. `actions` are the top phone's, the
-/// bottom phone's and the pair's.
-fn pair_rows(
-    ui: &mut Ui,
-    top: &Row<'_>,
-    bottom: &Row<'_>,
-    actions: &[RowAction; 3],
-    link: Color32,
-) -> Option<PairClick> {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 2.0 * ROW_HEIGHT + 1.0), Sense::hover());
-    paint_row_hover(ui, rect, top.key);
-    let top_rect = Rect::from_min_size(rect.min, vec2(width, ROW_HEIGHT));
-    let bottom_rect = Rect::from_min_size(
-        egui::pos2(rect.left(), top_rect.bottom() + 1.0),
-        vec2(width, ROW_HEIGHT),
-    );
-    // Laid out as the two-button emulator rows, so statuses line up: each
-    // phone's button where theirs is, the pair's on the right edge
-    let reserved = actions_width(2);
-    paint_row(ui, top_rect, top, reserved);
-    paint_row(ui, bottom_rect, bottom, reserved);
-    let divider = Rect::from_min_max(
-        egui::pos2(rect.left() + ROW_TEXT_INSET, top_rect.bottom()),
-        egui::pos2(rect.right() - reserved - 12.0, top_rect.bottom() + 1.0),
-    );
-    ui.painter().rect_filled(divider, 0.0, theme::hairline());
-    link_line(
-        ui,
-        rect.left() + ROW_ICON_SIZE / 2.0,
-        top_rect,
-        bottom_rect,
-        link,
-    );
-    // Each phone's own button shows only while the pointer is on its row
-    let own = |ui: &mut Ui, row_rect: Rect, row: &Row<'_>, action: &RowAction| {
-        let shown = ui.ctx().animate_bool_with_time(
-            ui.id().with(("own-button", row.key)),
-            ui.is_enabled() && ui.rect_contains_pointer(row_rect),
-            CONTROL_HOVER_TRANSITION,
-        );
-        if shown == 0.0 {
-            return false;
-        }
-        let rect = row_rect.with_max_x(row_rect.right() - ROW_ACTION_SIZE - ROW_ACTION_GAP);
-        ui.scope(|ui| {
-            ui.set_opacity(shown);
-            row_actions(ui, rect, row.key, std::slice::from_ref(action)).is_some()
-        })
-        .inner
-    };
-    if own(ui, top_rect, top, &actions[0]) {
-        return Some(PairClick::Android);
-    }
-    if own(ui, bottom_rect, bottom, &actions[1]) {
-        return Some(PairClick::IPhone);
-    }
-    row_actions(
-        ui,
-        rect,
-        ("pair", top.key),
-        std::slice::from_ref(&actions[2]),
-    )
-    .map(|_| PairClick::Both)
-}
-
-fn actions_width(count: usize) -> f32 {
-    count as f32 * ROW_ACTION_SIZE + count.saturating_sub(1) as f32 * ROW_ACTION_GAP
-}
-
-fn paint_row_hover(ui: &Ui, rect: Rect, key: &str) {
-    let hover = ui.ctx().animate_bool_with_time(
-        ui.id().with(("row-hover", key)),
-        ui.is_enabled() && ui.rect_contains_pointer(rect),
-        CONTROL_HOVER_TRANSITION,
-    );
-    if hover > 0.0 {
-        ui.painter().rect_filled(
-            rect.expand2(vec2(ROW_HOVER_BLEED, -2.0)),
-            8.0,
-            theme::control_hover().gamma_multiply(hover),
-        );
-    }
-}
-
-/// The icon, name and status of a row, leaving `actions_width` on the right
-fn paint_row(ui: &mut Ui, rect: Rect, row: &Row<'_>, actions_width: f32) {
-    let center_y = rect.center().y;
-    ui.painter().text(
-        egui::pos2(rect.left() + ROW_ICON_SIZE / 2.0, center_y),
-        egui::Align2::CENTER_CENTER,
-        row.icon,
-        theme::icon_font(ROW_ICON_SIZE),
-        row.icon_color,
-    );
-
-    let status_left = rect.right() - actions_width - 12.0 - STATUS_COLUMN_WIDTH;
-    let name_rect = Rect::from_min_max(
-        egui::pos2(rect.left() + ROW_TEXT_INSET, rect.top()),
-        egui::pos2(status_left - 10.0, rect.bottom()),
-    );
-    let status_rect = Rect::from_min_max(
-        egui::pos2(status_left, rect.top()),
-        egui::pos2(status_left + STATUS_COLUMN_WIDTH, rect.bottom()),
-    );
-    let left_aligned = |rect| {
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center))
-    };
-    ui.scope_builder(left_aligned(name_rect), |ui| {
-        ui.add(
-            Label::new(medium(row.name, 12.5, theme::text_bright()))
-                .truncate()
-                .selectable(false),
-        )
-        .on_hover_text(row.tooltip);
-    });
-    ui.scope_builder(left_aligned(status_rect), |ui| {
-        ui.add(
-            Label::new(regular(row.status, 11.0, row.status_color))
-                .truncate()
-                .selectable(false),
-        );
-    });
-}
-
-/// The action buttons on the right edge of `rect`, vertically centered;
-/// returns the one clicked
-fn row_actions(
-    ui: &mut Ui,
-    rect: Rect,
-    key: impl std::hash::Hash + Copy,
-    actions: &[RowAction],
-) -> Option<usize> {
-    let center_y = rect.center().y;
-    let mut clicked = None;
-    let mut right = rect.right();
-    for (index, action) in actions.iter().enumerate().rev() {
-        let action_rect = Rect::from_min_max(
-            egui::pos2(right - ROW_ACTION_SIZE, center_y - ROW_ACTION_SIZE / 2.0),
-            egui::pos2(right, center_y + ROW_ACTION_SIZE / 2.0),
-        );
-        right -= ROW_ACTION_SIZE + ROW_ACTION_GAP;
-        let response = ui.interact(
-            action_rect,
-            ui.id().with((key, index)),
-            if action.enabled {
-                Sense::click()
-            } else {
-                Sense::hover()
-            },
-        );
-        ui.painter().rect_filled(action_rect, 6.0, theme::surface());
-        let interaction = interaction_visual(
-            ui,
-            response.id,
-            response.hovered() && action.enabled,
-            response.is_pointer_button_down_on() && action.enabled,
-        );
-        ui.painter()
-            .rect_filled(action_rect, 6.0, interaction.overlay);
-        ui.painter().text(
-            action_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            action.glyph,
-            theme::icon_font(10.0),
-            action.color,
-        );
-
-        let response = if let Some(tooltip) = action.tooltip {
-            response.on_hover_text(tooltip)
-        } else {
-            response
-        };
-        if action.enabled {
-            let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-            if response.clicked() {
-                clicked = Some(index);
-            }
-        }
-    }
-    clicked
-}
-
-/// A physical Android phone's row
-fn android_row(device: &backend::DeviceInfo, mirroring: bool) -> Row<'_> {
-    Row {
-        key: &device.mirror_key,
-        icon: ph::GOOGLE_LOGO,
-        icon_color: if mirroring {
-            theme::green()
-        } else {
-            theme::text_label()
-        },
-        name: &device.name,
-        tooltip: &device.serial,
-        status: if mirroring {
-            "Mirroring"
-        } else if device.ready {
-            "Ready"
-        } else {
-            device.state.as_str()
-        },
-        status_color: if mirroring {
-            theme::green()
-        } else {
-            theme::text_faint()
-        },
-    }
-}
-
-/// An iPhone's row
-fn iphone_row<'a>(iphone: &'a twin_core::dmb::Iphone, key: &'a str, mirroring: bool) -> Row<'a> {
-    Row {
-        key,
-        icon: ph::APPLE_LOGO,
-        icon_color: if mirroring {
-            theme::green()
-        } else {
-            theme::text_label()
-        },
-        name: &iphone.name,
-        tooltip: &iphone.model,
-        status: if mirroring { "Mirroring" } else { "Ready" },
-        status_color: if mirroring {
-            theme::green()
-        } else {
-            theme::text_faint()
-        },
-    }
-}
-
-#[cfg(test)]
-fn list_row(
-    ui: &mut Ui,
-    row_icon: &str,
-    name: &str,
-    detail: &str,
-    actions: &[RowAction],
-) -> Option<usize> {
-    let row = Row {
-        key: name,
-        icon: row_icon,
-        icon_color: theme::text_label(),
-        name,
-        tooltip: name,
-        status: detail,
-        status_color: theme::text_faint(),
-    };
-    list_row_with(ui, &row, actions)
 }
 
 fn paint_qr_card(ui: &Ui, rect: Rect, modules: &twin_core::qr::QrModules) {
@@ -3202,160 +3464,6 @@ fn with_opacity(color: Color32, opacity: f32) -> Color32 {
         blue,
         (f32::from(alpha) * opacity.clamp(0.0, 1.0)).round() as u8,
     )
-}
-
-fn theme_mode_group(ui: &mut Ui, selected: &mut ThemeMode) -> bool {
-    let mut changed = false;
-    let modes = [
-        (ThemeMode::Auto, "Auto"),
-        (ThemeMode::Day, "Day"),
-        (ThemeMode::Night, "Night"),
-    ];
-
-    ui.allocate_ui_with_layout(
-        THEME_MODE_GROUP_SIZE,
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            Frame::new()
-                .fill(theme::segment_bg())
-                .stroke(Stroke::new(1.0_f32, theme::input_stroke()))
-                .shadow(Shadow {
-                    offset: [0, 1],
-                    blur: 4,
-                    spread: 0,
-                    color: theme::control_shadow(),
-                })
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(Margin::same(2))
-                .show(ui, |ui| {
-                    for (mode, label) in modes {
-                        let active = *selected == mode;
-                        let (rect, response) =
-                            ui.allocate_exact_size(vec2(56.0, 24.0), Sense::click());
-                        if active {
-                            ui.painter()
-                                .rect_filled(rect, 6.0, theme::segment_selected());
-                        }
-                        let interaction = interaction_visual(
-                            ui,
-                            response.id,
-                            response.hovered(),
-                            response.is_pointer_button_down_on(),
-                        );
-                        ui.painter().rect_filled(rect, 6.0, interaction.overlay);
-                        if active {
-                            ui.painter().rect_stroke(
-                                rect,
-                                6.0,
-                                Stroke::new(1.0_f32, theme::segment_selected_stroke()),
-                                egui::StrokeKind::Inside,
-                            );
-                        }
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            label,
-                            FontId::new(
-                                11.5,
-                                FontFamily::Name(
-                                    if active {
-                                        theme::SEMIBOLD
-                                    } else {
-                                        theme::MEDIUM
-                                    }
-                                    .into(),
-                                ),
-                            ),
-                            if active {
-                                theme::text_strong()
-                            } else {
-                                theme::text_muted()
-                                    .lerp_to_gamma(theme::text_bright(), interaction.hover_progress)
-                            },
-                        );
-                        if response.clicked() && !active {
-                            *selected = mode;
-                            changed = true;
-                        }
-                        response.on_hover_cursor(egui::CursorIcon::PointingHand);
-                    }
-                });
-        },
-    );
-
-    changed
-}
-
-fn check_item(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
-    let mut changed = false;
-
-    ui.horizontal(|ui| {
-        let background = ui.painter().add(egui::Shape::Noop);
-        let (rect, response) = ui.allocate_exact_size(vec2(15.0, 15.0), Sense::click());
-        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-
-        ui.add_space(7.0);
-        let label_response = ui
-            .add(
-                Label::new(regular(label, 12.0, theme::text_check()))
-                    .selectable(false)
-                    .sense(Sense::CLICK),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-
-        let hovered = response.hovered() || label_response.hovered();
-        let pressed =
-            response.is_pointer_button_down_on() || label_response.is_pointer_button_down_on();
-        let interaction = interaction_visual(ui, response.id, hovered, pressed);
-        ui.painter().set(
-            background,
-            egui::Shape::rect_filled(
-                rect.union(label_response.rect).expand2(vec2(5.0, 3.0)),
-                5.0,
-                interaction.overlay,
-            ),
-        );
-
-        let painter = ui.painter();
-        painter.add(
-            Shadow {
-                offset: [0, 1],
-                blur: 3,
-                spread: 0,
-                color: theme::control_shadow(),
-            }
-            .as_shape(rect, 4.0),
-        );
-        if *value {
-            painter.rect_filled(rect, 4.0, theme::green());
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                ph::CHECK,
-                theme::icon_font(10.0),
-                theme::green_ink(),
-            );
-        } else {
-            painter.rect_filled(rect, 4.0, theme::input_bg());
-            painter.rect_stroke(
-                rect,
-                4.0,
-                Stroke::new(
-                    1.25_f32,
-                    theme::check_stroke()
-                        .lerp_to_gamma(theme::input_hover_stroke(), interaction.hover_progress),
-                ),
-                egui::StrokeKind::Inside,
-            );
-        }
-
-        if response.clicked() || label_response.clicked() {
-            *value = !*value;
-            changed = true;
-        }
-    });
-
-    changed
 }
 
 fn center_pad(ui: &mut Ui, content_height: f32) {
@@ -3509,7 +3617,6 @@ fn pill_button(
 
 struct InteractionVisual {
     overlay: Color32,
-    hover_progress: f32,
 }
 
 /// Hover and press feedback. A control focused from the keyboard takes the
@@ -3529,7 +3636,6 @@ fn interaction_visual(ui: &Ui, id: egui::Id, hovered: bool, pressed: bool) -> In
 
     InteractionVisual {
         overlay: interaction_overlay_color(hover_progress, press_progress),
-        hover_progress,
     }
 }
 
@@ -3543,126 +3649,8 @@ fn interaction_overlay_color(hover_progress: f32, press_progress: f32) -> Color3
 mod tests {
     use super::*;
 
-    const WIDTH: f64 = 380.0;
+    const WIDTH: f64 = 420.0;
     const MARGIN: f64 = 8.0;
-
-    #[test]
-    fn long_avd_name_leaves_status_and_action_icons_visible() {
-        let ctx = Context::default();
-        theme::install_fonts(&ctx);
-        let output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(340.0, 100.0))),
-                ..Default::default()
-            },
-            |ui| {
-                egui::CentralPanel::default().show_inside(ui, |ui| {
-                    list_row(
-                        ui,
-                        ph::DESKTOP,
-                        "bitkit recording with a very long emulator name",
-                        "Starting…",
-                        &[
-                            RowAction::disabled(ph::PLAY),
-                            RowAction::disabled(ph::TRASH),
-                        ],
-                    );
-                });
-            },
-        );
-        let text: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text),
-                _ => None,
-            })
-            .collect();
-        let status = text
-            .iter()
-            .find(|text| text.galley.text() == "Starting…")
-            .unwrap();
-        let play = text
-            .iter()
-            .find(|text| text.galley.text() == ph::PLAY)
-            .unwrap();
-        let trash = text
-            .iter()
-            .find(|text| text.galley.text() == ph::TRASH)
-            .unwrap();
-        assert!(status.pos.x + status.galley.size().x < play.pos.x);
-        assert!(play.pos.x + play.galley.size().x < trash.pos.x);
-        assert!(trash.pos.x + trash.galley.size().x <= 332.0);
-        assert!(text.iter().all(|text| text.galley.text() != "Launch"));
-        assert!(text.iter().any(|text| text.galley.elided));
-    }
-
-    #[test]
-    fn row_icons_dispatch_separate_actions_and_ignore_disabled_clicks() {
-        let ctx = Context::default();
-        theme::install_fonts(&ctx);
-        let render = |events, enabled| {
-            let mut clicked = None;
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(340.0, 100.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ui| {
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
-                        let actions = [ph::PLAY, ph::TRASH].map(|glyph| {
-                            if enabled {
-                                RowAction::enabled(glyph, theme::text_bright())
-                            } else {
-                                RowAction::disabled(glyph)
-                            }
-                        });
-                        clicked = list_row(ui, ph::DESKTOP, "Pixel 9a", "Stopped", &actions);
-                    });
-                },
-            );
-            (output, clicked)
-        };
-        let (output, _) = render(vec![], true);
-        for (index, glyph) in [ph::PLAY, ph::TRASH].iter().enumerate() {
-            let pos = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == *glyph => {
-                        Some(text.pos + text.galley.size() / 2.0)
-                    }
-                    _ => None,
-                })
-                .unwrap();
-            for enabled in [true, false] {
-                render(vec![], enabled);
-                render(
-                    vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed: true,
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                    ],
-                    enabled,
-                );
-                let (_, clicked) = render(
-                    vec![egui::Event::PointerButton {
-                        pos,
-                        button: egui::PointerButton::Primary,
-                        pressed: false,
-                        modifiers: egui::Modifiers::NONE,
-                    }],
-                    enabled,
-                );
-                assert_eq!(clicked, enabled.then_some(index));
-            }
-        }
-    }
 
     #[test]
     fn interaction_overlay_fades_fully_to_transparent() {
@@ -3711,7 +3699,7 @@ mod tests {
     fn committing_skin_preserves_overlapping_screen_and_popover_animations() {
         let started_at = Instant::now();
         let screen = ScreenTransition {
-            from: Screen::Main,
+            from: Screen::Devices,
             to: Screen::Settings,
             direction: 1.0,
             started_at,
@@ -3777,12 +3765,12 @@ mod tests {
     #[test]
     fn screen_transitions_push_forward_and_pull_back() {
         assert_eq!(
-            screen_transition_direction(Screen::Main, Screen::Settings),
+            screen_transition_direction(Screen::Devices, Screen::Settings),
             1.0
         );
-        assert_eq!(screen_transition_direction(Screen::Main, Screen::Pair), 1.0);
+        assert_eq!(screen_transition_direction(Screen::Pair, Screen::Logs), 1.0);
         assert_eq!(
-            screen_transition_direction(Screen::Settings, Screen::Main),
+            screen_transition_direction(Screen::Settings, Screen::Devices),
             -1.0
         );
     }
@@ -3820,11 +3808,11 @@ mod tests {
 
     #[test]
     fn arrow_keys_walk_pages_in_order_without_wrapping() {
-        assert_eq!(screen_in_order(Screen::Main, 1), Some(Screen::Settings));
-        assert_eq!(screen_in_order(Screen::Settings, 1), Some(Screen::Pair));
-        assert_eq!(screen_in_order(Screen::Pair, 1), None);
-        assert_eq!(screen_in_order(Screen::Pair, -1), Some(Screen::Settings));
-        assert_eq!(screen_in_order(Screen::Main, -1), None);
+        assert_eq!(screen_in_order(Screen::Devices, 1), Some(Screen::Pair));
+        assert_eq!(screen_in_order(Screen::Logs, 1), Some(Screen::Settings));
+        assert_eq!(screen_in_order(Screen::Settings, 1), None);
+        assert_eq!(screen_in_order(Screen::Pair, -1), Some(Screen::Devices));
+        assert_eq!(screen_in_order(Screen::Devices, -1), None);
     }
 
     #[test]
@@ -3859,7 +3847,7 @@ mod tests {
 
         let x = clamp_window_x_to_displays(1290.0, 1480.0, 24.0, WIDTH, MARGIN, None, &displays);
 
-        assert_eq!(x, 1124.0);
+        assert_eq!(x, 1084.0);
     }
 
     #[test]
@@ -3910,7 +3898,7 @@ mod tests {
 
         assert_eq!(left_click, center_click);
         assert_eq!(right_click, center_click);
-        assert_eq!(center_click, (726.0, 28.5));
+        assert_eq!(center_click, (706.0, 28.5));
     }
 
     #[test]
@@ -3994,6 +3982,8 @@ mod tests {
             ready,
             state: if ready { "device" } else { "offline" }.to_string(),
             is_emulator: false,
+            android_version: String::new(),
+            wireless: false,
         }
     }
 }

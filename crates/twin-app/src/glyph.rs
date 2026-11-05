@@ -41,15 +41,40 @@ fn stroke_cast(pixmap: &mut Pixmap, shader: Shader<'static>, width: f32, transfo
     }
 }
 
-/// Popover shell: a 380-wide rounded body with a beak pointing up at the menu
-/// bar icon. Coordinates match the `Shell Shape` path in DESIGN.pen; the body
-/// height follows the window height.
-const SHELL_W: f32 = 380.0;
+/// Popover shell: a 420-wide body with 16-point corners and a beak pointing
+/// up at the menu bar icon, as in the Twin redesign. The path runs half a
+/// point inside the pixmap so the whole hairline border shows; the beak's
+/// curve leaves the body's top edge and returns to it with no corner, so one
+/// stroke draws both. The body height follows the window height.
+const SHELL_W: f32 = 420.0;
+const BODY_TOP: f32 = 12.0;
 
 fn shell_path(height: f32) -> String {
-    let side = height - 9.0 - 28.0;
+    let (left, right, top, bottom) = (0.5, SHELL_W - 0.5, BODY_TOP, height - 0.5);
+    let r = 15.5;
+    let beak = SHELL_W / 2.0 - 20.0;
     format!(
-        "M14 9l161 0c5 0 8.6-1.2 11-4.8 1.2-1.8 2.2-2.7 4-2.7 1.8 0 2.8 0.9 4 2.7 2.4 3.6 6 4.8 11 4.8l161 0a14 14 0 0 1 14 14l0 {side}a14 14 0 0 1-14 14l-352 0a14 14 0 0 1-14-14l0-{side}a14 14 0 0 1 14-14z"
+        "M{l0} {top}L{beak} {top}C{b9} {top} {b13} {t2} {b16} {t7} {b17} {t9} {b18} {t11} {b20} {t11}C{b21} {t11} {b22} {t9} {b24} {t7} {b27} {t2} {b31} {top} {b40} {top}L{r0} {top}A{r} {r} 0 0 1 {right} {tr}L{right} {br}A{r} {r} 0 0 1 {r0} {bottom}L{l0} {bottom}A{r} {r} 0 0 1 {left} {br}L{left} {tr}A{r} {r} 0 0 1 {l0} {top}Z",
+        l0 = left + r,
+        r0 = right - r,
+        tr = top + r,
+        br = bottom - r,
+        b9 = beak + 9.0,
+        b13 = beak + 13.0,
+        b16 = beak + 16.0,
+        b17 = beak + 17.5,
+        b18 = beak + 18.5,
+        b20 = beak + 20.0,
+        b21 = beak + 21.5,
+        b22 = beak + 22.5,
+        b24 = beak + 24.0,
+        b27 = beak + 27.0,
+        b31 = beak + 31.0,
+        b40 = beak + 40.0,
+        t2 = top - 2.0,
+        t7 = top - 7.0,
+        t9 = top - 9.5,
+        t11 = top - 11.0,
     )
 }
 
@@ -200,38 +225,35 @@ pub fn window_logo(frame_size: u32, oversample: u32) -> Raster {
 }
 
 struct ShellStyle {
+    /// The surface's vertical gradient: top, at 60 % down, bottom
     base: [Color; 3],
-    /// Color the bottom edge is lit with, as an ellipse fading up the body.
-    lift: Color,
-    /// Soft bloom and hairline along the lit bottom edge.
-    glow: Color,
-    highlight: Color,
     border: Color,
+    /// The hairline glints lighting the border's middle, top and bottom
+    top_glint: Color,
+    bottom_glint: Color,
 }
 
 fn shell_style(appearance: Appearance) -> ShellStyle {
     match appearance {
         Appearance::Night => ShellStyle {
             base: [
-                Color::from_rgba8(0x2C, 0x2C, 0x2E, 0xFF),
-                Color::from_rgba8(0x20, 0x20, 0x22, 0xFF),
-                Color::from_rgba8(0x1C, 0x1C, 0x1E, 0xFF),
+                Color::from_rgba8(0x2A, 0x2A, 0x2C, 0xFF),
+                Color::from_rgba8(0x1F, 0x1F, 0x21, 0xFF),
+                Color::from_rgba8(0x1B, 0x1B, 0x1D, 0xFF),
             ],
-            lift: Color::from_rgba8(0xC8, 0xC8, 0xCC, 0x1C),
-            glow: Color::from_rgba8(0xCC, 0xCC, 0xD0, 0x30),
-            highlight: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x16),
             border: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x17),
+            top_glint: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0x57),
+            bottom_glint: Color::from_rgba8(0xE1, 0xE6, 0xF5, 0xBF),
         },
         Appearance::Day => ShellStyle {
             base: [
                 Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xFF),
                 Color::from_rgba8(0xF7, 0xF8, 0xFB, 0xFF),
-                Color::from_rgba8(0xEE, 0xF1, 0xF7, 0xFF),
+                Color::from_rgba8(0xEF, 0xF1, 0xF6, 0xFF),
             ],
-            lift: Color::from_rgba8(0xC4, 0xD4, 0xF6, 0x58),
-            glow: Color::from_rgba8(0x7E, 0x9C, 0xE6, 0x2E),
-            highlight: Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xD0),
-            border: Color::from_rgba8(0x1B, 0x22, 0x3A, 0x1E),
+            border: Color::from_rgba8(0x1B, 0x22, 0x3A, 0x24),
+            top_glint: Color::from_rgba8(0x1B, 0x22, 0x3A, 0x10),
+            bottom_glint: Color::from_rgba8(0x6E, 0x8C, 0xD8, 0x8C),
         },
     }
 }
@@ -242,48 +264,26 @@ fn transparent(color: Color) -> Color {
     color
 }
 
-/// A horizontal line brightest in the middle and fading out toward both sides.
-fn edge_line(color: Color) -> Shader<'static> {
+/// A horizontal ramp brightest in the middle, fading out by `edge` from
+/// each side (a share of the width)
+fn glint(color: Color, edge: f32) -> Shader<'static> {
     LinearGradient::new(
         Point::from_xy(0.0, 0.0),
         Point::from_xy(SHELL_W, 0.0),
         vec![
-            GradientStop::new(0.08, transparent(color)),
+            GradientStop::new(edge, transparent(color)),
             GradientStop::new(0.5, color),
-            GradientStop::new(0.92, transparent(color)),
+            GradientStop::new(1.0 - edge, transparent(color)),
         ],
         SpreadMode::Pad,
         Transform::identity(),
     )
-    .expect("shell edge gradient")
+    .expect("shell glint gradient")
 }
 
-/// The top edge's highlight: bright on both sides of the beak and gone where
-/// the beak meets the body (x 175 to 205), so the beak flows into the body
-/// without a line across its base
-fn top_line(color: Color) -> Shader<'static> {
-    let beak = |x: f32| x / SHELL_W;
-    LinearGradient::new(
-        Point::from_xy(0.0, 0.0),
-        Point::from_xy(SHELL_W, 0.0),
-        vec![
-            GradientStop::new(0.08, transparent(color)),
-            GradientStop::new(beak(150.0), color),
-            GradientStop::new(beak(172.0), transparent(color)),
-            GradientStop::new(beak(208.0), transparent(color)),
-            GradientStop::new(beak(230.0), color),
-            GradientStop::new(0.92, transparent(color)),
-        ],
-        SpreadMode::Pad,
-        Transform::identity(),
-    )
-    .expect("shell top gradient")
-}
-
-/// Rasterizes the popover shell (beak + rounded body): a vertical base
-/// gradient lit from the bottom edge like the Agents Board cards, with a soft
-/// bloom and a center-weighted hairline on that edge, an inner highlight along
-/// the top and a hairline border. Drawn at `oversample` resolution.
+/// Rasterizes the popover shell (beak + rounded body): the window's vertical
+/// gradient, dithered, under a hairline border whose middle is lit along the
+/// top (beak included) and the bottom. Drawn at `oversample` resolution.
 fn render_shell(oversample: u32, appearance: Appearance, height: f32, gradients: bool) -> Pixmap {
     let w = (SHELL_W as u32) * oversample;
     let h = (height.round() as u32) * oversample;
@@ -297,36 +297,49 @@ fn render_shell(oversample: u32, appearance: Appearance, height: f32, gradients:
     clip.fill_path(&path, FillRule::Winding, true, transform);
 
     let style = shell_style(appearance);
-    let body_top = 9.0;
-    let mut paint = Paint {
-        anti_alias: true,
-        ..Default::default()
-    };
-
     if !gradients {
         // Plain surface: one flat color under the hairline border.
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Default::default()
+        };
         let full = tiny_skia::Rect::from_xywh(0.0, 0.0, SHELL_W, height).expect("shell rect");
         paint.set_color(style.base[1]);
         pixmap.fill_rect(full, &paint, transform, Some(&clip));
-        stroke_border(&mut pixmap, &path, style.border, transform);
+        stroke_border(&mut pixmap, &path, style.border.into(), transform, None);
         return pixmap;
     }
 
     smooth_fill(&mut pixmap, &clip, &style, height, oversample as f32);
-    let mut fill = |shader: Shader<'static>, rect: tiny_skia::Rect| {
-        paint.shader = shader;
-        pixmap.fill_rect(rect, &paint, transform, Some(&clip));
+    stroke_border(&mut pixmap, &path, style.border.into(), transform, None);
+    // Each glint strokes the border again, kept to its edge by a band mask
+    let band = |top: f32, bottom: f32| {
+        let mut mask = Mask::new(w, h).expect("glint mask");
+        let rect = tiny_skia::Rect::from_ltrb(0.0, top, SHELL_W, bottom).expect("glint band");
+        mask.fill_path(
+            &PathBuilder::from_rect(rect),
+            FillRule::Winding,
+            false,
+            transform,
+        );
+        mask
     };
-    fill(
-        edge_line(style.glow.with_alpha_scaled(2.4)),
-        tiny_skia::Rect::from_xywh(0.0, height - 1.5, SHELL_W, 1.5).expect("glow line"),
+    let top = band(0.0, BODY_TOP + 1.0);
+    stroke_border(
+        &mut pixmap,
+        &path,
+        Border::Shader(glint(style.top_glint, 0.18)),
+        transform,
+        Some(&top),
     );
-    fill(
-        top_line(style.highlight),
-        tiny_skia::Rect::from_xywh(0.0, body_top, SHELL_W, 1.2).expect("highlight line"),
+    let bottom = band(height - 1.5, height);
+    stroke_border(
+        &mut pixmap,
+        &path,
+        Border::Shader(glint(style.bottom_glint, 0.12)),
+        transform,
+        Some(&bottom),
     );
-
-    stroke_border(&mut pixmap, &path, style.border, transform);
     pixmap
 }
 
@@ -336,23 +349,8 @@ fn render_shell(oversample: u32, appearance: Appearance, height: f32, gradients:
 /// rounding shows each level as a band.
 fn smooth_fill(pixmap: &mut Pixmap, clip: &Mask, style: &ShellStyle, height: f32, oversample: f32) {
     let width = pixmap.width() as usize;
-    let center = SHELL_W / 2.0;
-    let body_height = height - 9.0;
     let rgb = |color: Color| [color.red(), color.green(), color.blue()].map(|v| v * 255.0);
     let base = style.base.map(rgb);
-    let glows = [
-        (
-            style.lift,
-            center,
-            height,
-            SHELL_W * 0.8,
-            body_height * 1.1,
-            0.78,
-        ),
-        (style.glow, center, height, SHELL_W * 0.6, 34.0, 0.72),
-        // A faint lift under the beak keeps the anchor point readable.
-        (style.highlight, center, 9.0, 70.0, 18.0, 1.0),
-    ];
     let coverage = clip.data();
     for (index, pixel) in pixmap
         .data_mut()
@@ -365,25 +363,14 @@ fn smooth_fill(pixmap: &mut Pixmap, clip: &Mask, style: &ShellStyle, height: f32
         if cover == 0 {
             continue;
         }
-        let x = ((index % width) as f32 + 0.5) / oversample;
         let y = ((index / width) as f32 + 0.5) / oversample;
-        let t = (y / height).clamp(0.0, 1.0);
-        let (from, to, mix) = if t < 0.5 {
-            (base[0], base[1], t * 2.0)
+        let t = ((y - BODY_TOP) / (height - BODY_TOP)).clamp(0.0, 1.0);
+        let (from, to, mix) = if t < 0.6 {
+            (base[0], base[1], t / 0.6)
         } else {
-            (base[1], base[2], t * 2.0 - 1.0)
+            (base[1], base[2], (t - 0.6) / 0.4)
         };
-        let mut color = [0, 1, 2].map(|c| from[c] + (to[c] - from[c]) * mix);
-        for (glow, cx, cy, rx, ry, reach) in glows {
-            let distance = (((x - cx) / rx).powi(2) + ((y - cy) / ry).powi(2)).sqrt();
-            if distance < reach {
-                let alpha = glow.alpha() * (1.0 - distance / reach);
-                let glow = rgb(glow);
-                for c in 0..3 {
-                    color[c] += (glow[c] - color[c]) * alpha;
-                }
-            }
-        }
+        let color = [0, 1, 2].map(|c| from[c] + (to[c] - from[c]) * mix);
         // Triangular noise of up to one level, the same on every channel so
         // it adds no color speckle
         let noise =
@@ -407,28 +394,37 @@ fn noise_unit(index: u32, seed: u32) -> f32 {
     (hash >> 8) as f32 / (1 << 24) as f32
 }
 
-fn stroke_border(pixmap: &mut Pixmap, path: &tiny_skia::Path, color: Color, transform: Transform) {
+enum Border {
+    Color(Color),
+    Shader(Shader<'static>),
+}
+
+impl From<Color> for Border {
+    fn from(color: Color) -> Self {
+        Self::Color(color)
+    }
+}
+
+fn stroke_border(
+    pixmap: &mut Pixmap,
+    path: &tiny_skia::Path,
+    border: Border,
+    transform: Transform,
+    mask: Option<&Mask>,
+) {
     let mut paint = Paint {
         anti_alias: true,
         ..Default::default()
     };
-    paint.set_color(color);
+    match border {
+        Border::Color(color) => paint.set_color(color),
+        Border::Shader(shader) => paint.shader = shader,
+    }
     let stroke = Stroke {
         width: 1.0,
         ..Default::default()
     };
-    pixmap.stroke_path(path, &paint, &stroke, transform, None);
-}
-
-trait ScaleAlpha {
-    fn with_alpha_scaled(self, factor: f32) -> Self;
-}
-
-impl ScaleAlpha for Color {
-    fn with_alpha_scaled(mut self, factor: f32) -> Self {
-        self.set_alpha((self.alpha() * factor).min(1.0));
-        self
-    }
+    pixmap.stroke_path(path, &paint, &stroke, transform, mask);
 }
 
 /// The shell as a premultiplied-RGBA raster for the in-window texture.
@@ -486,8 +482,8 @@ mod tests {
         let day = shell_background(1, Appearance::Day, 349.0, true);
         let night = shell_background(1, Appearance::Night, 349.0, true);
 
-        assert_eq!((day.width, day.height), (380, 349));
-        assert_eq!((night.width, night.height), (380, 349));
+        assert_eq!((day.width, day.height), (420, 349));
+        assert_eq!((night.width, night.height), (420, 349));
         assert_ne!(day.rgba, night.rgba);
     }
 

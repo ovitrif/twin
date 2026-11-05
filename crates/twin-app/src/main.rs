@@ -6,6 +6,7 @@ mod config;
 #[cfg(feature = "drive")]
 mod drive;
 mod glyph;
+mod kit;
 mod login_item;
 mod mock;
 #[cfg(target_os = "macos")]

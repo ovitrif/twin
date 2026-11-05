@@ -5,7 +5,7 @@
 //! Start a server with `twin-app --drive <socket>` (build with
 //! `--features drive`), then send commands with `twin-app drive <socket>
 //! <command>`. One command per line; each gets one reply line, `ok ...` or
-//! `error ...`. Coordinates are window points (380 wide, 0 at the top edge
+//! `error ...`. Coordinates are window points (420 wide, 0 at the top edge
 //! including the beak). Commands:
 //!
 //! - `state`: current screen, tab, transition, theme, pairing phase.
@@ -17,6 +17,8 @@
 //! - `shot PATH`: save the current frame as a PNG with transparency.
 //! - `record DIR` / `stop`: save every frame and `times.txt` (seconds).
 //! - `theme auto|day|night`, `gradients on|off`.
+//! - `window on|off`: the detached window (860 × 600) instead of the
+//!   popover, drawn in the same frame.
 //! - `quit`.
 //!
 //! The UI runs in real time, so animations and backend work (adb, emulators,
@@ -284,6 +286,16 @@ impl Driver<'_> {
                 self.harness.state_mut().drive_set_gradients(&ctx, on);
                 self.frame()?;
             }
+            "window" => {
+                let on = match args.first().copied() {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => bail!("expected on or off"),
+                };
+                let ctx = self.harness.ctx.clone();
+                self.harness.state_mut().drive_set_window(&ctx, on);
+                self.frame()?;
+            }
             "quit" => return Ok(None),
             "" => bail!("empty command"),
             other => bail!("unknown command {other}"),
@@ -316,6 +328,8 @@ impl Driver<'_> {
         let mut input = std::mem::take(self.harness.input_mut());
         eframe::App::raw_input_hook(self.harness.state_mut(), &ctx, &mut input);
         *self.harness.input_mut() = input;
+        let size = self.harness.state().drive_size();
+        self.harness.set_size(size);
         self.harness.step();
 
         if let Some(recording) = &self.recording {
