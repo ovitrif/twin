@@ -2532,7 +2532,10 @@ impl App {
             egui::pos2(sidebar.right() + 32.0, rect.top() + 28.0),
             egui::pos2(rect.right() - 32.0, rect.bottom() - 24.0),
         );
-        let title = Rect::from_min_size(main.min, vec2(main.width(), kit::BUTTON));
+        let title = Rect::from_min_size(
+            main.min,
+            vec2(main.width().min(WINDOW_PAGE_WIDTH), kit::BUTTON),
+        );
         let progress = self
             .animations
             .screen
@@ -2556,7 +2559,7 @@ impl App {
             }
         }
         let refresh = Rect::from_min_size(
-            egui::pos2(title.right() - kit::BUTTON, title.top()),
+            egui::pos2(title.right() - kit::ROW_RIGHT - kit::BUTTON, title.top()),
             vec2(kit::BUTTON, kit::BUTTON),
         );
         if ui
@@ -2980,16 +2983,17 @@ impl App {
                     ui.set_width(304.0);
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                     ui.add(
-                        Label::new(semibold("Delete emulator?", 15.0, theme::text_strong()))
-                            .selectable(false),
+                        Label::new(semibold(
+                            format!("Delete {}?", name.replace('_', " ")),
+                            15.0,
+                            theme::text_strong(),
+                        ))
+                        .selectable(false),
                     );
                     ui.add_space(8.0);
                     ui.add(
                         Label::new(regular(
-                            format!(
-                                "{} and its saved data are deleted for good.",
-                                name.replace('_', " ")
-                            ),
+                            "Its saved data goes with it, for good.",
                             13.0,
                             theme::heading(),
                         ))
