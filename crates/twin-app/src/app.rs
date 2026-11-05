@@ -313,6 +313,8 @@ pub struct App {
     pending_mode: Option<bool>,
     /// Open the popover once the window has turned back into it
     pending_attach_show: bool,
+    /// A text field had keyboard focus at the end of the last frame
+    text_focused: bool,
     quitting: bool,
 }
 
@@ -424,6 +426,7 @@ impl App {
             reopen_detached: settings_detached,
             pending_mode: None,
             pending_attach_show: false,
+            text_focused: false,
             quitting: false,
         })
     }
@@ -709,16 +712,11 @@ impl App {
             return;
         }
 
-        // In a text field, Escape only leaves the field
-        let editing_text = ctx
-            .memory(|memory| memory.focused())
-            .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
-        if editing_text {
-            return;
-        }
         let escape =
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-        if !escape {
+        // In a text field, Escape only leaves the field. The field gives up
+        // focus on the key itself, so ask whether one had it last frame.
+        if !escape || std::mem::take(&mut self.text_focused) {
             return;
         }
         // Escape closes the innermost layer: an open delete dialog first,
@@ -2250,6 +2248,9 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.text_focused = ctx
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::text_edit::TextEditState::load(&ctx, id).is_some());
         let rect = ui.max_rect();
 
         self.apply_window_mode(&ctx, frame);
