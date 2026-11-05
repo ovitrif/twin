@@ -237,17 +237,44 @@ pub fn refresh_status(shared: Arc<Mutex<Shared>>, ctx: Context) {
     ctx.request_repaint();
 
     thread::spawn(move || {
-        let mut snapshot = collect_snapshot();
+        let (mut snapshot, lookups) = collect_snapshot();
+        // A hung iPhone lookup can take up to 20 s: show Android phones and
+        // emulators first, with the iPhones and simulators seen last time
+        if !lookups.finished() {
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        if !lookups.finished() {
+            let mut state = shared.lock().unwrap();
+            if let Some(current) = &state.snapshot {
+                snapshot.iphones = current.iphones.clone();
+                snapshot.simulators = current.simulators.clone();
+            }
+            publish_snapshot(&mut state, snapshot.clone(), avd_generation, false);
+            drop(state);
+            ctx.request_repaint();
+        }
+        (snapshot.iphones, snapshot.simulators) = lookups.join();
         let mut state = shared.lock().unwrap();
-        if state.avd_generation != avd_generation
-            && let Some(current) = &state.snapshot
-        {
-            snapshot.avds = current.avds.clone();
-        }
-        snapshot.devices.extend(state.mock_devices.iter().cloned());
-        if mock::demo_devices() {
-            add_demo_devices(&mut snapshot);
-        }
+        publish_snapshot(&mut state, snapshot, avd_generation, true);
+        state.refreshing = false;
+        drop(state);
+        ctx.request_repaint();
+    });
+}
+
+/// Puts a fresh snapshot in place; `last` is the refresh's final one, with
+/// its iPhones and simulators, which can end shutdowns
+fn publish_snapshot(state: &mut Shared, mut snapshot: Snapshot, avd_generation: u64, last: bool) {
+    if state.avd_generation != avd_generation
+        && let Some(current) = &state.snapshot
+    {
+        snapshot.avds = current.avds.clone();
+    }
+    snapshot.devices.extend(state.mock_devices.iter().cloned());
+    if mock::demo_devices() {
+        add_demo_devices(&mut snapshot);
+    }
+    if last {
         // A shutdown is done once its emulator or simulator is gone
         state.stopping.retain(|key, since| {
             let present = snapshot
@@ -258,16 +285,12 @@ pub fn refresh_status(shared: Arc<Mutex<Shared>>, ctx: Context) {
             // One that outlives its shutdown gets its Stop button back
             present && since.elapsed() < STOP_TIMEOUT
         });
-        let device_connected = snapshot.devices.iter().any(|device| device.ready);
-
-        state.reap_finished_mirrors();
-        state.log_tool_warnings(&snapshot.mirror.warnings);
-        state.snapshot = Some(snapshot);
-        state.device_connected = device_connected;
-        state.refreshing = false;
-        drop(state);
-        ctx.request_repaint();
-    });
+    }
+    let device_connected = snapshot.devices.iter().any(|device| device.ready);
+    state.reap_finished_mirrors();
+    state.log_tool_warnings(&snapshot.mirror.warnings);
+    state.snapshot = Some(snapshot);
+    state.device_connected = device_connected;
 }
 
 /// Refresh only the state needed by the menu bar icon while the popover is
@@ -340,7 +363,28 @@ fn add_demo_devices(snapshot: &mut Snapshot) {
     }];
 }
 
-fn collect_snapshot() -> Snapshot {
+/// The iPhone and simulator lookups still running when adb's part is done
+struct AppleLookups {
+    iphones: thread::JoinHandle<Vec<Iphone>>,
+    simulators: thread::JoinHandle<Vec<Simulator>>,
+}
+
+impl AppleLookups {
+    fn finished(&self) -> bool {
+        self.iphones.is_finished() && self.simulators.is_finished()
+    }
+
+    fn join(self) -> (Vec<Iphone>, Vec<Simulator>) {
+        (
+            self.iphones.join().unwrap_or_default(),
+            self.simulators.join().unwrap_or_default(),
+        )
+    }
+}
+
+/// Everything adb and the emulator know, with iPhones and simulators still
+/// being looked up; they fill in when `AppleLookups` finishes
+fn collect_snapshot() -> (Snapshot, AppleLookups) {
     // iPhones and simulators come from Xcode's tools, which can be slow;
     // ask them alongside adb rather than after it
     let xcode = xcode_info();
@@ -472,18 +516,22 @@ fn collect_snapshot() -> Snapshot {
     // adb is done: iPhones and simulators don't hold up pairing or the
     // menu bar probe
     drop(_adb_work);
-    let iphones = iphones.join().unwrap_or_default();
-    let simulators = simulators.join().unwrap_or_default();
 
-    Snapshot {
-        emulator: emulator_info,
-        mirror: mirror_info,
-        xcode,
-        devices,
-        avds,
-        iphones,
-        simulators,
-    }
+    (
+        Snapshot {
+            emulator: emulator_info,
+            mirror: mirror_info,
+            xcode,
+            devices,
+            avds,
+            iphones: Vec::new(),
+            simulators: Vec::new(),
+        },
+        AppleLookups {
+            iphones,
+            simulators,
+        },
+    )
 }
 
 /// A scrcpy on PATH, for a build without Twin Mirror
