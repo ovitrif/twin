@@ -2424,6 +2424,15 @@ impl App {
 
         let sidebar = Rect::from_min_size(rect.min, vec2(SIDEBAR_WIDTH, rect.height()));
         let painter = ui.painter();
+        painter.rect_filled(sidebar, 0.0, theme::sidebar_fill());
+        painter.rect_filled(
+            Rect::from_min_max(
+                egui::pos2(sidebar.right() - 1.0, sidebar.top()),
+                sidebar.max,
+            ),
+            0.0,
+            theme::card_stroke(),
+        );
         // The drive server has no title bar: draw where its traffic lights
         // sit, so captures look like the window
         if self.headless {
@@ -2436,15 +2445,6 @@ impl App {
                 );
             }
         }
-        painter.rect_filled(sidebar, 0.0, theme::sidebar_fill());
-        painter.rect_filled(
-            Rect::from_min_max(
-                egui::pos2(sidebar.right() - 1.0, sidebar.top()),
-                sidebar.max,
-            ),
-            0.0,
-            theme::card_stroke(),
-        );
         // Under the traffic lights: the mark and the name
         let brand_y = rect.top() + 64.0;
         let logo = Rect::from_min_size(
