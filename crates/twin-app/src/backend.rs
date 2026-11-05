@@ -314,7 +314,7 @@ fn add_demo_devices(snapshot: &mut Snapshot) {
     };
     snapshot
         .devices
-        .insert(0, device("192.168.1.42:41235", "Pixel 10 Pro", false, true));
+        .insert(0, device("192.168.1.40:37105", "Pixel 10 Pro", false, true));
     let running = device("emulator-5554", "Medium Phone", true, false);
     if let Some(avd) = snapshot
         .avds
