@@ -1376,7 +1376,7 @@ fn pair_header(ui: &mut Ui, label: Color32, look: kit::ButtonLook, tooltip: &str
         vec2(kit::BUTTON, kit::BUTTON),
     );
     put(ui, button, |ui| {
-        kit::square_button(ui, kit::Face::Glyph(pair_glyph(look)), look, tooltip).clicked()
+        kit::bare_button(ui, kit::Face::Glyph(pair_glyph(look)), look, tooltip).clicked()
     })
 }
 
@@ -1399,15 +1399,23 @@ fn phones_block(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     ui.add_space(16.0);
 }
 
-enum Mark<'a> {
+enum Mark {
     Google,
-    Font(&'a str),
-    Glyph(kit::Glyph),
+    /// Apple's mark as an outline: its size and line width in points
+    Apple {
+        size: f32,
+        line: f32,
+    },
+    /// A filled brand mark this many points square
+    Brand {
+        brand: kit::Brand,
+        size: f32,
+    },
 }
 
 struct PhoneRow<'a> {
     key: &'a str,
-    mark: Mark<'a>,
+    mark: Mark,
     name: &'a str,
     subtitle: &'a str,
     connection: kit::Glyph,
@@ -1500,31 +1508,41 @@ fn phone_row(ui: &mut Ui, row: PhoneRow<'_>) -> bool {
     .inner
 }
 
-fn paint_mark(painter: &egui::Painter, rect: Rect, mark: &Mark<'_>, ink: Color32) {
+/// Apple's mark in a phone tile: larger than the Google one, which fills
+/// more of its grid, with the G's line width (3.3 of 24 units at 18 pt)
+const APPLE_TILE: Mark = Mark::Apple {
+    size: 21.0,
+    line: 3.3 * 18.0 / 24.0,
+};
+/// Android's robot for an Android phone that is not a Pixel
+const ANDROID_TILE: Mark = Mark::Brand {
+    brand: kit::Brand::Android,
+    size: 18.0,
+};
+/// Emulators and simulators in Virtual: the Android robot and iOS
+const ANDROID_ROW: Mark = Mark::Brand {
+    brand: kit::Brand::Android,
+    size: kit::ICON,
+};
+const IOS_ROW: Mark = Mark::Brand {
+    brand: kit::Brand::Ios,
+    size: kit::ICON,
+};
+
+fn paint_mark(painter: &egui::Painter, rect: Rect, mark: &Mark, ink: Color32) {
     match mark {
         Mark::Google => {
-            kit::paint_google(
-                painter,
-                Rect::from_center_size(rect.center(), vec2(18.0, 18.0)),
-                ink,
-            );
+            let square = Rect::from_center_size(rect.center(), vec2(18.0, 18.0));
+            kit::paint_brand(painter, square, kit::Brand::Google, None, ink);
         }
-        Mark::Font(glyph) => {
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                *glyph,
-                theme::icon_font(kit::ICON),
-                ink,
-            );
+        Mark::Apple { size, line } => {
+            let square = Rect::from_center_size(rect.center(), vec2(*size, *size));
+            let units = line * 24.0 / size;
+            kit::paint_brand(painter, square, kit::Brand::Apple, Some(units), ink);
         }
-        Mark::Glyph(glyph) => {
-            kit::paint_glyph(
-                painter,
-                Rect::from_center_size(rect.center(), vec2(kit::ICON, kit::ICON)),
-                *glyph,
-                ink,
-            );
+        Mark::Brand { brand, size } => {
+            let square = Rect::from_center_size(rect.center(), vec2(*size, *size));
+            kit::paint_brand(painter, square, *brand, None, ink);
         }
     }
 }
@@ -1571,7 +1589,7 @@ fn android_phone_row(
             mark: if device.name.starts_with("Pixel") {
                 Mark::Google
             } else {
-                Mark::Glyph(kit::Glyph::Android)
+                ANDROID_TILE
             },
             name: &device.name,
             subtitle: &subtitle,
@@ -1613,7 +1631,7 @@ fn iphone_phone_row(
         ui,
         PhoneRow {
             key: &iphone.udid,
-            mark: Mark::Font(ph::APPLE_LOGO),
+            mark: APPLE_TILE,
             name: &iphone.name,
             subtitle: &subtitle,
             connection: kit::Glyph::Usb,
@@ -1647,7 +1665,7 @@ fn empty_row(ui: &mut Ui, title: &str, hint: &str) {
 
 struct VirtualRow<'a> {
     key: &'a str,
-    mark: Mark<'a>,
+    mark: Mark,
     running: bool,
     name: &'a str,
     buttons: [(kit::Face, kit::ButtonLook, &'a str); 2],
@@ -3057,7 +3075,7 @@ impl App {
                     };
                     let row = VirtualRow {
                         key: &avd.name,
-                        mark: Mark::Glyph(kit::Glyph::Android),
+                        mark: ANDROID_ROW,
                         running: running && !stopping,
                         name: &name,
                         buttons: [
@@ -3098,7 +3116,7 @@ impl App {
                     let stopping = stopping.contains_key(&sim.udid);
                     let row = VirtualRow {
                         key: &sim.udid,
-                        mark: Mark::Font(ph::APPLE_LOGO),
+                        mark: IOS_ROW,
                         running: !stopping,
                         name: &sim.name,
                         buttons: [
