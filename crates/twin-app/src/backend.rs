@@ -577,9 +577,9 @@ fn android_version(adb: &Adb, serial: &str) -> String {
     if let Some(version) = cached {
         return version;
     }
-    let Ok(version) = adb.android_version(serial) else {
-        return String::new();
-    };
+    // A phone that doesn't answer is asked again only after it reconnects,
+    // not on every refresh
+    let version = adb.android_version(serial).unwrap_or_default();
     ANDROID_VERSIONS
         .lock()
         .unwrap()

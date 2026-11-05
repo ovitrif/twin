@@ -38,8 +38,14 @@ pub fn keyboard_focused(ui: &Ui, response: &Response) -> bool {
     ui.memory(|memory| memory.has_focus(response.id))
         && ui
             .ctx()
-            .data(|data| data.get_temp::<bool>(egui::Id::new("twin-keyboard-focus")))
+            .data(|data| data.get_temp::<bool>(keyboard_focus_id()))
             .unwrap_or(false)
+}
+
+/// Whether focus last moved by keyboard, so focus rings show for Tab but
+/// not after a click
+pub fn keyboard_focus_id() -> egui::Id {
+    egui::Id::new("twin-keyboard-focus")
 }
 
 /// The ring a control focused from the keyboard wears, so focus never reads

@@ -1659,7 +1659,8 @@ fn setting_row(ui: &mut Ui, label: &str, divider: bool, control: impl FnOnce(&mu
 /// A one-line text field, right-aligned, with an optional unit inside it
 fn field(ui: &mut Ui, id: &str, value: &mut String, width: f32, unit: &str) -> bool {
     // The whole field takes a click, not only its text
-    let (rect, frame) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
+    // Not a Tab stop of its own: the text inside is
+    let (rect, frame) = ui.allocate_exact_size(vec2(width, 28.0), Sense::CLICK);
     let unit_width = if unit.is_empty() { 0.0 } else { 20.0 };
     let edit = Rect::from_min_max(
         egui::pos2(rect.left() + 10.0, rect.top()),
@@ -2392,7 +2393,12 @@ impl App {
                 let eased = egui::emath::easing::cubic_in_out(progress);
                 // A push: both pages stay opaque and move side by side, so
                 // they never draw over each other.
-                let distance = body.width() + 2.0 * SCROLL_BLEED + 2.0 * kit::PAD;
+                // Far enough that each page enters and leaves past the edge
+                let distance = if in_window {
+                    clip.right() - body.left() + SCROLL_BLEED
+                } else {
+                    body.width() + 2.0 * SCROLL_BLEED + 2.0 * kit::PAD
+                };
                 let outgoing_x = -transition.direction * distance * eased;
                 let incoming_x = transition.direction * distance * (1.0 - eased);
                 self.render_screen(
@@ -3031,12 +3037,30 @@ impl App {
                     spread: 0,
                     color: Color32::from_black_alpha(90),
                 });
+            // The scrim takes the popover's shape: a plain backdrop would
+            // also darken the clear corners and the space beside the beak
+            let scrim = Color32::from_black_alpha(egui::lerp(
+                110.0..=50.0,
+                self.animations.skin.day_weight,
+            ) as u8);
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Middle,
+                egui::Id::new("delete-avd-scrim"),
+            ));
+            let surface = ctx.content_rect();
+            if self.detached {
+                painter.rect_filled(surface, 0.0, scrim);
+            } else {
+                painter.image(
+                    self.night_shell.id(),
+                    surface,
+                    Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    scrim,
+                );
+            }
             let modal = egui::Modal::new(egui::Id::new("delete-avd"))
                 .frame(frame)
-                .backdrop_color(Color32::from_black_alpha(egui::lerp(
-                    110.0..=50.0,
-                    self.animations.skin.day_weight,
-                ) as u8))
+                .backdrop_color(Color32::TRANSPARENT)
                 .show(ctx, |ui| {
                     ui.set_width(304.0);
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -3556,7 +3580,7 @@ fn paint_edge_fade(
 /// Whether focus last moved by keyboard, so focus highlights show for Tab
 /// navigation but not after a click.
 fn keyboard_focus_id() -> egui::Id {
-    egui::Id::new("twin-keyboard-focus")
+    kit::keyboard_focus_id()
 }
 
 fn paint_qr_card(ui: &Ui, rect: Rect, modules: &twin_core::qr::QrModules) {
