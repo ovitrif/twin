@@ -3226,7 +3226,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.add(
                     Label::new(regular(
-                        "Titles, sizes, pointer and on top apply to the mirrors you open next.",
+                        "Titles, sizes and pointer apply to mirrors you open next.",
                         12.0,
                         theme::heading(),
                     ))
