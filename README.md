@@ -19,7 +19,7 @@ without remembering SDK commands. Nothing is installed on either phone.
   window that moves as one; each phone can also open or hide on its own.
 
 Twin runs on Apple silicon Macs; the `twin` CLI also runs on Linux, for Android. More at
-[masivo.tech/apps/twin](https://masivo.tech/apps/twin/).
+[ovitrif.com/apps/twin](https://ovitrif.com/apps/twin/).
 
 ## Install
 
