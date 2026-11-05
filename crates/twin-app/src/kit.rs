@@ -441,6 +441,13 @@ pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str) -> bool {
         theme::toggle_off().lerp_to_gamma(theme::green(), on),
     );
     painter.rect_filled(rect, 10.0, hover);
+    // Off, the track keeps an edge on a light card
+    painter.rect_stroke(
+        rect,
+        10.0,
+        Stroke::new(1.0_f32, theme::field_stroke().gamma_multiply(1.0 - on)),
+        StrokeKind::Inside,
+    );
     focus_ring(ui, &response, rect, 10.0);
     let knob_x = egui::lerp(rect.left() + 10.0..=rect.right() - 10.0, on);
     painter.circle_filled(pos2(knob_x, rect.center().y), 8.0, Color32::WHITE);
@@ -474,7 +481,12 @@ pub fn segmented(
     let mut clicked = None;
     for (index, label) in labels.iter().enumerate() {
         let rect = segment(index as f32);
-        let response = ui.interact(rect, ui.id().with(("segment", *label)), Sense::click());
+        // The gaps between segments take clicks too
+        let response = ui.interact(
+            rect.expand2(vec2(gap / 2.0, 3.0)),
+            ui.id().with(("segment", *label)),
+            Sense::click(),
+        );
         let (hover, progress) = overlay(ui, &response);
         if index != selected {
             painter.rect_filled(rect, 7.0, hover);

@@ -1658,7 +1658,8 @@ fn setting_row(ui: &mut Ui, label: &str, divider: bool, control: impl FnOnce(&mu
 
 /// A one-line text field, right-aligned, with an optional unit inside it
 fn field(ui: &mut Ui, id: &str, value: &mut String, width: f32, unit: &str) -> bool {
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
+    // The whole field takes a click, not only its text
+    let (rect, frame) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
     let unit_width = if unit.is_empty() { 0.0 } else { 20.0 };
     let edit = Rect::from_min_max(
         egui::pos2(rect.left() + 10.0, rect.top()),
@@ -1684,6 +1685,9 @@ fn field(ui: &mut Ui, id: &str, value: &mut String, width: f32, unit: &str) -> b
             )
         })
         .inner;
+    if frame.clicked() {
+        output.request_focus();
+    }
     let stroke = if output.has_focus() {
         Stroke::new(1.5_f32, theme::input_focus_stroke())
     } else {
@@ -1776,6 +1780,7 @@ fn tool_row(
         let (hover, _) = kit::overlay(ui, &response);
         ui.painter().rect_filled(button, 8.0, theme::button_fill());
         ui.painter().rect_filled(button, 8.0, hover);
+        kit::focus_ring(ui, &response, button, 8.0);
         ui.painter().text(
             button.center(),
             egui::Align2::CENTER_CENTER,
@@ -2517,7 +2522,12 @@ impl App {
         let mut target = None;
         for (index, screen) in SCREEN_ORDER.iter().enumerate() {
             let rect = item(index as f32);
-            let response = ui.interact(rect, ui.id().with(("nav", index)), Sense::click());
+            // The 4-point gaps between items take clicks too
+            let response = ui.interact(
+                rect.expand2(vec2(0.0, 2.0)),
+                ui.id().with(("nav", index)),
+                Sense::click(),
+            );
             let (hover, _) = kit::overlay(ui, &response);
             if *screen != self.screen {
                 ui.painter().rect_filled(rect, 8.0, hover);
