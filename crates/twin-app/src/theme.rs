@@ -24,7 +24,6 @@ struct Palette {
     text_strong: Color32,
     text_bright: Color32,
     text_soft: Color32,
-    text_faint: Color32,
     text_check: Color32,
     green: Color32,
     green_ink: Color32,
@@ -67,7 +66,6 @@ impl Palette {
             text_strong: mix(from.text_strong, to.text_strong),
             text_bright: mix(from.text_bright, to.text_bright),
             text_soft: mix(from.text_soft, to.text_soft),
-            text_faint: mix(from.text_faint, to.text_faint),
             text_check: mix(from.text_check, to.text_check),
             green: mix(from.green, to.green),
             green_ink: mix(from.green_ink, to.green_ink),
@@ -122,7 +120,6 @@ const NIGHT: Palette = Palette {
     text_strong: Color32::from_rgb(0xF2, 0xF3, 0xF7),
     text_bright: Color32::from_rgb(0xEC, 0xEE, 0xF4),
     text_soft: Color32::from_rgb(0x83, 0x87, 0x91),
-    text_faint: Color32::from_rgb(0x70, 0x74, 0x7F),
     text_check: Color32::from_rgb(0xC9, 0xCC, 0xD6),
     green: Color32::from_rgb(0x3D, 0xDC, 0x84),
     green_ink: Color32::from_rgb(0x0A, 0x2A, 0x1B),
@@ -147,12 +144,12 @@ const NIGHT: Palette = Palette {
     icon_muted: Color32::from_rgb(0x8E, 0x91, 0x99),
     tab_inactive: Color32::from_rgb(0x9F, 0xA2, 0xAA),
     segment_track: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x40),
-    segment_on: Color32::from_rgba_premultiplied(0x1A, 0x1A, 0x1A, 0x1A),
+    segment_on: Color32::from_rgba_premultiplied(0x2E, 0x2E, 0x2E, 0x2E),
     toggle_off: Color32::from_rgba_premultiplied(0x29, 0x29, 0x29, 0x29),
     field_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x47),
     field_stroke: Color32::from_rgba_premultiplied(0x14, 0x14, 0x14, 0x14),
     sidebar_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x38),
-    nav_on: Color32::from_rgba_premultiplied(0x14, 0x14, 0x14, 0x14),
+    nav_on: Color32::from_rgba_premultiplied(0x26, 0x26, 0x26, 0x26),
     dialog_fill: Color32::from_rgb(0x26, 0x26, 0x29),
     ink_disabled: Color32::from_rgb(0x55, 0x57, 0x5C),
     red_ink: Color32::from_rgb(0x2A, 0x08, 0x08),
@@ -162,7 +159,6 @@ const DAY: Palette = Palette {
     text_strong: Color32::from_rgb(0x17, 0x19, 0x23),
     text_bright: Color32::from_rgb(0x22, 0x24, 0x2E),
     text_soft: Color32::from_rgb(0x62, 0x68, 0x74),
-    text_faint: Color32::from_rgb(0x75, 0x7D, 0x8A),
     text_check: Color32::from_rgb(0x2F, 0x33, 0x3D),
     green: Color32::from_rgb(0x14, 0x84, 0x47),
     green_ink: Color32::WHITE,
@@ -192,7 +188,7 @@ const DAY: Palette = Palette {
     field_fill: Color32::WHITE,
     field_stroke: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x1C),
     sidebar_fill: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x08),
-    nav_on: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x0F),
+    nav_on: Color32::from_rgba_premultiplied(0x00, 0x00, 0x00, 0x14),
     dialog_fill: Color32::WHITE,
     ink_disabled: Color32::from_rgb(0xB6, 0xBA, 0xC2),
     red_ink: Color32::WHITE,
@@ -234,7 +230,6 @@ macro_rules! color_token {
 color_token!(text_strong, text_strong);
 color_token!(text_bright, text_bright);
 color_token!(text_soft, text_soft);
-color_token!(text_faint, text_faint);
 color_token!(text_check, text_check);
 color_token!(green, green);
 color_token!(green_ink, green_ink);

@@ -667,7 +667,11 @@ pub fn stop_simulator(shared: Arc<Mutex<Shared>>, ctx: Context, sim: Simulator) 
     thread::spawn(move || {
         let result = simctl.shutdown(&sim.udid);
         let mut state = shared.lock().unwrap();
-        state.stopping.remove(&sim.udid);
+        // A done shutdown stays marked until a refresh no longer lists it,
+        // so a refresh already under way can't show it running again
+        if result.is_err() {
+            state.stopping.remove(&sim.udid);
+        }
         match result {
             Ok(()) => {
                 if let Some(snapshot) = &mut state.snapshot {

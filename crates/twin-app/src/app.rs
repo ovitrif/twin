@@ -115,6 +115,9 @@ struct ScreenTransition {
     direction: f32,
     started_at: Instant,
     cancel_pairing_on_complete: bool,
+    /// Where the selection was when the slide began: mid-way through an
+    /// earlier slide, it carries on from there instead of jumping
+    from_position: f32,
 }
 
 impl ScreenTransition {
@@ -509,12 +512,14 @@ impl App {
         {
             backend::cancel_pairing(&self.shared);
         }
+        let from_position = self.page_position();
         self.animations.screen = Some(ScreenTransition {
             from: self.screen,
             to: screen,
             direction: screen_transition_direction(self.screen, screen),
             started_at: Instant::now(),
             cancel_pairing_on_complete: self.screen == Screen::Pair,
+            from_position,
         });
         self.screen = screen;
         if screen == Screen::Pair {
@@ -535,7 +540,7 @@ impl App {
     fn page_position(&self) -> f32 {
         match self.animations.screen {
             Some(transition) => egui::lerp(
-                screen_index(transition.from) as f32..=screen_index(transition.to) as f32,
+                transition.from_position..=screen_index(transition.to) as f32,
                 egui::emath::easing::cubic_in_out(transition.progress()),
             ),
             None => screen_index(self.screen) as f32,
@@ -1220,7 +1225,7 @@ fn set_dock_presence(shown: bool) {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_presence(_shown: bool) {}
 
-/// Text cut to `width` with an ellipsis
+/// Text cut to `width` with an ellipsis; returns where it went, when cut
 fn paint_fitted(
     painter: &egui::Painter,
     pos: egui::Pos2,
@@ -1229,12 +1234,22 @@ fn paint_fitted(
     font: FontId,
     color: Color32,
     width: f32,
-) {
+) -> Option<Rect> {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(1.0));
     let galley = painter.layout_job(job);
     let rect = anchor.anchor_size(pos, galley.size());
+    let elided = galley.elided;
     painter.galley(rect.min, galley, color);
+    elided.then_some(rect)
+}
+
+/// The full name over a name cut short
+fn name_tooltip(ui: &Ui, cut: Option<Rect>, key: &str, name: &str) {
+    if let Some(rect) = cut {
+        ui.interact(rect, ui.id().with(("name", key)), Sense::hover())
+            .on_hover_text(name);
+    }
 }
 
 /// Places one widget in `rect`
@@ -1262,6 +1277,7 @@ fn text_button(ui: &mut Ui, label: &str, fill: Color32, ink: Color32) -> egui::R
     let (hover, _) = kit::overlay(ui, &response);
     ui.painter().rect_filled(rect, 9.0, fill);
     ui.painter().rect_filled(rect, 9.0, hover);
+    kit::focus_ring(ui, &response, rect, 9.0);
     ui.painter()
         .text(rect.center(), egui::Align2::CENTER_CENTER, label, font, ink);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -1354,11 +1370,21 @@ fn phone_row(ui: &mut Ui, row: PhoneRow<'_>) -> bool {
         vec2(kit::ICON, kit::ICON),
     );
     kit::paint_glyph(&painter, connection, row.connection, theme::icon_muted());
+    ui.interact(
+        connection,
+        ui.id().with(("connection", row.key)),
+        Sense::hover(),
+    )
+    .on_hover_text(if row.connection == kit::Glyph::Wifi {
+        "Wi-Fi"
+    } else {
+        "USB"
+    });
 
     let text_left = tile.right() + 12.0;
     let text_width = connection.left() - 12.0 - text_left;
     let has_subtitle = !row.subtitle.is_empty();
-    paint_fitted(
+    let cut = paint_fitted(
         &painter,
         egui::pos2(
             text_left,
@@ -1374,6 +1400,7 @@ fn phone_row(ui: &mut Ui, row: PhoneRow<'_>) -> bool {
         theme::text_strong(),
         text_width,
     );
+    name_tooltip(ui, cut, row.key, row.name);
     if has_subtitle {
         paint_fitted(
             &painter,
@@ -1577,7 +1604,7 @@ fn virtual_row(ui: &mut Ui, row: VirtualRow<'_>) -> Option<usize> {
         },
     );
     let buttons_left = rect.right() - kit::ROW_RIGHT - 2.0 * kit::BUTTON - 8.0;
-    paint_fitted(
+    let cut = paint_fitted(
         &painter,
         egui::pos2(mark.right() + 12.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
@@ -1586,6 +1613,7 @@ fn virtual_row(ui: &mut Ui, row: VirtualRow<'_>) -> Option<usize> {
         theme::text_strong(),
         buttons_left - 12.0 - (mark.right() + 12.0),
     );
+    name_tooltip(ui, cut, row.key, row.name);
     let mut clicked = None;
     ui.push_id(("virtual", row.key), |ui| {
         for (index, (face, look, tooltip)) in row.buttons.into_iter().enumerate() {
@@ -2309,7 +2337,7 @@ impl App {
         );
         let clicked = ui
             .scope_builder(egui::UiBuilder::new().max_rect(refresh), |ui| {
-                kit::ghost_button(ui, ph::ARROWS_CLOCKWISE, "Refresh").clicked()
+                kit::ghost_button(ui, kit::Glyph::Refresh, "Refresh").clicked()
             })
             .inner;
         if clicked {
@@ -2494,6 +2522,7 @@ impl App {
             if *screen != self.screen {
                 ui.painter().rect_filled(rect, 8.0, hover);
             }
+            kit::focus_ring(ui, &response, rect, 8.0);
             let under = (1.0 - (position - index as f32).abs()).clamp(0.0, 1.0);
             ui.painter().text(
                 egui::pos2(rect.left() + 12.0, rect.center().y),
@@ -2523,7 +2552,7 @@ impl App {
         );
         let back = ui
             .scope_builder(egui::UiBuilder::new().max_rect(back_rect), |ui| {
-                kit::link_button(ui, ph::ARROW_SQUARE_IN, "Back to menu bar").clicked()
+                kit::link_button(ui, kit::Glyph::Back, "Back to menu bar").clicked()
             })
             .inner;
 
@@ -2564,7 +2593,7 @@ impl App {
         );
         if ui
             .scope_builder(egui::UiBuilder::new().max_rect(refresh), |ui| {
-                kit::ghost_button(ui, ph::ARROWS_CLOCKWISE, "Refresh").clicked()
+                kit::ghost_button(ui, kit::Glyph::Refresh, "Refresh").clicked()
             })
             .inner
         {
@@ -2626,7 +2655,7 @@ impl App {
                     egui::UiBuilder::new()
                         .max_rect(footer)
                         .layout(Layout::right_to_left(Align::Center)),
-                    |ui| kit::link_button(ui, ph::ARROW_SQUARE_OUT, "Open as window").clicked(),
+                    |ui| kit::link_button(ui, kit::Glyph::Show, "Open as window").clicked(),
                 )
                 .inner;
             if clicked {
@@ -2885,7 +2914,15 @@ impl App {
                         kit::ButtonLook::Normal
                     };
                     let (main, main_glyph, main_tip) = if starting || stopping {
-                        (kit::ButtonLook::Busy, kit::Glyph::Play, "")
+                        (
+                            kit::ButtonLook::Busy,
+                            kit::Glyph::Play,
+                            if starting {
+                                "Starting…"
+                            } else {
+                                "Stopping…"
+                            },
+                        )
                     } else if running {
                         (kit::ButtonLook::Active, kit::Glyph::Stop, "Stop emulator")
                     } else if deleting {
@@ -2899,7 +2936,15 @@ impl App {
                         running: running && !stopping,
                         name: &name,
                         buttons: [
-                            (kit::Face::Glyph(kit::Glyph::Bin), delete, "Delete emulator"),
+                            (
+                                kit::Face::Glyph(kit::Glyph::Bin),
+                                delete,
+                                if deleting {
+                                    "Deleting…"
+                                } else {
+                                    "Delete emulator"
+                                },
+                            ),
                             (kit::Face::Glyph(main_glyph), main, main_tip),
                         ],
                     };
@@ -2941,7 +2986,7 @@ impl App {
                                 (
                                     kit::Face::Glyph(kit::Glyph::Stop),
                                     kit::ButtonLook::Busy,
-                                    "",
+                                    "Shutting down…",
                                 )
                             } else {
                                 (
@@ -2978,7 +3023,10 @@ impl App {
                 });
             let modal = egui::Modal::new(egui::Id::new("delete-avd"))
                 .frame(frame)
-                .backdrop_color(Color32::from_black_alpha(110))
+                .backdrop_color(Color32::from_black_alpha(egui::lerp(
+                    110.0..=50.0,
+                    self.animations.skin.day_weight,
+                ) as u8))
                 .show(ctx, |ui| {
                     ui.set_width(304.0);
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -3036,7 +3084,7 @@ impl App {
                     .desired_rows(logs.len().max(1))
                     .font(FontId::new(10.5, FontFamily::Monospace))
                     .text_color(if empty {
-                        theme::text_faint()
+                        theme::heading()
                     } else {
                         theme::text_check()
                     })
@@ -3663,7 +3711,7 @@ fn pairing_progress_block(ui: &mut Ui, progress: &PairingProgress, width: f32, a
         ui.scope(|ui| {
             ui.set_max_width(width);
             ui.add(
-                Label::new(regular(endpoint, 10.5, theme::text_faint()))
+                Label::new(regular(endpoint, 11.0, theme::heading()))
                     .halign(align)
                     .wrap(),
             );
@@ -3740,6 +3788,7 @@ mod tests {
             direction: 1.0,
             started_at,
             cancel_pairing_on_complete: false,
+            from_position: 0.0,
         };
         let popover = PopoverTransition {
             phase: PopoverTransitionPhase::Appearing,

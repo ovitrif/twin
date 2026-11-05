@@ -32,17 +32,34 @@ pub fn regular_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
 }
 
-/// Hover and press highlight, eased in and out; a control focused from the
-/// keyboard takes the hover highlight
-pub fn overlay(ui: &Ui, response: &Response) -> (Color32, f32) {
-    let focused = ui.memory(|memory| memory.has_focus(response.id))
+/// Whether `response` holds focus that came from the keyboard (Tab), not a
+/// click
+pub fn keyboard_focused(ui: &Ui, response: &Response) -> bool {
+    ui.memory(|memory| memory.has_focus(response.id))
         && ui
             .ctx()
             .data(|data| data.get_temp::<bool>(egui::Id::new("twin-keyboard-focus")))
-            .unwrap_or(false);
+            .unwrap_or(false)
+}
+
+/// The ring a control focused from the keyboard wears, so focus never reads
+/// as selection
+pub fn focus_ring(ui: &Ui, response: &Response, rect: Rect, radius: f32) {
+    if keyboard_focused(ui, response) {
+        ui.painter().rect_stroke(
+            rect.expand(1.0),
+            radius + 1.0,
+            Stroke::new(1.5_f32, theme::input_focus_stroke()),
+            StrokeKind::Outside,
+        );
+    }
+}
+
+/// Hover and press highlight, eased in and out
+pub fn overlay(ui: &Ui, response: &Response) -> (Color32, f32) {
     let hover = ui.ctx().animate_bool_with_time(
         response.id.with("kit-hover"),
-        response.hovered() || focused,
+        response.hovered(),
         HOVER_TIME,
     );
     let press = ui.ctx().animate_bool_with_time(
@@ -118,6 +135,9 @@ pub enum Glyph {
     Usb,
     Android,
     Show,
+    Refresh,
+    /// Into the corner of a window: back to the menu bar
+    Back,
 }
 
 /// Paints `glyph` in `rect` (a 24-unit grid scaled to fit) with `color`
@@ -221,6 +241,37 @@ pub fn paint_glyph(painter: &Painter, rect: Rect, glyph: Glyph, color: Color32) 
             polyline(&[at(7.0, 7.0), at(9.0, 10.0)], 2.0);
             polyline(&[at(17.0, 7.0), at(15.0, 10.0)], 2.0);
         }
+        Glyph::Refresh => {
+            use std::f32::consts::PI;
+            let mut top = arc(12.0, 12.0, 9.0, PI, 1.75 * PI);
+            top.push(at(21.0, 8.0));
+            polyline(&top, 2.0);
+            let mut bottom = arc(12.0, 12.0, 9.0, 0.0, 0.75 * PI);
+            bottom.push(at(3.0, 16.0));
+            polyline(&bottom, 2.0);
+            polyline(&[at(21.0, 3.0), at(21.0, 8.0), at(16.0, 8.0)], 2.0);
+            polyline(&[at(3.0, 21.0), at(3.0, 16.0), at(8.0, 16.0)], 2.0);
+        }
+        Glyph::Back => {
+            polyline(&[at(10.0, 20.0), at(4.0, 20.0), at(4.0, 14.0)], 2.0);
+            polyline(&[at(4.0, 20.0), at(12.0, 12.0)], 2.0);
+            polyline(
+                &[
+                    at(6.0, 10.0),
+                    at(6.0, 6.0),
+                    at(6.6, 4.6),
+                    at(8.0, 4.0),
+                    at(18.0, 4.0),
+                    at(19.4, 4.6),
+                    at(20.0, 6.0),
+                    at(20.0, 16.0),
+                    at(19.4, 17.4),
+                    at(18.0, 18.0),
+                    at(14.0, 18.0),
+                ],
+                2.0,
+            );
+        }
         Glyph::Show => {
             // A window with an arrow out of its corner
             polyline(&[at(14.0, 4.0), at(20.0, 4.0), at(20.0, 10.0)], 2.0);
@@ -289,6 +340,7 @@ pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -
     if !matches!(look, ButtonLook::Disabled | ButtonLook::Busy) {
         painter.rect_filled(rect, 10.0, hover);
     }
+    focus_ring(ui, &response, rect, 10.0);
     let icon_rect = Rect::from_center_size(rect.center(), vec2(ICON, ICON));
     if look == ButtonLook::Busy {
         egui::Spinner::new()
@@ -315,15 +367,15 @@ pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -
 }
 
 /// A plain icon button with no fill until hovered: Refresh
-pub fn ghost_button(ui: &mut Ui, glyph: &str, tooltip: &str) -> Response {
+pub fn ghost_button(ui: &mut Ui, glyph: Glyph, tooltip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), Sense::click());
     let (hover, progress) = overlay(ui, &response);
     ui.painter().rect_filled(rect, 10.0, hover);
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
+    focus_ring(ui, &response, rect, 10.0);
+    paint_glyph(
+        ui.painter(),
+        Rect::from_center_size(rect.center(), vec2(ICON, ICON)),
         glyph,
-        theme::icon_font(ICON),
         theme::tab_inactive().lerp_to_gamma(theme::text_strong(), progress),
     );
     response
@@ -333,7 +385,7 @@ pub fn ghost_button(ui: &mut Ui, glyph: &str, tooltip: &str) -> Response {
 
 /// A text button with a leading icon and no fill until hovered: "Open as
 /// window"
-pub fn link_button(ui: &mut Ui, glyph: &str, label: &str) -> Response {
+pub fn link_button(ui: &mut Ui, glyph: Glyph, label: &str) -> Response {
     let text_font = font(12.0, theme::MEDIUM);
     let width = ui
         .painter()
@@ -344,13 +396,16 @@ pub fn link_button(ui: &mut Ui, glyph: &str, label: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let (hover, progress) = overlay(ui, &response);
     let ink = theme::tab_inactive().lerp_to_gamma(theme::text_strong(), progress);
+    focus_ring(ui, &response, rect, 10.0);
     let painter = ui.painter();
     painter.rect_filled(rect, 10.0, hover);
-    painter.text(
-        pos2(rect.left() + 8.0 + ICON / 2.0, rect.center().y),
-        Align2::CENTER_CENTER,
+    paint_glyph(
+        painter,
+        Rect::from_center_size(
+            pos2(rect.left() + 8.0 + ICON / 2.0, rect.center().y),
+            vec2(ICON, ICON),
+        ),
         glyph,
-        theme::icon_font(ICON),
         ink,
     );
     painter.text(
@@ -386,6 +441,7 @@ pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str) -> bool {
         theme::toggle_off().lerp_to_gamma(theme::green(), on),
     );
     painter.rect_filled(rect, 10.0, hover);
+    focus_ring(ui, &response, rect, 10.0);
     let knob_x = egui::lerp(rect.left() + 10.0..=rect.right() - 10.0, on);
     painter.circle_filled(pos2(knob_x, rect.center().y), 8.0, Color32::WHITE);
     changed
@@ -423,6 +479,7 @@ pub fn segmented(
         if index != selected {
             painter.rect_filled(rect, 7.0, hover);
         }
+        focus_ring(ui, &response, rect, 7.0);
         // Text brightens as the pill passes under it
         let under = (1.0 - (position - index as f32).abs()).clamp(0.0, 1.0);
         let ink =
