@@ -251,14 +251,17 @@ pub fn paint_glyph(painter: &Painter, rect: Rect, glyph: Glyph, color: Color32) 
         }
         Glyph::Refresh => {
             use std::f32::consts::PI;
-            let mut top = arc(12.0, 12.0, 9.0, PI, 1.75 * PI);
-            top.push(at(21.0, 8.0));
+            // Drawn at three quarters so its visual weight matches the
+            // other glyphs, which fill about 13 of the 24 units
+            let k = |x: f32, y: f32| at(12.0 + (x - 12.0) * 0.75, 12.0 + (y - 12.0) * 0.75);
+            let mut top = arc(12.0, 12.0, 6.75, PI, 1.75 * PI);
+            top.push(k(21.0, 8.0));
             polyline(&top, 2.0);
-            let mut bottom = arc(12.0, 12.0, 9.0, 0.0, 0.75 * PI);
-            bottom.push(at(3.0, 16.0));
+            let mut bottom = arc(12.0, 12.0, 6.75, 0.0, 0.75 * PI);
+            bottom.push(k(3.0, 16.0));
             polyline(&bottom, 2.0);
-            polyline(&[at(21.0, 3.0), at(21.0, 8.0), at(16.0, 8.0)], 2.0);
-            polyline(&[at(3.0, 21.0), at(3.0, 16.0), at(8.0, 16.0)], 2.0);
+            polyline(&[k(21.0, 3.0), k(21.0, 8.0), k(16.0, 8.0)], 2.0);
+            polyline(&[k(3.0, 21.0), k(3.0, 16.0), k(8.0, 16.0)], 2.0);
         }
         Glyph::Window => {
             painter.rect_stroke(
@@ -548,4 +551,162 @@ pub fn paint_tile(painter: &Painter, rect: Rect, active: bool) {
             theme::tile_fill()
         },
     );
+}
+
+/// Google's mark, theSVG's `google` mono icon: one path on a 24-unit grid
+const GOOGLE_PATH: &str = "M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z";
+
+/// Paints Google's mark in `ink`, filling `rect`
+pub fn paint_google(painter: &Painter, rect: Rect, ink: Color32) {
+    let ctx = painter.ctx();
+    let id = egui::Id::new("twin-google-mark");
+    let texture = ctx
+        .data(|data| data.get_temp::<egui::TextureHandle>(id))
+        .unwrap_or_else(|| {
+            let texture = ctx.load_texture(
+                "google-mark",
+                google_image(96),
+                egui::TextureOptions::LINEAR,
+            );
+            ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+            texture
+        });
+    painter.image(
+        texture.id(),
+        rect,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        ink,
+    );
+}
+
+/// The mark in white on transparent, `px` square, to tint when painted
+fn google_image(px: u32) -> egui::ColorImage {
+    let size = [px as usize, px as usize];
+    let Some(mut pixmap) = tiny_skia::Pixmap::new(px, px) else {
+        return egui::ColorImage::new(size, vec![Color32::TRANSPARENT; size[0] * size[1]]);
+    };
+    if let Some(path) = svg_path(GOOGLE_PATH) {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(tiny_skia::Color::WHITE);
+        paint.anti_alias = true;
+        let scale = px as f32 / 24.0;
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::from_scale(scale, scale),
+            None,
+        );
+    }
+    egui::ColorImage::from_rgba_premultiplied(size, pixmap.data())
+}
+
+/// Reads an SVG path's M, L, H, V, C, S and Z commands, absolute or relative
+fn svg_path(d: &str) -> Option<tiny_skia::Path> {
+    let bytes = d.as_bytes();
+    let mut i = 0;
+    let skip = |i: &mut usize| {
+        while *i < bytes.len() && (bytes[*i] == b' ' || bytes[*i] == b',') {
+            *i += 1;
+        }
+    };
+    let number = |i: &mut usize| -> Option<f32> {
+        skip(i);
+        let start = *i;
+        if *i < bytes.len() && (bytes[*i] == b'-' || bytes[*i] == b'+') {
+            *i += 1;
+        }
+        let mut dot = false;
+        while *i < bytes.len() && (bytes[*i].is_ascii_digit() || (bytes[*i] == b'.' && !dot)) {
+            dot |= bytes[*i] == b'.';
+            *i += 1;
+        }
+        d.get(start..*i)?.parse().ok()
+    };
+    let mut path = tiny_skia::PathBuilder::new();
+    let (mut x, mut y, mut start_x, mut start_y) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let mut control: Option<(f32, f32)> = None;
+    let mut command = b'M';
+    loop {
+        skip(&mut i);
+        if i >= bytes.len() {
+            break;
+        }
+        if bytes[i].is_ascii_alphabetic() {
+            command = bytes[i];
+            i += 1;
+            if command.eq_ignore_ascii_case(&b'z') {
+                path.close();
+                (x, y) = (start_x, start_y);
+                control = None;
+                continue;
+            }
+        }
+        let relative = command.is_ascii_lowercase();
+        let (ox, oy) = if relative { (x, y) } else { (0.0, 0.0) };
+        match command.to_ascii_uppercase() {
+            b'M' => {
+                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
+                (start_x, start_y) = (x, y);
+                path.move_to(x, y);
+                // Further pairs after a move are lines
+                command = if relative { b'l' } else { b'L' };
+                control = None;
+            }
+            b'L' => {
+                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
+                path.line_to(x, y);
+                control = None;
+            }
+            b'H' => {
+                x = number(&mut i)? + ox;
+                path.line_to(x, y);
+                control = None;
+            }
+            b'V' => {
+                y = number(&mut i)? + oy;
+                path.line_to(x, y);
+                control = None;
+            }
+            b'C' => {
+                let (x1, y1) = (number(&mut i)? + ox, number(&mut i)? + oy);
+                let (x2, y2) = (number(&mut i)? + ox, number(&mut i)? + oy);
+                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
+                path.cubic_to(x1, y1, x2, y2, x, y);
+                control = Some((x2, y2));
+            }
+            b'S' => {
+                let (x1, y1) = control.map_or((x, y), |(cx, cy)| (2.0 * x - cx, 2.0 * y - cy));
+                let (x2, y2) = (number(&mut i)? + ox, number(&mut i)? + oy);
+                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
+                path.cubic_to(x1, y1, x2, y2, x, y);
+                control = Some((x2, y2));
+            }
+            _ => return None,
+        }
+    }
+    path.finish()
+}
+
+#[cfg(test)]
+mod google_tests {
+    use super::*;
+
+    #[test]
+    fn google_path_parses_and_fills_the_grid() {
+        let path = svg_path(GOOGLE_PATH).expect("path");
+        let bounds = path.bounds();
+        assert!((bounds.left() - 0.307).abs() < 0.01, "{bounds:?}");
+        assert!((bounds.top() - 0.0).abs() < 0.01, "{bounds:?}");
+        assert!((bounds.right() - 23.85).abs() < 0.2, "{bounds:?}");
+        assert!((bounds.bottom() - 24.0).abs() < 0.01, "{bounds:?}");
+    }
+
+    #[test]
+    fn relative_numbers_without_separators() {
+        let path = svg_path("M1 1h2v2H1z m5 5l1-.5.5.5z").expect("path");
+        let bounds = path.bounds();
+        assert_eq!((bounds.left(), bounds.top()), (1.0, 1.0));
+        assert_eq!((bounds.right(), bounds.bottom()), (7.5, 6.0));
+    }
 }

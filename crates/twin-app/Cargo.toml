@@ -44,6 +44,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSStatusItem",
     "NSView",
     "NSRunningApplication",
+    "NSScreen",
     "NSWindow",
 ] }
 raw-window-handle = "0.6"

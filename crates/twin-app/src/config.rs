@@ -42,6 +42,9 @@ pub struct Settings {
     pub detached: bool,
     /// `twin iphone ui` may list what is on the iPhone's screen
     pub agent_ui: bool,
+    /// The detached window's last position and size in points: x, y of its
+    /// top-left corner, then width and height
+    pub window_frame: Option<[f32; 4]>,
 }
 
 impl Default for Settings {
@@ -63,6 +66,7 @@ impl Default for Settings {
             gradients: true,
             detached: false,
             agent_ui: true,
+            window_frame: None,
         }
     }
 }

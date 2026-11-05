@@ -313,6 +313,10 @@ pub struct App {
     pending_mode: Option<bool>,
     /// Open the popover once the window has turned back into it
     pending_attach_show: bool,
+    /// When the window mode last changed, so its frame is not remembered
+    /// mid-change; and a moved or resized frame waiting to be saved
+    mode_changed_at: std::time::Instant,
+    unsaved_frame: Option<([f32; 4], std::time::Instant)>,
     /// A text field had keyboard focus at the end of the last frame
     text_focused: bool,
     quitting: bool,
@@ -426,6 +430,8 @@ impl App {
             reopen_detached: settings_detached,
             pending_mode: None,
             pending_attach_show: false,
+            mode_changed_at: std::time::Instant::now(),
+            unsaved_frame: None,
             text_focused: false,
             quitting: false,
         })
@@ -574,6 +580,9 @@ impl App {
     /// Back to the menu bar: closes the window, then opens the popover when
     /// `show` asks
     fn attach(&mut self, ctx: &Context, show: bool) {
+        if let Some((frame, _)) = self.unsaved_frame.take() {
+            self.settings.window_frame = Some(frame);
+        }
         self.detached = false;
         self.pending_avd_delete = None;
         self.settings.detached = false;
@@ -602,13 +611,21 @@ impl App {
             return;
         };
         set_native_window_mode(frame, detached);
+        self.mode_changed_at = std::time::Instant::now();
+        self.unsaved_frame = None;
         if detached {
-            let size = WINDOW_SIZE;
+            // Where it was last, when that spot is still on a screen
+            let saved = self.settings.window_frame.filter(|[x, y, w, h]| {
+                *w >= WINDOW_MIN_SIZE.x && *h >= WINDOW_MIN_SIZE.y && frame_on_screen(*x, *y, *w)
+            });
+            let size = saved.map_or(WINDOW_SIZE, |[_, _, w, h]| vec2(w, h));
             let monitor = ctx.input(|input| input.viewport().monitor_size);
             ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
             ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(WINDOW_MIN_SIZE));
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
-            if let Some(monitor) = monitor {
+            if let Some([x, y, _, _]) = saved {
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(x, y)));
+            } else if let Some(monitor) = monitor {
                 ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(
                     ((monitor.x - size.x) / 2.0).max(0.0),
                     ((monitor.y - size.y) / 3.0).max(24.0),
@@ -625,6 +642,51 @@ impl App {
                 theme::WINDOW_WIDTH,
                 theme::WINDOW_FULL_HEIGHT,
             )));
+        }
+    }
+
+    /// Saves the detached window's frame a second after it stops moving or
+    /// resizing, so it opens there next time
+    fn remember_window_frame(&mut self, ctx: &Context) {
+        if !self.detached || self.headless || self.pending_mode.is_some() {
+            return;
+        }
+        // The native window takes a moment to settle into a new mode
+        if self.mode_changed_at.elapsed() < std::time::Duration::from_secs(1) {
+            return;
+        }
+        let (outer, inner) =
+            ctx.input(|input| (input.viewport().outer_rect, input.viewport().inner_rect));
+        let (Some(outer), Some(inner)) = (outer, inner) else {
+            return;
+        };
+        let current = [outer.min.x, outer.min.y, inner.width(), inner.height()];
+        if inner.width() < WINDOW_MIN_SIZE.x || inner.height() < WINDOW_MIN_SIZE.y {
+            return;
+        }
+        let same = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5);
+        if self
+            .settings
+            .window_frame
+            .is_some_and(|saved| same(saved, current))
+        {
+            self.unsaved_frame = None;
+            return;
+        }
+        match self.unsaved_frame {
+            Some((pending, since)) if same(pending, current) => {
+                if since.elapsed() >= std::time::Duration::from_secs(1) {
+                    self.settings.window_frame = Some(current);
+                    self.unsaved_frame = None;
+                    self.save_settings();
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(300));
+                }
+            }
+            _ => {
+                self.unsaved_frame = Some((current, std::time::Instant::now()));
+                ctx.request_repaint_after(std::time::Duration::from_millis(1100));
+            }
         }
     }
 
@@ -1338,7 +1400,7 @@ fn phones_block(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 }
 
 enum Mark<'a> {
-    Letter(&'a str),
+    Google,
     Font(&'a str),
     Glyph(kit::Glyph),
 }
@@ -1440,12 +1502,10 @@ fn phone_row(ui: &mut Ui, row: PhoneRow<'_>) -> bool {
 
 fn paint_mark(painter: &egui::Painter, rect: Rect, mark: &Mark<'_>, ink: Color32) {
     match mark {
-        Mark::Letter(letter) => {
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                *letter,
-                kit::font(20.0, theme::BOLD),
+        Mark::Google => {
+            kit::paint_google(
+                painter,
+                Rect::from_center_size(rect.center(), vec2(18.0, 18.0)),
                 ink,
             );
         }
@@ -1509,7 +1569,7 @@ fn android_phone_row(
             key: &device.mirror_key,
             // Google's G for a Pixel, else the Android head
             mark: if device.name.starts_with("Pixel") {
-                Mark::Letter("G")
+                Mark::Google
             } else {
                 Mark::Glyph(kit::Glyph::Android)
             },
@@ -1926,6 +1986,35 @@ fn set_native_window_opacity(_frame: &eframe::Frame, _opacity: f32) -> bool {
 
 /// The window's chrome: a titled, resizable window with the traffic lights
 /// over a full-size content view, or the popover's borderless panel
+/// Whether a window with its top-left corner at `x`, `y` (points, from the
+/// main screen's top-left) and `width` wide shows its title bar on a screen
+#[cfg(target_os = "macos")]
+fn frame_on_screen(x: f32, y: f32, width: f32) -> bool {
+    use objc2_app_kit::NSScreen;
+    let Some(main_thread) = objc2::MainThreadMarker::new() else {
+        return false;
+    };
+    let screens = NSScreen::screens(main_thread);
+    let Some(main) = screens.firstObject() else {
+        return false;
+    };
+    let main_height = main.frame().size.height;
+    // AppKit measures from the main screen's bottom-left, upwards
+    let (px, py) = ((x + width / 2.0) as f64, main_height - (y + 12.0) as f64);
+    screens.iter().any(|screen| {
+        let f = screen.frame();
+        px >= f.origin.x
+            && px <= f.origin.x + f.size.width
+            && py >= f.origin.y
+            && py <= f.origin.y + f.size.height
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn frame_on_screen(_x: f32, _y: f32, _width: f32) -> bool {
+    true
+}
+
 #[cfg(target_os = "macos")]
 fn set_native_window_mode(frame: &eframe::Frame, detached: bool) {
     use objc2_app_kit::{NSWindowStyleMask, NSWindowTitleVisibility};
@@ -2254,6 +2343,7 @@ impl eframe::App for App {
         let rect = ui.max_rect();
 
         self.apply_window_mode(&ctx, frame);
+        self.remember_window_frame(&ctx);
         if self.pending_attach_show && self.pending_mode.is_none() {
             self.pending_attach_show = false;
             self.show(&ctx, self.menu_anchor());
