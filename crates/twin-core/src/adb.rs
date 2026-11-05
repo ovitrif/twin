@@ -257,6 +257,31 @@ impl Adb {
             .with_context(|| format!("adb did not report an AVD name for {serial}"))
     }
 
+    /// Shuts an emulator down
+    pub fn emu_kill(&self, serial: &str) -> Result<()> {
+        ensure_success(
+            "adb emu kill",
+            self.run_with_timeout(["-s", serial, "emu", "kill"], ADB_SHELL_TIMEOUT)?,
+        )?;
+        Ok(())
+    }
+
+    /// The phone's Android release, "16"
+    pub fn android_version(&self, serial: &str) -> Result<String> {
+        let output = ensure_success(
+            "adb shell getprop ro.build.version.release",
+            self.run_with_timeout(
+                ["-s", serial, "shell", "getprop", "ro.build.version.release"],
+                ADB_SHELL_TIMEOUT,
+            )?,
+        )?;
+        let version = output.stdout.trim();
+        if version.is_empty() {
+            bail!("adb did not report an Android version for {serial}");
+        }
+        Ok(version.to_string())
+    }
+
     pub fn wifi_status(&self, serial: &str) -> Result<String> {
         let output = self.run(["-s", serial, "shell", "cmd", "wifi", "status"])?;
         let combined = output.combined_output();

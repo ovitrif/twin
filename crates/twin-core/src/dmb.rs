@@ -18,6 +18,9 @@ pub struct Iphone {
     pub udid: String,
     pub name: String,
     pub model: String,
+    /// "27.0"; empty from a dmb older than this field
+    #[serde(default, rename = "osVersion")]
+    pub os_version: String,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +202,7 @@ mod tests {
                 udid: "00008150-AAAA".into(),
                 name: "Test iPhone".into(),
                 model: "iPhone Air".into(),
+                os_version: String::new(),
             }]
         );
     }

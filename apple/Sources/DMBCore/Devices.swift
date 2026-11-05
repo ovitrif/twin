@@ -7,6 +7,8 @@ public struct Device: Codable, Equatable {
     public var model: String
     public var productType: String
     public var wired: Bool
+    /// "27.0"
+    public var osVersion: String = ""
 }
 
 public enum Devices {
@@ -52,7 +54,9 @@ public enum Devices {
                 name: state["name"] as? String ?? udid,
                 model: hardware["marketingName"] as? String ?? "iPhone",
                 productType: hardware["productType"] as? String ?? "",
-                wired: connection["transportType"] as? String == "wired"
+                wired: connection["transportType"] as? String == "wired",
+                osVersion: (props["software"] as? [String: Any])?["osVersionNumber"] as? String
+                    ?? (entry["deviceProperties"] as? [String: Any])?["osVersionNumber"] as? String ?? ""
             )
         }
     }

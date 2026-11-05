@@ -10,18 +10,19 @@ import Testing
         "connection": {"transportType": "wired"},
         "hardware": {"reality": "physical", "platform": "iOS", "udid": "00008150-AAAA",
                      "marketingName": "iPhone Air", "productType": "iPhone18,4"},
+        "software": {"osVersionNumber": "27.0"},
         "state": {"name": "Test iPhone"}}},
       {"hardwareProperties": {"reality": "physical", "platform": "iOS", "udid": "00008110-BBBB",
                               "marketingName": "iPhone 15 Pro", "productType": "iPhone16,1"},
        "connectionProperties": {"transportType": "localNetwork"},
-       "deviceProperties": {"name": "Old Format"}},
+       "deviceProperties": {"name": "Old Format", "osVersionNumber": "18.6"}},
       {"properties": {"hardware": {"reality": "simulated", "platform": "iOS", "udid": "SIM"}}}
     ]}}
     """
     let devices = try Devices.parse(Data(json.utf8))
     #expect(devices == [
-        Device(udid: "00008150-AAAA", name: "Test iPhone", model: "iPhone Air", productType: "iPhone18,4", wired: true),
-        Device(udid: "00008110-BBBB", name: "Old Format", model: "iPhone 15 Pro", productType: "iPhone16,1", wired: false),
+        Device(udid: "00008150-AAAA", name: "Test iPhone", model: "iPhone Air", productType: "iPhone18,4", wired: true, osVersion: "27.0"),
+        Device(udid: "00008110-BBBB", name: "Old Format", model: "iPhone 15 Pro", productType: "iPhone16,1", wired: false, osVersion: "18.6"),
     ])
 }
 

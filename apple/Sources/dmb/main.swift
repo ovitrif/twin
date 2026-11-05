@@ -137,9 +137,10 @@ func status(json: Bool) {
     let devices: [Device]
     do { devices = try Devices.list().filter(\.wired) } catch { fail("\(error)") }
     if json {
-        struct Row: Encodable { var udid, name, model, productType: String; var mirroring: Bool }
+        struct Row: Encodable { var udid, name, model, productType, osVersion: String; var mirroring: Bool }
         let rows = devices.map { Row(udid: $0.udid, name: $0.name, model: $0.model,
-                                     productType: $0.productType, mirroring: mirrorPID($0.udid) != nil) }
+                                     productType: $0.productType, osVersion: $0.osVersion,
+                                     mirroring: mirrorPID($0.udid) != nil) }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         print(String(decoding: try! encoder.encode(["devices": rows]), as: UTF8.self))

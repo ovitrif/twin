@@ -8,4 +8,5 @@ pub mod pairing;
 pub mod pairing_flow;
 pub mod qr;
 pub mod scrcpy;
+pub mod simulator;
 pub mod wifi;
