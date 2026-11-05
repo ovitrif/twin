@@ -8,6 +8,9 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::bundle;
+use crate::emulator::output_with_timeout;
+
+const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 use crate::command_path::resolve_program;
 
 /// dmb inside Twin.app, beside the mirror windows it opens
@@ -47,11 +50,14 @@ impl Dmb {
     }
 
     pub fn iphones(&self) -> Result<Vec<Iphone>> {
-        let output = Command::new(&self.path)
+        let mut command = Command::new(&self.path);
+        command
             .args(["status", "--json"])
             .stdin(Stdio::null())
-            .output()
-            .context("running dmb status")?;
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // A hung CoreDevice must not hold up the device list
+        let output = output_with_timeout(command, STATUS_TIMEOUT, "dmb status")?;
         if !output.status.success() {
             bail!(
                 "dmb status: {}",

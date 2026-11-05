@@ -552,6 +552,8 @@ impl App {
     /// Opens Twin as a normal window; the popover hides until it closes
     fn detach(&mut self, ctx: &Context) {
         self.detached = true;
+        // The window lists everything at once, not after the next poll
+        backend::refresh_status(self.shared.clone(), ctx.clone());
         self.pending_avd_delete = None;
         self.settings.detached = true;
         self.save_settings();
@@ -823,6 +825,8 @@ impl App {
             let state = self.shared.lock().unwrap();
             let mut mirroring = state.mirrors.keys().cloned().collect::<HashSet<String>>();
             mirroring.extend(state.starting_mirrors.iter().cloned());
+            // A phone in an open pair is already shown
+            mirroring.extend(state.pair.iter().flat_map(|pair| pair.keys.iter().cloned()));
             (state.snapshot.clone(), mirroring)
         };
         let Some(snapshot) = snapshot else { return };
@@ -2788,8 +2792,9 @@ impl App {
                             "Mirror both side by side"
                         },
                     );
+                    // Any open pair closes, even one whose phones now sort differently
                     if clicked {
-                        if paired {
+                        if !pair_keys.is_empty() {
                             backend::stop_pair(shared);
                         } else if any {
                             if android_mirroring {

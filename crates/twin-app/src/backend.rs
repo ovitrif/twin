@@ -453,6 +453,9 @@ fn collect_snapshot() -> Snapshot {
         })
         .unwrap_or_default();
     let avds = avd_rows(avds, &devices, &running_avds);
+    // adb is done: iPhones and simulators don't hold up pairing or the
+    // menu bar probe
+    drop(_adb_work);
     let iphones = Dmb::resolve()
         .and_then(|dmb| dmb.iphones())
         .unwrap_or_default();
