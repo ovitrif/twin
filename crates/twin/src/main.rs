@@ -167,9 +167,10 @@ enum CliCommand {
     App,
 
     /// iPhones on USB (macOS): `status`, `mirror [--udid UDID]`, `devices
-    /// --serial SERIAL` (that Android phone beside the iPhone), `pane`
+    /// --serial SERIAL` (that Android phone beside the iPhone), `pane`, `ui
+    /// [--json]` (what is on its screen, for agents)
     #[command(
-        about = "Mirror iPhones on USB (macOS): status, mirror, devices, pane",
+        about = "Mirror iPhones on USB (macOS): status, mirror, devices, pane, ui",
         disable_help_flag = true
     )]
     Iphone {

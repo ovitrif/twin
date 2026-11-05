@@ -113,6 +113,15 @@ screen, mouse or keyboard: drive the real popover headlessly.
   shown for those captures.
 - `dmb-hid` talks to private CoreDevice services pinned to one idevice commit;
   test input changes on a real iPhone on iOS 27+.
+- `dmb-hid --ui` (behind `twin iphone ui`) reads the accessibility audit daemon
+  (`com.apple.accessibility.axAuditDaemon.remoteserver.shim.remote`, DTX) in
+  `apple/hid/src/ui.rs`. The shim needs an RSD check-in before DTX; read its
+  two opening messages before sending; setters take plain values, attribute
+  reads take the attribute objects from the element's own event; after a
+  session's cleanup the inspector cursor is parked and "first" does nothing
+  until "next" moves it. Element frames, point lookups and pressing are not
+  available (pressing needs a development-signed app). Never walk or press
+  inside a wallet holding real funds on a test phone; read-only walks only.
 
 ## Layout
 - `crates/twin-core`: shared ADB/scrcpy/QR/mDNS logic, and finding Twin.app's helpers (lib).

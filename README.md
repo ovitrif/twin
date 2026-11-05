@@ -104,6 +104,7 @@ twin --adb /path/to/adb --scrcpy /path/to/scrcpy
 twin iphone status       # iPhones on USB
 twin iphone mirror       # mirror the first one; --udid picks another
 twin iphone devices --serial SERIAL   # that Android phone beside the iPhone
+twin iphone ui --json    # what is on the iPhone's screen, for agents
 ```
 
 The `twin` CLI mirrors with `scrcpy` from your PATH: borderless at 480x1071 with
@@ -126,6 +127,19 @@ In the window:
 - Hold ⌘ to see the title bar; ⌘ + drag anywhere moves the window.
 - Drag any edge of the phone's outline to resize; the window keeps the phone's aspect and
   turns with it.
+
+## The iPhone's screen for agents
+
+`twin iphone ui` lists what is on the iPhone's screen: each element's label, value,
+traits (Button, Header, Static Text…) and accessibility identifier; `--json` prints them
+as one array. It reads them the way VoiceOver does, through the accessibility inspector
+service Xcode's Accessibility Inspector uses, over USB and with nothing installed on the
+phone. Reading walks every element, so a long list scrolls through and back to its top;
+a screen of about 50 elements takes 2 to 4 seconds. It works while the phone is mirrored.
+
+The list has no screen positions, and it cannot press elements: the inspector only
+presses elements in apps built for development. To stop agents reading the screen, turn
+off "Agents read the iPhone" in Settings.
 
 ## Build from source
 

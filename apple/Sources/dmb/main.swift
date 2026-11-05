@@ -16,6 +16,12 @@ twin iphone: mirror a USB-connected iPhone in Twin
   twin iphone pane android|iphone show|hide --udid UDID
                                        show or hide one phone of that pair; hiding both
                                        closes the window
+  twin iphone ui [--udid UDID] [--json]
+                                       list what is on the iPhone's screen (labels,
+                                       values, traits) for agents, read the way
+                                       VoiceOver reads it; it walks every element, so
+                                       a long list scrolls through and back to its top.
+                                       Turn it off in Twin's Settings.
 """
 
 let stateDir = FileManager.default.homeDirectoryForCurrentUser
@@ -192,6 +198,90 @@ func mirror(_ args: [String]) {
     print("Mirroring \(device.name)")
 }
 
+/// Twin's Settings allow agents to read the iPhone's screen, the default.
+func agentUIAllowed() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    let base = env["XDG_CONFIG_HOME"].map { URL(fileURLWithPath: $0) }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config")
+    guard let text = try? String(contentsOf: base.appendingPathComponent("twin/config.toml"), encoding: .utf8)
+    else { return true }
+    for line in text.split(separator: "\n") {
+        let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+        if parts.count == 2, parts[0] == "agent_ui" { return parts[1] != "false" }
+    }
+    return true
+}
+
+/// dmb-hid: beside this binary in the app, or the installed app's
+func hidHelper() -> String? {
+    let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent()
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    let candidates: [String?] = [
+        ProcessInfo.processInfo.environment["DMB_HID"],
+        exe.appendingPathComponent("dmb-hid").path,
+        exe.appendingPathComponent("Twin Mirror.app/Contents/MacOS/dmb-hid").path,
+        "/Applications/Twin.app/Contents/Helpers/Twin Mirror.app/Contents/MacOS/dmb-hid",
+        "\(home)/Applications/Twin.app/Contents/Helpers/Twin Mirror.app/Contents/MacOS/dmb-hid",
+    ]
+    return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+/// One element as `dmb-hid --ui` prints it
+struct UIElement: Codable {
+    var index: Int
+    var label: String
+    var value: String?
+    var traits: String?
+    var identifier: String?
+    var caption: String
+}
+
+func uiTree(_ args: [String]) {
+    var udid: String?
+    var json = false
+    var it = args.makeIterator()
+    while let arg = it.next() {
+        switch arg {
+        case "--udid": udid = it.next()
+        case "--json": json = true
+        default: fail("unknown option \(arg) for ui")
+        }
+    }
+    guard agentUIAllowed() else {
+        fail("reading the iPhone's screen is off; turn on \"Agents read the iPhone\" in Twin's Settings")
+    }
+    let devices: [Device]
+    do { devices = try Devices.list().filter(\.wired) } catch { fail("\(error)") }
+    guard let device = udid.map({ u in devices.first { $0.udid == u } }) ?? devices.first else {
+        fail(udid.map { "no iPhone with UDID \($0) on USB" } ?? "no iPhone on USB; plug one in and tap Trust on it")
+    }
+    guard let helper = hidHelper() else { fail("dmb-hid not found; reinstall Twin") }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: helper)
+    process.arguments = [device.udid, "--ui"]
+    let output = Pipe()
+    process.standardOutput = output
+    do { try process.run() } catch { fail("cannot start dmb-hid: \(error.localizedDescription)") }
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { exit(process.terminationStatus) }
+    if json {
+        FileHandle.standardOutput.write(data)
+        return
+    }
+    guard let elements = try? JSONDecoder().decode([UIElement].self, from: data) else {
+        fail("dmb-hid sent something unexpected")
+    }
+    if elements.isEmpty { print("Nothing readable on \(device.name)'s screen"); return }
+    for e in elements {
+        var line = "\(e.index)  \(e.label)"
+        if let value = e.value, !value.isEmpty { line += "  = \(value)" }
+        if let traits = e.traits, !traits.isEmpty { line += "  (\(traits))" }
+        if let id = e.identifier, !id.isEmpty, id != e.label { line += "  #\(id)" }
+        print(line)
+    }
+}
+
 func pane(_ args: [String]) {
     guard args.count >= 2, let phone = PaneRequest.Phone(rawValue: args[0]), ["show", "hide"].contains(args[1]),
           let index = args.firstIndex(of: "--udid"), index + 1 < args.count else {
@@ -208,6 +298,7 @@ case "android-probe": androidProbe(Array(args.dropFirst()))
 case "devices": devices(Array(args.dropFirst()))
 case "android": android(Array(args.dropFirst()))
 case "pane": pane(Array(args.dropFirst()))
+case "ui": uiTree(Array(args.dropFirst()))
 case "iphone-probe": iphoneProbe(Array(args.dropFirst()))
 case "--version", "-V": print("dmb 1.0.0")
 case nil, "-h", "--help", "help": print(usage)

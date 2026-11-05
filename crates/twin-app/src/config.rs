@@ -40,6 +40,8 @@ pub struct Settings {
     /// Twin was last a normal window rather than the menu bar popover, so it
     /// opens as one again
     pub detached: bool,
+    /// `twin iphone ui` may list what is on the iPhone's screen
+    pub agent_ui: bool,
 }
 
 impl Default for Settings {
@@ -60,6 +62,7 @@ impl Default for Settings {
             theme: ThemeMode::Auto,
             gradients: true,
             detached: false,
+            agent_ui: true,
         }
     }
 }

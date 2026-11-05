@@ -16,13 +16,19 @@
 //! line with the screen's size in pixels (the stream pads it to a multiple of
 //! 16). This is the Device Hub stream, which leaves the phone's status bar
 //! alone, unlike the QuickTime capture path.
+//!
+//! `dmb-hid <udid> --ui` prints the front app's elements as one JSON array and
+//! exits (see ui.rs).
 
 mod stream;
+mod ui;
 
 use idevice::{
     IdeviceService, RsdService,
-    core_device::{ButtonState, IndigoHidClient, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
-                  UniversalHidServiceClient},
+    core_device::{
+        ButtonState, IndigoHidClient, TOUCHSCREEN_STATE_CONTACT, TOUCHSCREEN_STATE_RELEASE,
+        UniversalHidServiceClient,
+    },
     core_device_proxy::CoreDeviceProxy,
     rsd::RsdHandshake,
     usbmuxd::{UsbmuxdAddr, UsbmuxdConnection},
@@ -66,14 +72,38 @@ fn key(c: char) -> Option<(u64, bool)> {
         '\t' => (0x2B, false),
         ' ' => (0x2C, false),
         '\u{7F}' => (0x4C, false), // forward delete
-        '!' => (0x1E, true), '@' => (0x1F, true), '#' => (0x20, true), '$' => (0x21, true),
-        '%' => (0x22, true), '^' => (0x23, true), '&' => (0x24, true), '*' => (0x25, true),
-        '(' => (0x26, true), ')' => (0x27, true), '-' => (0x2D, false), '_' => (0x2D, true),
-        '=' => (0x2E, false), '+' => (0x2E, true), '[' => (0x2F, false), '{' => (0x2F, true),
-        ']' => (0x30, false), '}' => (0x30, true), '\\' => (0x31, false), '|' => (0x31, true),
-        ';' => (0x33, false), ':' => (0x33, true), '\'' => (0x34, false), '"' => (0x34, true),
-        '`' => (0x35, false), '~' => (0x35, true), ',' => (0x36, false), '<' => (0x36, true),
-        '.' => (0x37, false), '>' => (0x37, true), '/' => (0x38, false), '?' => (0x38, true),
+        '!' => (0x1E, true),
+        '@' => (0x1F, true),
+        '#' => (0x20, true),
+        '$' => (0x21, true),
+        '%' => (0x22, true),
+        '^' => (0x23, true),
+        '&' => (0x24, true),
+        '*' => (0x25, true),
+        '(' => (0x26, true),
+        ')' => (0x27, true),
+        '-' => (0x2D, false),
+        '_' => (0x2D, true),
+        '=' => (0x2E, false),
+        '+' => (0x2E, true),
+        '[' => (0x2F, false),
+        '{' => (0x2F, true),
+        ']' => (0x30, false),
+        '}' => (0x30, true),
+        '\\' => (0x31, false),
+        '|' => (0x31, true),
+        ';' => (0x33, false),
+        ':' => (0x33, true),
+        '\'' => (0x34, false),
+        '"' => (0x34, true),
+        '`' => (0x35, false),
+        '~' => (0x35, true),
+        ',' => (0x36, false),
+        '<' => (0x36, true),
+        '.' => (0x37, false),
+        '>' => (0x37, true),
+        '/' => (0x38, false),
+        '?' => (0x38, true),
         _ => return None,
     })
 }
@@ -97,11 +127,21 @@ fn say(line: &str) {
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(udid) = args.iter().find(|a| !a.starts_with("--")).cloned() else {
-        eprintln!("usage: dmb-hid <udid> [--video]");
+    let Some(udid) = args.first().filter(|a| !a.starts_with("--")).cloned() else {
+        eprintln!("usage: dmb-hid <udid> [--video | --ui]");
         std::process::exit(2);
     };
-    VIDEO.store(args.iter().any(|a| a == "--video"), std::sync::atomic::Ordering::Relaxed);
+    if args.iter().any(|a| a == "--ui") {
+        if let Err(e) = inspect(&udid).await {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    VIDEO.store(
+        args.iter().any(|a| a == "--video"),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     if let Err(e) = run(&udid).await {
         say(&format!("error: {e}"));
         std::process::exit(1);
@@ -113,14 +153,21 @@ async fn screen_size(
     adapter: &mut idevice::tcp::handle::AdapterHandle,
     handshake: &mut RsdHandshake,
 ) -> Result<(u32, u32), String> {
-    let mut server = idevice::dvt::remote_server::RemoteServerClient::connect_rsd(adapter, handshake)
+    let mut server =
+        idevice::dvt::remote_server::RemoteServerClient::connect_rsd(adapter, handshake)
+            .await
+            .map_err(|e| format!("instruments: {e:?}"))?;
+    server
+        .read_message(0)
         .await
         .map_err(|e| format!("instruments: {e:?}"))?;
-    server.read_message(0).await.map_err(|e| format!("instruments: {e:?}"))?;
     let mut shots = idevice::dvt::screenshot::ScreenshotClient::new(&mut server)
         .await
         .map_err(|e| format!("screenshot service: {e:?}"))?;
-    let png = shots.take_screenshot().await.map_err(|e| format!("screenshot: {e:?}"))?;
+    let png = shots
+        .take_screenshot()
+        .await
+        .map_err(|e| format!("screenshot: {e:?}"))?;
     if png.len() < 24 || &png[1..4] != b"PNG" {
         return Err("screenshot is not a PNG".into());
     }
@@ -149,15 +196,49 @@ fn report_block(peer: &VideoPeer) -> idevice::core_device::ReportBlock {
     }
 }
 
-async fn run(udid: &str) -> Result<(), String> {
-    let mut usbmuxd = UsbmuxdConnection::default().await.map_err(|e| format!("usbmuxd: {e:?}"))?;
-    let device = usbmuxd.get_device(udid).await.map_err(|e| format!("no iPhone {udid} on USB: {e:?}"))?;
+/// A CoreDevice tunnel to the phone and its service list
+async fn tunnel(udid: &str) -> Result<(idevice::tcp::handle::AdapterHandle, RsdHandshake), String> {
+    let mut usbmuxd = UsbmuxdConnection::default()
+        .await
+        .map_err(|e| format!("usbmuxd: {e:?}"))?;
+    let device = usbmuxd
+        .get_device(udid)
+        .await
+        .map_err(|e| format!("no iPhone {udid} on USB: {e:?}"))?;
     let provider = device.to_provider(UsbmuxdAddr::default(), "dmb");
-    let proxy = CoreDeviceProxy::connect(&provider).await.map_err(|e| format!("CoreDevice: {e:?}"))?;
+    let proxy = CoreDeviceProxy::connect(&provider)
+        .await
+        .map_err(|e| format!("CoreDevice: {e:?}"))?;
     let rsd_port = proxy.tunnel_info().server_rsd_port;
-    let mut adapter = proxy.create_software_tunnel().map_err(|e| format!("tunnel: {e:?}"))?.to_async_handle();
-    let rsd = adapter.connect(rsd_port).await.map_err(|e| format!("RSD: {e:?}"))?;
-    let mut handshake = RsdHandshake::new(rsd).await.map_err(|e| format!("RSD handshake: {e:?}"))?;
+    let mut adapter = proxy
+        .create_software_tunnel()
+        .map_err(|e| format!("tunnel: {e:?}"))?
+        .to_async_handle();
+    let rsd = adapter
+        .connect(rsd_port)
+        .await
+        .map_err(|e| format!("RSD: {e:?}"))?;
+    let handshake = RsdHandshake::new(rsd)
+        .await
+        .map_err(|e| format!("RSD handshake: {e:?}"))?;
+    Ok((adapter, handshake))
+}
+
+/// `--ui`: one walk through the front app's elements, printed as JSON
+async fn inspect(udid: &str) -> Result<(), String> {
+    let (mut adapter, handshake) = tunnel(udid).await?;
+    let mut inspector = ui::Inspector::connect(&mut adapter, &handshake).await?;
+    let result = inspector.elements().await;
+    inspector.finish().await;
+    println!(
+        "{}",
+        serde_json::to_string(&result?).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+async fn run(udid: &str) -> Result<(), String> {
+    let (mut adapter, mut handshake) = tunnel(udid).await?;
 
     let video_mode = VIDEO.load(std::sync::atomic::Ordering::Relaxed);
     if video_mode {
@@ -201,8 +282,15 @@ async fn run(udid: &str) -> Result<(), String> {
                 _ => last,
             };
             last = point;
-            let state = if phase == "up" { TOUCHSCREEN_STATE_RELEASE } else { TOUCHSCREEN_STATE_CONTACT };
-            touch.send_touchscreen(state, point.0, point.1, None).await.map_err(|e| format!("{e:?}"))
+            let state = if phase == "up" {
+                TOUCHSCREEN_STATE_RELEASE
+            } else {
+                TOUCHSCREEN_STATE_CONTACT
+            };
+            touch
+                .send_touchscreen(state, point.0, point.1, None)
+                .await
+                .map_err(|e| format!("{e:?}"))
         } else if command.keyframe == Some(true) {
             request_keyframe(&video, &peer, our_ssrc).await
         } else if let Some(text) = command.text {
@@ -233,27 +321,59 @@ async fn press(
     usage: u64,
     hold: u64,
 ) -> Result<(), String> {
-    indigo.send_button(0x0C, usage, ButtonState::Down).await.map_err(|e| format!("{e:?}"))?;
+    indigo
+        .send_button(0x0C, usage, ButtonState::Down)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
     tokio::time::sleep(Duration::from_millis(hold)).await;
-    indigo.send_button(0x0C, usage, ButtonState::Up).await.map_err(|e| format!("{e:?}"))
+    indigo
+        .send_button(0x0C, usage, ButtonState::Up)
+        .await
+        .map_err(|e| format!("{e:?}"))
 }
 
-async fn press_key(indigo: &mut IndigoHidClient<Box<dyn idevice::ReadWrite>>, usage: u64) -> Result<(), String> {
-    indigo.send_keyboard(usage, ButtonState::Down).await.map_err(|e| format!("{e:?}"))?;
-    indigo.send_keyboard(usage, ButtonState::Up).await.map_err(|e| format!("{e:?}"))
+async fn press_key(
+    indigo: &mut IndigoHidClient<Box<dyn idevice::ReadWrite>>,
+    usage: u64,
+) -> Result<(), String> {
+    indigo
+        .send_keyboard(usage, ButtonState::Down)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    indigo
+        .send_keyboard(usage, ButtonState::Up)
+        .await
+        .map_err(|e| format!("{e:?}"))
 }
 
-async fn type_text(indigo: &mut IndigoHidClient<Box<dyn idevice::ReadWrite>>, text: &str) -> Result<(), String> {
+async fn type_text(
+    indigo: &mut IndigoHidClient<Box<dyn idevice::ReadWrite>>,
+    text: &str,
+) -> Result<(), String> {
     const SHIFT: u64 = 0xE1;
     for c in text.chars() {
-        let Some((usage, shift)) = key(c) else { continue };
+        let Some((usage, shift)) = key(c) else {
+            continue;
+        };
         if shift {
-            indigo.send_keyboard(SHIFT, ButtonState::Down).await.map_err(|e| format!("{e:?}"))?;
+            indigo
+                .send_keyboard(SHIFT, ButtonState::Down)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
         }
-        indigo.send_keyboard(usage, ButtonState::Down).await.map_err(|e| format!("{e:?}"))?;
-        indigo.send_keyboard(usage, ButtonState::Up).await.map_err(|e| format!("{e:?}"))?;
+        indigo
+            .send_keyboard(usage, ButtonState::Down)
+            .await
+            .map_err(|e| format!("{e:?}"))?;
+        indigo
+            .send_keyboard(usage, ButtonState::Up)
+            .await
+            .map_err(|e| format!("{e:?}"))?;
         if shift {
-            indigo.send_keyboard(SHIFT, ButtonState::Up).await.map_err(|e| format!("{e:?}"))?;
+            indigo
+                .send_keyboard(SHIFT, ButtonState::Up)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
         }
     }
     Ok(())
@@ -270,10 +390,19 @@ async fn request_keyframe(
         return Ok(()); // no packet yet; the stream starts with a key frame anyway
     }
     p.fir_seq = p.fir_seq.wrapping_add(1);
-    let packet = idevice::core_device::build_keyframe_request(our_ssrc, "dmb", p.ssrc, &[report_block(&p)], p.fir_seq);
+    let packet = idevice::core_device::build_keyframe_request(
+        our_ssrc,
+        "dmb",
+        p.ssrc,
+        &[report_block(&p)],
+        p.fir_seq,
+    );
     let port = p.port;
     drop(p);
-    video.send_to(port, packet).await.map_err(|e| format!("keyframe request: {e:?}"))
+    video
+        .send_to(port, packet)
+        .await
+        .map_err(|e| format!("keyframe request: {e:?}"))
 }
 
 /// Reads the video's RTP, writes whole access units to stdout and keeps the
@@ -289,7 +418,12 @@ fn spawn_video(
         let mut out = std::io::BufWriter::new(std::io::stdout());
         while let Ok(frame) = rx.recv() {
             let length = (frame.len() as u32).to_be_bytes();
-            if out.write_all(&length).and_then(|_| out.write_all(&frame)).and_then(|_| out.flush()).is_err() {
+            if out
+                .write_all(&length)
+                .and_then(|_| out.write_all(&frame))
+                .and_then(|_| out.flush())
+                .is_err()
+            {
                 std::process::exit(0); // the viewer went away
             }
         }
@@ -301,7 +435,8 @@ fn spawn_video(
             tokio::time::sleep(Duration::from_secs(2)).await;
             let p = peer.lock().await;
             if p.port != 0 {
-                let packet = idevice::core_device::build_liveness(our_ssrc, "dmb", &[report_block(&p)]);
+                let packet =
+                    idevice::core_device::build_liveness(our_ssrc, "dmb", &[report_block(&p)]);
                 let port = p.port;
                 drop(p);
                 let _ = video.send_to(port, packet).await;
@@ -317,7 +452,9 @@ fn spawn_video(
             if idevice::core_device::is_rtcp(&datagram.data) {
                 continue;
             }
-            let Some(packet) = idevice::core_device::RtpPacket::parse(&datagram.data) else { continue };
+            let Some(packet) = idevice::core_device::RtpPacket::parse(&datagram.data) else {
+                continue;
+            };
             {
                 let mut p = peer.lock().await;
                 p.port = datagram.source_port;

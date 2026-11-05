@@ -3270,6 +3270,10 @@ impl App {
                 setting_row(ui, "Gradients", true, |ui| {
                     gradients_changed = kit::toggle(ui, &mut self.settings.gradients, "Gradients");
                 });
+                setting_row(ui, "Agents read the iPhone", true, |ui| {
+                    changed |=
+                        kit::toggle(ui, &mut self.settings.agent_ui, "Agents read the iPhone");
+                });
             });
 
             ui.add_space(16.0);
