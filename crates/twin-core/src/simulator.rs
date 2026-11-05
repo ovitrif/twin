@@ -5,9 +5,15 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+
+use crate::emulator::output_with_timeout;
+
+const LIST_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Simulator {
@@ -43,12 +49,14 @@ impl Simctl {
 
     /// The booted iOS simulators
     pub fn booted(&self) -> Result<Vec<Simulator>> {
-        let output = Command::new(&self.path)
+        let mut command = Command::new(&self.path);
+        command
             .args(["list", "devices", "booted", "-j"])
             .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .context("running simctl list")?;
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // A wedged CoreSimulator service must not hold up the device list
+        let output = output_with_timeout(command, LIST_TIMEOUT, "simctl list")?;
         if !output.status.success() {
             bail!("simctl list failed (exit {})", output.status);
         }
@@ -56,15 +64,15 @@ impl Simctl {
     }
 
     pub fn shutdown(&self, udid: &str) -> Result<()> {
-        let status = Command::new(&self.path)
+        let mut command = Command::new(&self.path);
+        command
             .args(["shutdown", udid])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("running simctl shutdown")?;
-        if !status.success() {
-            bail!("simctl shutdown {udid} failed (exit {status})");
+            .stderr(Stdio::null());
+        let output = output_with_timeout(command, SHUTDOWN_TIMEOUT, "simctl shutdown")?;
+        if !output.status.success() {
+            bail!("simctl shutdown {udid} failed (exit {})", output.status);
         }
         Ok(())
     }

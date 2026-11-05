@@ -1101,6 +1101,7 @@ const WINDOW_MIN_SIZE: egui::Vec2 = vec2(700.0, 480.0);
 const SIDEBAR_WIDTH: f32 = 208.0;
 const NAV_ITEM: f32 = 36.0;
 const PHONE_ROW: f32 = 40.0;
+const WINDOW_PAGE_WIDTH: f32 = 640.0;
 
 fn tab_label(screen: Screen) -> &'static str {
     match screen {
@@ -1466,7 +1467,12 @@ fn android_phone_row(
         ui,
         PhoneRow {
             key: &device.mirror_key,
-            mark: Mark::Letter("G"),
+            // Google's G for a Pixel, else the Android head
+            mark: if device.name.starts_with("Pixel") {
+                Mark::Letter("G")
+            } else {
+                Mark::Glyph(kit::Glyph::Android)
+            },
             name: &device.name,
             subtitle: &subtitle,
             connection: if device.wireless {
@@ -1476,10 +1482,12 @@ fn android_phone_row(
             },
             mirroring,
             look: mirror_look(mirroring, (device.ready && mirror_ok) || in_pair),
-            tooltip: if device.ready || mirroring {
-                mirror_tooltip(mirroring, in_pair)
-            } else {
+            tooltip: if !device.ready && !mirroring {
                 &waiting
+            } else if !mirror_ok && !mirroring && !in_pair {
+                "Twin Mirror is missing; reinstall Twin to mirror"
+            } else {
+                mirror_tooltip(mirroring, in_pair)
             },
         },
     )
@@ -2291,9 +2299,10 @@ impl App {
             kit::font(17.0, theme::BOLD),
             theme::text_strong(),
         );
+        // In the column of the cards' buttons
         let refresh = Rect::from_min_size(
             egui::pos2(
-                title.right() - kit::BUTTON,
+                title.right() - kit::ROW_RIGHT - kit::BUTTON,
                 title.center().y - kit::BUTTON / 2.0,
             ),
             vec2(kit::BUTTON, kit::BUTTON),
@@ -2559,7 +2568,15 @@ impl App {
             backend::refresh_status(self.shared.clone(), ctx.clone());
         }
 
-        let body = Rect::from_min_max(egui::pos2(main.left(), title.bottom() + 20.0), main.max);
+        // Pages keep a readable width in a wide window, left-aligned under
+        // the title
+        let body = Rect::from_min_max(
+            egui::pos2(main.left(), title.bottom() + 20.0),
+            egui::pos2(
+                main.right().min(main.left() + WINDOW_PAGE_WIDTH),
+                main.bottom(),
+            ),
+        );
         let clip = Rect::from_min_max(
             egui::pos2(sidebar.right() + 1.0, body.top() - SCREEN_TOP_BLEED),
             rect.max,
@@ -2596,9 +2613,10 @@ impl App {
         self.devices_list(&mut list_ui, ctx, fade);
 
         if !in_window {
+            // Its text ends where the cards' buttons do
             let footer = Rect::from_min_max(
                 egui::pos2(body.left(), body.bottom() - kit::BUTTON),
-                body.max,
+                body.max - vec2(kit::ROW_RIGHT - 8.0, 0.0),
             );
             let clicked = ui
                 .scope_builder(
@@ -2959,7 +2977,7 @@ impl App {
                 .frame(frame)
                 .backdrop_color(Color32::from_black_alpha(110))
                 .show(ctx, |ui| {
-                    ui.set_width(280.0);
+                    ui.set_width(304.0);
                     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                     ui.add(
                         Label::new(semibold("Delete emulator?", 15.0, theme::text_strong()))

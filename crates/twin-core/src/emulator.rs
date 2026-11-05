@@ -109,7 +109,11 @@ fn bundled_java_home() -> Option<PathBuf> {
         .find(|java_home| java_home.join("bin/java").exists())
 }
 
-fn output_with_timeout(mut command: Command, timeout: Duration, action: &str) -> Result<Output> {
+pub(crate) fn output_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+    action: &str,
+) -> Result<Output> {
     let program = command.get_program().to_string_lossy().into_owned();
     let mut child = command
         .spawn()

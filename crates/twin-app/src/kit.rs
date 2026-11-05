@@ -350,7 +350,7 @@ pub fn link_button(ui: &mut Ui, glyph: &str, label: &str) -> Response {
         pos2(rect.left() + 8.0 + ICON / 2.0, rect.center().y),
         Align2::CENTER_CENTER,
         glyph,
-        theme::icon_font(ICON - 2.0),
+        theme::icon_font(ICON),
         ink,
     );
     painter.text(
