@@ -341,6 +341,22 @@ fn add_demo_devices(snapshot: &mut Snapshot) {
 }
 
 fn collect_snapshot() -> Snapshot {
+    // iPhones and simulators come from Xcode's tools, which can be slow;
+    // ask them alongside adb rather than after it
+    let xcode = xcode_info();
+    let iphones = thread::spawn(|| {
+        Dmb::resolve()
+            .and_then(|dmb| dmb.iphones())
+            .unwrap_or_default()
+    });
+    let simulators = {
+        let simctl = xcode_simctl(&xcode);
+        thread::spawn(move || {
+            simctl
+                .and_then(|simctl| simctl.booted().ok())
+                .unwrap_or_default()
+        })
+    };
     let emulator_handle = Emulator::resolve(None);
     let (emulator_info, avds) = match &emulator_handle {
         Ok(emulator) => match emulator.list_avds() {
@@ -456,13 +472,8 @@ fn collect_snapshot() -> Snapshot {
     // adb is done: iPhones and simulators don't hold up pairing or the
     // menu bar probe
     drop(_adb_work);
-    let iphones = Dmb::resolve()
-        .and_then(|dmb| dmb.iphones())
-        .unwrap_or_default();
-    let xcode = xcode_info();
-    let simulators = xcode_simctl(&xcode)
-        .and_then(|simctl| simctl.booted().ok())
-        .unwrap_or_default();
+    let iphones = iphones.join().unwrap_or_default();
+    let simulators = simulators.join().unwrap_or_default();
 
     Snapshot {
         emulator: emulator_info,

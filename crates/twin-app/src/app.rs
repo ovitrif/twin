@@ -709,6 +709,13 @@ impl App {
             return;
         }
 
+        // In a text field, Escape only leaves the field
+        let editing_text = ctx
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
+        if editing_text {
+            return;
+        }
         let escape =
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         if !escape {
@@ -2770,7 +2777,9 @@ impl App {
                     let paired = pair_keys.contains(&android.mirror_key);
                     let android_mirroring = mirrors.contains(&android.mirror_key);
                     let iphone_mirroring = mirrors.contains(&iphone_key);
-                    let any = android_mirroring || iphone_mirroring;
+                    // An open pair shows as one to stop, whichever phones
+                    // now sort first
+                    let any = android_mirroring || iphone_mirroring || !pair_keys.is_empty();
                     let both = if any {
                         kit::ButtonLook::Active
                     } else if scrcpy_ok {
@@ -3216,7 +3225,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.add(
                     Label::new(regular(
-                        "Changes apply to the mirrors you open next.",
+                        "Titles, sizes, pointer and on top apply to the mirrors you open next.",
                         12.0,
                         theme::heading(),
                     ))

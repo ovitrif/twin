@@ -23,7 +23,14 @@ public enum Devices {
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         try task.run()
-        task.waitUntilExit()
+        // A hung CoreDevice ends here rather than leaving devicectl behind
+        let deadline = Date().addingTimeInterval(15)
+        while task.isRunning && Date() < deadline { usleep(50_000) }
+        if task.isRunning {
+            task.terminate()
+            task.waitUntilExit()
+            throw DMBError("devicectl timed out")
+        }
         guard task.terminationStatus == 0 else {
             throw DMBError("devicectl failed (exit \(task.terminationStatus)); is Xcode installed?")
         }
