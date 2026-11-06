@@ -70,7 +70,9 @@ public struct PairOptions {
     var hasIPhone: Bool { udid != nil || iphoneReplay != nil }
 }
 
-/// Lays out the two phones: the same height, a gap apart, centered.
+/// Lays out the two phones a gap apart, centered, at one scale: each phone's
+/// long side has the same length, so a phone turned sideways keeps its size
+/// and lies across instead of growing to the other phone's height.
 private final class PairView: NSView {
     let android = MirrorView(frame: .zero)
     let iphone = MirrorView(frame: .zero)
@@ -91,38 +93,45 @@ private final class PairView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    /// The window width for this height
-    func width(forHeight height: CGFloat) -> CGFloat {
-        (height * aspects + gaps).rounded()
+    /// A phone's width and height for a long side of 1
+    private func shape(_ aspect: CGFloat) -> CGSize {
+        aspect > 1 ? CGSize(width: 1, height: 1 / aspect) : CGSize(width: aspect, height: 1)
     }
 
-    /// The height at which the pair is this wide
-    func height(forWidth width: CGFloat) -> CGFloat {
-        ((width - gaps) / aspects).rounded(.down)
+    private var shown: [CGFloat] {
+        (showsAndroid ? [androidAspect] : []) + (showsIPhone ? [iphoneAspect] : [])
     }
 
-    private var aspects: CGFloat {
-        (showsAndroid ? androidAspect : 0) + (showsIPhone ? iphoneAspect : 0)
+    private var widths: CGFloat { shown.map { shape($0).width }.reduce(0, +) }
+    private var tallest: CGFloat { shown.map { shape($0).height }.max() ?? 1 }
+
+    /// The window size for this long side
+    func size(forLong long: CGFloat) -> CGSize {
+        CGSize(width: (long * widths + gaps).rounded(), height: (long * tallest).rounded())
+    }
+
+    /// The longest long side that fits this size
+    func long(fitting size: CGSize) -> CGFloat {
+        min(size.height / tallest, (size.width - gaps) / widths).rounded(.down)
     }
 
     private var gaps: CGFloat { showsAndroid && showsIPhone ? gap : 0 }
 
     override func layout() {
         super.layout()
-        // Full screen leaves room around the pair; fit and center it
-        var height = bounds.height
-        if width(forHeight: height) > bounds.width {
-            height = (bounds.width - gaps) / aspects
-        }
-        let a = showsAndroid ? (height * androidAspect).rounded() : 0
-        let i = showsIPhone ? (height * iphoneAspect).rounded() : 0
-        var x = ((bounds.width - (a + gaps + i)) / 2).rounded()
-        let y = ((bounds.height - height) / 2).rounded()
+        // Full screen leaves room around the pair; fit and center it, each
+        // phone centered on the window's height
+        let long = long(fitting: bounds.size)
+        let a = showsAndroid ? shape(androidAspect) : .zero
+        let i = showsIPhone ? shape(iphoneAspect) : .zero
+        let aSize = CGSize(width: (a.width * long).rounded(), height: (a.height * long).rounded())
+        let iSize = CGSize(width: (i.width * long).rounded(), height: (i.height * long).rounded())
+        var x = ((bounds.width - (aSize.width + gaps + iSize.width)) / 2).rounded()
         android.isHidden = !showsAndroid
         iphone.isHidden = !showsIPhone
-        android.frame = NSRect(x: x, y: y, width: a, height: height)
-        x += a + gaps
-        iphone.frame = NSRect(x: x, y: y, width: i, height: height)
+        android.frame = NSRect(x: x, y: ((bounds.height - aSize.height) / 2).rounded(), width: aSize.width, height: aSize.height)
+        x += aSize.width + gaps
+        iphone.frame = NSRect(x: x, y: ((bounds.height - iSize.height) / 2).rounded(), width: iSize.width, height: iSize.height)
         let fullScreen = window?.styleMask.contains(.fullScreen) == true
         for pane in [android, iphone] {
             pane.cornerRadius = fullScreen ? 0 : (min(pane.frame.width, pane.frame.height) * cornerRatio).rounded()
@@ -142,9 +151,9 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     private var parentWatch: DispatchSourceProcess?
     private var androidSize = CGSize.zero
     private var iphoneSize = CGSize.zero
-    /// The height the user gave the window; a phone turned sideways may shrink
-    /// the pair to fit the screen, and turning back returns to this height
-    private var chosenHeight: CGFloat = 0
+    /// The phones' long side as the user sized the window; turning a phone
+    /// keeps it, unless the pair would not fit the screen
+    private var chosenLong: CGFloat = 0
 
     public init(options: PairOptions) { self.options = options }
 
@@ -167,7 +176,7 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         pair.showsIPhone = options.hasIPhone
         pair.gap = options.gap
         pair.cornerRatio = Screen.cornerRatio(productType: options.product)
-        let width = pair.width(forHeight: height)
+        let width = pair.size(forLong: height).width
         window = MirrorWindow(contentRect: NSRect(x: screen.midX - width / 2, y: screen.midY - height / 2,
                                                   width: width, height: height),
                               styleMask: [.borderless, .miniaturizable], backing: .buffered, defer: false)
@@ -179,11 +188,11 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         pair.frame = NSRect(x: 0, y: 0, width: width, height: height)
         pair.autoresizingMask = [.width, .height]
         window.contentView = pair
-        chosenHeight = height
+        chosenLong = height
         NotificationCenter.default.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window,
                                                queue: .main) { [weak self] _ in
             guard let self else { return }
-            self.chosenHeight = self.window.frame.height
+            self.chosenLong = self.pair.long(fitting: self.window.frame.size)
         }
         styler = WindowStyler(window: window, title: window.title, cornerRatio: pair.cornerRatio)
         styler.panes = { [weak self] in
@@ -336,21 +345,21 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         fitWindow()
     }
 
-    /// Keeps the chosen height and the center when a phone turns or first
-    /// shows; a pair too wide for the screen (a phone turned sideways) shrinks
-    /// until it fits, and the window stays on the screen
+    /// Keeps the phones' size and the window's center when a phone turns or
+    /// first shows; a pair too big for the screen shrinks until it fits, and
+    /// the window stays on the screen
     private func fitWindow() {
         guard !window.styleMask.contains(.fullScreen) else { pair.needsLayout = true; return }
         var frame = window.frame
         let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? frame
-        var height = min(chosenHeight > 0 ? chosenHeight : frame.height, visible.height)
-        if pair.width(forHeight: height) > visible.width {
-            height = pair.height(forWidth: visible.width)
+        var size = pair.size(forLong: chosenLong)
+        if size.width > visible.width || size.height > visible.height {
+            size = pair.size(forLong: pair.long(fitting: visible.size))
         }
-        let width = pair.width(forHeight: height)
+        let (width, height) = (size.width, size.height)
         frame.origin.x += (frame.width - width) / 2
         frame.origin.y += (frame.height - height) / 2
-        frame.size = NSSize(width: width, height: height)
+        frame.size = size
         frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - width)
         frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - height)
         window.setFrame(frame, display: true)
