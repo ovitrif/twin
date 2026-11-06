@@ -300,7 +300,7 @@ case "android": android(Array(args.dropFirst()))
 case "pane": pane(Array(args.dropFirst()))
 case "ui": uiTree(Array(args.dropFirst()))
 case "iphone-probe": iphoneProbe(Array(args.dropFirst()))
-case "--version", "-V": print("dmb 1.0.0")
+case "--version", "-V": print("dmb 1.1.0")
 case nil, "-h", "--help", "help": print(usage)
 default: fail("unknown command \(args[0])\n\n\(usage)")
 }
