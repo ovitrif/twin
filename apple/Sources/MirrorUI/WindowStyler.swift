@@ -262,10 +262,13 @@ final class WindowStyler: NSObject {
             let dragging = barShown && (NSEvent.pressedMouseButtons & 1) != 0
                 && (bar.contentView as? TitleBarView)?.dragging == true
             let over = paneRects.firstIndex { $0.frame.contains(mouse) }
-            // The bar sits outside the phone, so the pointer on it counts too
-            let overBar = barShown && bar.frame.contains(mouse)
+            // Once up, the bar stays while the pointer is on it or crossing
+            // the gap down to the phone, with or without ⌘, so its lights
+            // can be clicked
+            let gap = NSRect(x: bar.frame.minX, y: bar.frame.minY - barGap, width: bar.frame.width, height: barGap)
+            let overBar = barShown && ((bar.frame.contains(mouse) && top == bar.windowNumber) || gap.contains(mouse))
             let command = NSEvent.modifierFlags.contains(.command)
-            hovered = (onTop && (over != nil || overBar) && command) || dragging || forceBar || Date() < introUntil
+            hovered = (onTop && over != nil && command) || overBar || dragging || forceBar || Date() < introUntil
             // The bar moves to the phone under the pointer
             if let over, over != barPane, !dragging {
                 barPane = over
