@@ -40,6 +40,8 @@ final class HIDInput: InputSink {
     var onFailed: (() -> Void)?
     /// The phone refused the session until it is unlocked; it retries
     var onLocked: (() -> Void)?
+    /// Tries left while the phone has not listed its display service yet
+    private var displayRetries = 0
     private var everReady = false
     private var lastError = ""
 
@@ -101,6 +103,12 @@ final class HIDInput: InputSink {
                     // than give up on the Device Hub stream
                     if self.lastError.contains("PasswordProtected") {
                         self.onLocked?()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { try? self.start() }
+                    } else if self.lastError.contains("no display service"), self.displayRetries < 10 {
+                        // A phone just plugged in lists its display service
+                        // a few seconds late; only one that never lists it
+                        // has no Device Hub
+                        self.displayRetries += 1
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { try? self.start() }
                     } else {
                         self.onFailed?()
