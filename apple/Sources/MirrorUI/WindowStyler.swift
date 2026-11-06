@@ -1,8 +1,9 @@
 import AppKit
 import QuartzCore
 
-// Style the borderless mirror window like QuickTime's iPhone mirror: rounded corners, a shadow, and a title bar with traffic
-// lights over the top of the screen while Cmd is held over the window, so the
+// Style the borderless mirror window like QuickTime's iPhone mirror: rounded
+// corners, a shadow, and a title bar with traffic lights just above the phone
+// while Cmd is held over the window, so the phone's screen stays whole and its
 // top edge stays the phone's for pull-downs. Dragging that bar, or Cmd +
 // dragging anywhere, moves the window.
 
@@ -12,6 +13,9 @@ private let fadeDuration = 0.15
 private let lightSize: CGFloat = 12
 private let lightSpacing: CGFloat = 8
 private let lightMargin: CGFloat = 8
+/// The bar floats this far above the phone, its own corners this round
+private let barGap: CGFloat = 6
+private let barRadius: CGFloat = 9
 
 final class MirrorWindow: NSWindow {
     override var canBecomeKey: Bool { true }
@@ -121,8 +125,7 @@ final class WindowStyler: NSObject {
         set { titleLabel.stringValue = newValue }
     }
 
-    // QuickTime-style title bar: an overlay across the top of the screen,
-    // square at the bottom, its top corners following the window's rounding
+    // The title bar: a rounded strip just above the phone, as wide as it
     private func makeBar(frame: NSRect) {
         bar.isReleasedWhenClosed = false
         bar.isOpaque = false
@@ -139,8 +142,6 @@ final class WindowStyler: NSObject {
         view.layer?.masksToBounds = true
         bar.contentView = view
 
-        // As tall as the window, so its rounded top matches the window's
-        // corners exactly; the bar shows only its top strip
         material.material = .hudWindow
         material.blendingMode = .behindWindow
         material.state = .active
@@ -187,22 +188,21 @@ final class WindowStyler: NSObject {
 
     private var cornerRadius: CGFloat { radius(of: paneRects.first?.frame ?? window.frame) }
 
-    // Fit the bar to the hovered phone's width and corners
+    // Fit the bar to the hovered phone's width, just above it; against the
+    // top of the screen there is no room, so it lies over the phone's top
     private func layoutBar() {
         let rects = paneRects
         let pane = rects[min(barPane, rects.count - 1)]
         let parent = pane.frame
         if panes != nil { titleLabel.stringValue = pane.title }
-        bar.setFrame(NSRect(x: parent.minX, y: parent.maxY - titleBarHeight,
-                            width: parent.width, height: titleBarHeight), display: false)
-        let radius = radius(of: parent)
-        material.frame = NSRect(x: 0, y: titleBarHeight - parent.height,
-                                width: parent.width, height: parent.height)
-        material.layer?.cornerRadius = radius
-        // Keep the lights clear of the rounded corner at the bar's mid-height
-        let mid = titleBarHeight / 2
-        let corner = radius > mid ? radius - (radius * radius - (radius - mid) * (radius - mid)).squareRoot() : 0
-        var x = max(lightMargin, corner + lightMargin)
+        var y = parent.maxY + barGap
+        if let screen = window.screen ?? NSScreen.main, y + titleBarHeight > screen.visibleFrame.maxY {
+            y = parent.maxY - titleBarHeight - barGap
+        }
+        bar.setFrame(NSRect(x: parent.minX, y: y, width: parent.width, height: titleBarHeight), display: false)
+        material.frame = NSRect(x: 0, y: 0, width: parent.width, height: titleBarHeight)
+        material.layer?.cornerRadius = barRadius
+        var x = lightMargin + 2
         for light in lights {
             light.setFrameOrigin(NSPoint(x: x, y: light.frame.origin.y))
             x += lightSize + lightSpacing
@@ -262,8 +262,10 @@ final class WindowStyler: NSObject {
             let dragging = barShown && (NSEvent.pressedMouseButtons & 1) != 0
                 && (bar.contentView as? TitleBarView)?.dragging == true
             let over = paneRects.firstIndex { $0.frame.contains(mouse) }
+            // The bar sits outside the phone, so the pointer on it counts too
+            let overBar = barShown && bar.frame.contains(mouse)
             let command = NSEvent.modifierFlags.contains(.command)
-            hovered = (onTop && over != nil && command) || dragging || forceBar || Date() < introUntil
+            hovered = (onTop && (over != nil || overBar) && command) || dragging || forceBar || Date() < introUntil
             // The bar moves to the phone under the pointer
             if let over, over != barPane, !dragging {
                 barPane = over
