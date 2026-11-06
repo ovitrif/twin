@@ -96,6 +96,11 @@ private final class PairView: NSView {
         (height * aspects + gaps).rounded()
     }
 
+    /// The height at which the pair is this wide
+    func height(forWidth width: CGFloat) -> CGFloat {
+        ((width - gaps) / aspects).rounded(.down)
+    }
+
     private var aspects: CGFloat {
         (showsAndroid ? androidAspect : 0) + (showsIPhone ? iphoneAspect : 0)
     }
@@ -137,6 +142,9 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     private var parentWatch: DispatchSourceProcess?
     private var androidSize = CGSize.zero
     private var iphoneSize = CGSize.zero
+    /// The height the user gave the window; a phone turned sideways may shrink
+    /// the pair to fit the screen, and turning back returns to this height
+    private var chosenHeight: CGFloat = 0
 
     public init(options: PairOptions) { self.options = options }
 
@@ -171,6 +179,12 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         pair.frame = NSRect(x: 0, y: 0, width: width, height: height)
         pair.autoresizingMask = [.width, .height]
         window.contentView = pair
+        chosenHeight = height
+        NotificationCenter.default.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window,
+                                               queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.chosenHeight = self.window.frame.height
+        }
         styler = WindowStyler(window: window, title: window.title, cornerRatio: pair.cornerRatio)
         styler.panes = { [weak self] in
             guard let self else { return [] }
@@ -322,13 +336,23 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         fitWindow()
     }
 
-    /// Keeps the height and the center when a phone turns or first shows
+    /// Keeps the chosen height and the center when a phone turns or first
+    /// shows; a pair too wide for the screen (a phone turned sideways) shrinks
+    /// until it fits, and the window stays on the screen
     private func fitWindow() {
         guard !window.styleMask.contains(.fullScreen) else { pair.needsLayout = true; return }
         var frame = window.frame
-        let width = pair.width(forHeight: frame.height)
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? frame
+        var height = min(chosenHeight > 0 ? chosenHeight : frame.height, visible.height)
+        if pair.width(forHeight: height) > visible.width {
+            height = pair.height(forWidth: visible.width)
+        }
+        let width = pair.width(forHeight: height)
         frame.origin.x += (frame.width - width) / 2
-        frame.size.width = width
+        frame.origin.y += (frame.height - height) / 2
+        frame.size = NSSize(width: width, height: height)
+        frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - width)
+        frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - height)
         window.setFrame(frame, display: true)
         pair.needsLayout = true
         styler.applyStyle()
