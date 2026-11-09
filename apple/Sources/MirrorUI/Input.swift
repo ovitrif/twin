@@ -13,14 +13,19 @@ protocol InputSink: AnyObject {
     /// A key with no character, as a HID keyboard usage
     func key(_ usage: Int)
     func button(_ name: String)
-    /// ⌘V, ⌘C and ⌘X, where the phone has a clipboard to share
+    /// ⌘V, ⌘C and ⌘X
     func clipboard(_ command: ClipboardCommand)
 }
 
 enum ClipboardCommand { case paste, copy, cut }
 
 extension InputSink {
-    func clipboard(_ command: ClipboardCommand) {}
+    /// An iPhone's clipboard is out of reach, so ⌘V types the Mac's text
+    /// where the focus is; ⌘C and ⌘X do nothing
+    func clipboard(_ command: ClipboardCommand) {
+        guard command == .paste, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        type(text)
+    }
 }
 
 /// Live touch through `dmb-hid` and the CoreDevice HID service (iOS 27 and
