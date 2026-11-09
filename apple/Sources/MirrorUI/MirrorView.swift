@@ -218,6 +218,12 @@ final class MirrorView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if modifiers == .command, let command = ["v": ClipboardCommand.paste, "c": .copy, "x": .cut][
+            event.charactersIgnoringModifiers?.lowercased() ?? ""] {
+            input?.clipboard(command)
+            return
+        }
         guard !event.modifierFlags.contains(.command), !event.modifierFlags.contains(.control) else {
             super.keyDown(with: event)
             return

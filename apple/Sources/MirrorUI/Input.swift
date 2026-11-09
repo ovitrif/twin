@@ -13,6 +13,14 @@ protocol InputSink: AnyObject {
     /// A key with no character, as a HID keyboard usage
     func key(_ usage: Int)
     func button(_ name: String)
+    /// ⌘V, ⌘C and ⌘X, where the phone has a clipboard to share
+    func clipboard(_ command: ClipboardCommand)
+}
+
+enum ClipboardCommand { case paste, copy, cut }
+
+extension InputSink {
+    func clipboard(_ command: ClipboardCommand) {}
 }
 
 /// Live touch through `dmb-hid` and the CoreDevice HID service (iOS 27 and

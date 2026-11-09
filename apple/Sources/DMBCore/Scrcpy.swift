@@ -64,6 +64,19 @@ public enum ScrcpyProtocol {
         return d
     }
 
+    /// SET_CLIPBOARD: the phone's clipboard takes the text and, with paste,
+    /// pastes it where the focus is (scrcpy's Ctrl+V)
+    public static func setClipboard(_ text: String, paste: Bool) -> Data {
+        // scrcpy's SC_CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH
+        let bytes = Data(text.utf8.prefix((1 << 18) - 14))
+        var d = Data([9])
+        d.appendBE(UInt64(0))  // sequence: no acknowledgement
+        d.append(paste ? 1 : 0)
+        d.appendBE(UInt32(bytes.count))
+        d.append(bytes)
+        return d
+    }
+
     /// BACK_OR_SCREEN_ON down or up
     public static func back(down: Bool) -> Data { Data([4, down ? 0 : 1]) }
 
@@ -121,6 +134,8 @@ public final class ScrcpySession {
     public private(set) var videoSize = CGSize.zero
     public var onFrame: ((CMSampleBuffer) -> Void)?
     public var onStatus: ((String) -> Void)?
+    /// Text the phone copied, off the main thread
+    public var onClipboard: ((String) -> Void)?
     public private(set) var deviceName = ""
 
     /// `server` is scrcpy-server 5.0.1 on this Mac; `maxSize` caps the video's long side
@@ -346,11 +361,27 @@ public final class ScrcpySession {
         return sample
     }
 
-    /// Device messages (clipboard, acknowledgements) are read and dropped so
-    /// the server never blocks on them
+    /// Device messages: the phone's clipboard goes to `onClipboard`;
+    /// acknowledgements and UHID output are read and dropped, so the server
+    /// never blocks on them
     private func drainControl() {
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while !stopped, controlFD >= 0, recv(controlFD, &buffer, buffer.count, 0) > 0 {}
+        do {
+            while !stopped, controlFD >= 0 {
+                switch try readExactly(controlFD, 1)[0] {
+                case 0:  // CLIPBOARD
+                    let length = Int(try readExactly(controlFD, 4).be32(0))
+                    let text = String(decoding: try readExactly(controlFD, length), as: UTF8.self)
+                    onClipboard?(text)
+                case 1:  // ACK_CLIPBOARD
+                    _ = try readExactly(controlFD, 8)
+                case 2:  // UHID_OUTPUT
+                    let header = try readExactly(controlFD, 4)
+                    _ = try readExactly(controlFD, Int(header[header.startIndex + 2]) << 8 | Int(header[header.startIndex + 3]))
+                default:
+                    return
+                }
+            }
+        } catch {}
     }
 }
 
