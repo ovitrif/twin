@@ -21,7 +21,7 @@ use twin_core::scrcpy::{
 
 const BINARY_NAME: &str = "twin";
 const APP_BINARY_NAME: &str = "twin-app";
-use twin_core::bundle::APP_BUNDLE_PATH;
+use twin_core::bundle::installed_bundles;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -450,10 +450,12 @@ fn handle_cli_command(command: &CliCommand, args: &Args) -> Result<()> {
 }
 
 fn launch_app() -> Result<()> {
-    let app_bundle = PathBuf::from(APP_BUNDLE_PATH);
-    if app_bundle.is_dir() {
+    if let Some(app_bundle) = installed_bundles()
+        .into_iter()
+        .find(|bundle| bundle.is_dir())
+    {
+        // Without -n, so a running Twin is not started a second time
         let status = ProcessCommand::new("open")
-            .arg("-n")
             .arg(&app_bundle)
             .status()
             .with_context(|| format!("could not launch {}", app_bundle.display()))?;
