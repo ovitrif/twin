@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -104,8 +105,9 @@ fn parse_browse_instances(output: &str) -> Vec<String> {
 
     for line in output.lines() {
         let line = line.trim();
+        let action = add_or_remove(line);
 
-        if !line.contains(" Add ") || !line.contains(CONNECT_SERVICE_TYPE) {
+        if action.is_none() {
             continue;
         }
 
@@ -119,12 +121,21 @@ fn parse_browse_instances(output: &str) -> Vec<String> {
             .trim_end_matches('.')
             .trim();
 
-        if !instance.is_empty() && !instances.iter().any(|existing| existing == instance) {
+        if action == Some("Rmv") {
+            instances.retain(|existing| existing != instance);
+        } else if !instance.is_empty() && !instances.iter().any(|existing| existing == instance) {
             instances.push(instance.to_string());
         }
     }
 
     instances
+}
+
+/// The A/R column of a dns-sd result line: "Add" or "Rmv"
+fn add_or_remove(line: &str) -> Option<&str> {
+    line.split_whitespace()
+        .nth(1)
+        .filter(|action| matches!(*action, "Add" | "Rmv"))
 }
 
 fn parse_resolved_service(output: &str) -> Option<ResolvedService> {
@@ -146,11 +157,15 @@ fn parse_resolved_service(output: &str) -> Option<ResolvedService> {
     None
 }
 
+/// The first routable address a `dns-sd -G v4` lookup added
 fn parse_ipv4_address(output: &str) -> Option<String> {
     output
-        .split_whitespace()
-        .find(|token| is_ipv4_address(token))
-        .map(ToString::to_string)
+        .lines()
+        .filter(|line| add_or_remove(line) == Some("Add"))
+        .flat_map(str::split_whitespace)
+        .filter_map(|token| token.parse::<Ipv4Addr>().ok())
+        .find(|address| !address.is_unspecified() && !address.is_loopback())
+        .map(|address| address.to_string())
 }
 
 fn normalize_dns_name(name: &str) -> String {
@@ -175,16 +190,6 @@ fn connect_endpoints_for_pairing_host(endpoints: Vec<String>, pairing_host: &str
         .collect()
 }
 
-fn is_ipv4_address(value: &str) -> bool {
-    let mut parts = value.split('.');
-
-    if parts.clone().count() != 4 {
-        return false;
-    }
-
-    parts.all(|part| part.parse::<u8>().is_ok())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +207,44 @@ DATE: ---Wed 06 May 2026---
         assert_eq!(
             parse_browse_instances(output),
             vec!["adb-5C020DLCH0007Q-tfPgZw"]
+        );
+    }
+
+    #[test]
+    fn drops_browse_instances_a_later_line_removes() {
+        let output = r#"
+Browsing for _adb-tls-connect._tcp.local
+DATE: ---Mon 23 Nov 2026---
+14:02:11.481  ...STARTING...
+Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+14:02:11.482  Add        3  14 local.               _adb-tls-connect._tcp. adb-gone-a1b2c3
+14:02:11.482  Add        2  14 local.               _adb-tls-connect._tcp. adb-back-d4e5f6
+14:02:12.903  Rmv        1  14 local.               _adb-tls-connect._tcp. adb-gone-a1b2c3
+14:02:12.903  Rmv        0  14 local.               _adb-tls-connect._tcp. adb-back-d4e5f6
+14:02:13.120  Add        2  14 local.               _adb-tls-connect._tcp. adb-back-d4e5f6
+"#;
+
+        assert_eq!(parse_browse_instances(output), vec!["adb-back-d4e5f6"]);
+    }
+
+    #[test]
+    fn ignores_unroutable_and_removed_addresses() {
+        let output = r#"
+DATE: ---Mon 23 Nov 2026---
+14:02:11.481  ...STARTING...
+Timestamp     A/R    Flags         IF  Hostname                               Address                                      TTL
+14:02:11.482  Rmv    40000000      14  pixel.local.                           192.168.68.20                                120
+14:02:11.482  Add    40000002       0  pixel.local.                           0.0.0.0                                      108   No Such Record
+14:02:11.483  Add    40000002       1  pixel.local.                           127.0.0.1                                    120
+"#;
+        assert_eq!(parse_ipv4_address(output), None);
+
+        let output = format!(
+            "{output}14:02:11.500  Add    40000002      14  pixel.local.                           192.168.68.54                                120\n"
+        );
+        assert_eq!(
+            parse_ipv4_address(&output).as_deref(),
+            Some("192.168.68.54")
         );
     }
 
