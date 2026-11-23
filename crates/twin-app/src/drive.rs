@@ -29,6 +29,7 @@
 //! `TWIN_MOCK_PAIRING`) behave as in the app.
 
 use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -50,6 +51,7 @@ pub fn serve(socket: &Path) -> anyhow::Result<()> {
     // throwaway config folder, seeded from `TWIN_DRIVE_CONFIG` when given.
     let config_home = std::env::temp_dir().join(format!("twin-drive-{}", std::process::id()));
     std::fs::create_dir_all(config_home.join("twin"))?;
+    let _config_home = RemoveOnDrop(config_home.clone());
     if let Some(seed) = std::env::var_os("TWIN_DRIVE_CONFIG") {
         std::fs::copy(&seed, config_home.join("twin/config.toml"))
             .context("failed to copy TWIN_DRIVE_CONFIG")?;
@@ -61,6 +63,9 @@ pub fn serve(socket: &Path) -> anyhow::Result<()> {
     let _ = std::fs::remove_file(socket);
     let listener = UnixListener::bind(socket)
         .with_context(|| format!("failed to listen on {}", socket.display()))?;
+    // Only this user may drive the app: it writes files and deletes AVDs
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to restrict {}", socket.display()))?;
     listener.set_nonblocking(true)?;
 
     let harness = Harness::builder()
@@ -90,6 +95,48 @@ pub fn serve(socket: &Path) -> anyhow::Result<()> {
     };
     let _ = std::fs::remove_file(socket);
     result
+}
+
+/// The throwaway config folder, removed when the server ends
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The most a coordinate or scroll delta may be, in points
+const MAX_POINTS: f32 = 100_000.0;
+/// The longest `glide` or `wait`, in milliseconds
+const MAX_MS: f32 = 600_000.0;
+
+/// A finite number within ±`limit`; NaN and infinities never reach the UI
+fn number(text: &str, limit: f32) -> anyhow::Result<f32> {
+    let value: f32 = text.parse()?;
+    if !value.is_finite() || value.abs() > limit {
+        bail!("{text} is out of range");
+    }
+    Ok(value)
+}
+
+fn point(x: &str, y: &str) -> anyhow::Result<Pos2> {
+    Ok(egui::pos2(number(x, MAX_POINTS)?, number(y, MAX_POINTS)?))
+}
+
+/// Milliseconds, from 0 to `MAX_MS`
+fn millis(text: &str) -> anyhow::Result<f32> {
+    let ms = number(text, MAX_MS)?;
+    if ms < 0.0 {
+        bail!("{text} is out of range");
+    }
+    Ok(ms)
+}
+
+/// Everything after the command's name, so a path keeps its spaces
+fn rest_of(line: &str) -> Option<&str> {
+    let rest = line.split_once(char::is_whitespace)?.1.trim();
+    (!rest.is_empty()).then_some(rest)
 }
 
 /// Sends one command line (or each line of stdin for `-`) and prints replies.
@@ -180,23 +227,23 @@ impl Driver<'_> {
         let mut words = line.split_whitespace();
         let name = words.next().unwrap_or_default();
         let args: Vec<&str> = words.collect();
-        let point = |args: &[&str]| -> anyhow::Result<Pos2> {
+        let xy = |args: &[&str]| -> anyhow::Result<Pos2> {
             match args {
-                [x, y] => Ok(egui::pos2(x.parse()?, y.parse()?)),
+                [x, y] => point(x, y),
                 _ => bail!("expected X Y"),
             }
         };
 
         match name {
             "state" => {}
-            "hover" => self.pointer_to(point(&args)?)?,
+            "hover" => self.pointer_to(xy(&args)?)?,
             "glide" => {
                 let [x, y, ms] = args.as_slice() else {
                     bail!("expected X Y MS");
                 };
-                let to = egui::pos2(x.parse()?, y.parse()?);
+                let to = point(x, y)?;
                 let from = self.pointer.unwrap_or(to);
-                let ms: f32 = ms.parse()?;
+                let ms = millis(ms)?;
                 let steps = ((ms / 1000.0) / FRAME.as_secs_f32()).round().max(1.0) as usize;
                 for step in 1..=steps {
                     // Ease in and out, like a hand on a trackpad
@@ -210,7 +257,7 @@ impl Driver<'_> {
                 }
             }
             "click" => {
-                let pos = point(&args)?;
+                let pos = xy(&args)?;
                 self.pointer_to(pos)?;
                 for pressed in [true, false] {
                     self.push(Event::PointerButton {
@@ -226,8 +273,8 @@ impl Driver<'_> {
                 let [x1, y1, x2, y2] = args.as_slice() else {
                     bail!("expected X1 Y1 X2 Y2");
                 };
-                let from = egui::pos2(x1.parse()?, y1.parse()?);
-                let to = egui::pos2(x2.parse()?, y2.parse()?);
+                let from = point(x1, y1)?;
+                let to = point(x2, y2)?;
                 self.pointer_to(from)?;
                 self.push(Event::PointerButton {
                     pos: from,
@@ -254,7 +301,7 @@ impl Driver<'_> {
                 self.frame()?;
             }
             "scroll" => {
-                let delta: f32 = args.first().ok_or(anyhow!("expected DY"))?.parse()?;
+                let delta = number(args.first().ok_or(anyhow!("expected DY"))?, MAX_POINTS)?;
                 self.push(Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, delta),
@@ -282,19 +329,19 @@ impl Driver<'_> {
                 }
             }
             "wait" => {
-                let ms: u64 = args.first().ok_or(anyhow!("expected MS"))?.parse()?;
-                let until = Instant::now() + Duration::from_millis(ms);
+                let ms = millis(args.first().ok_or(anyhow!("expected MS"))?)?;
+                let until = Instant::now() + Duration::from_secs_f32(ms / 1000.0);
                 while Instant::now() < until {
                     self.frame()?;
                 }
             }
             "shot" => {
-                let path = args.first().ok_or(anyhow!("expected PATH"))?;
+                let path = rest_of(line).ok_or(anyhow!("expected PATH"))?;
                 self.frame()?;
                 self.save_frame(Path::new(path))?;
             }
             "record" => {
-                let dir = PathBuf::from(args.first().ok_or(anyhow!("expected DIR"))?);
+                let dir = PathBuf::from(rest_of(line).ok_or(anyhow!("expected DIR"))?);
                 std::fs::create_dir_all(&dir)?;
                 self.recording = Some(Recording {
                     dir,
@@ -415,5 +462,33 @@ impl Driver<'_> {
         image
             .save(path)
             .with_context(|| format!("failed to save {}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbers_must_be_finite_and_in_range() {
+        assert_eq!(number("12.5", MAX_POINTS).unwrap(), 12.5);
+        assert_eq!(number("-40", MAX_POINTS).unwrap(), -40.0);
+        // `glide X Y inf` used to spin for usize::MAX frames
+        for bad in ["inf", "-inf", "NaN", "1e9", "x", ""] {
+            assert!(number(bad, MAX_POINTS).is_err(), "{bad}");
+        }
+        assert_eq!(millis("250").unwrap(), 250.0);
+        for bad in ["-1", "inf", "18446744073709551615"] {
+            assert!(millis(bad).is_err(), "{bad}");
+        }
+        assert_eq!(point("1", "2").unwrap(), egui::pos2(1.0, 2.0));
+    }
+
+    #[test]
+    fn paths_keep_their_spaces() {
+        assert_eq!(rest_of("shot /tmp/a b.png"), Some("/tmp/a b.png"));
+        assert_eq!(rest_of("record  /tmp/My Frames "), Some("/tmp/My Frames"));
+        assert_eq!(rest_of("shot"), None);
+        assert_eq!(rest_of("shot   "), None);
     }
 }
