@@ -129,3 +129,22 @@ private func frame(_ width: Int, _ height: Int) -> CMSampleBuffer {
     let lines = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
     #expect(lines == [#"{"keyframe":true}"#])
 }
+
+@MainActor @Test func aClickRightAfterAScrollKeepsItsFingerDown() throws {
+    let script = FileManager.default.temporaryDirectory.appendingPathComponent("dmb-hid-\(UUID()).sh")
+    let log = script.appendingPathExtension("log")
+    try "#!/bin/sh\necho ready\ncat > '\(log.path)'\n".write(to: script, atomically: true, encoding: .utf8)
+    chmod(script.path, 0o755)
+    let hid = HIDInput(helper: script, udid: "TEST")
+    try hid.start()
+    hid.scroll(at: CGPoint(x: 0.5, y: 0.5), by: CGVector(dx: 0, dy: 0.05))
+    // Pressed within the scroll's 120 ms pause, held past it
+    hid.touch(.down, at: CGPoint(x: 0.2, y: 0.2))
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    hid.touch(.up, at: CGPoint(x: 0.2, y: 0.2))
+    hid.stop()
+    let touches = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+        .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        .compactMap { line in (line["touch"] as? String).map { "\($0) \(line["x"] as? Double ?? -1)" } }
+    #expect(touches == ["down 0.5", "move 0.5", "up 0.5", "down 0.2", "up 0.2"])
+}

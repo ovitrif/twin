@@ -206,6 +206,13 @@ final class HIDInput: InputSink {
     }
 
     func touch(_ phase: TouchPhase, at point: CGPoint) {
+        // A press lifts a scroll's finger first, so the scroll's pause never
+        // lifts the press
+        if phase == .down { endScroll() }
+        sendTouch(phase, at: point)
+    }
+
+    private func sendTouch(_ phase: TouchPhase, at point: CGPoint) {
         if phase != .move {
             onError?(String(format: "touch %@ at %.3f, %.3f", phase.rawValue, point.x, point.y))
         }
@@ -218,18 +225,14 @@ final class HIDInput: InputSink {
     func scroll(at point: CGPoint, by delta: CGVector) {
         scrollTimer?.invalidate()
         scrollTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            self.scrollPending = .zero
-            guard let p = self.scrollPoint else { return }
-            self.scrollPoint = nil
-            self.touch(.up, at: p)
+            self?.endScroll()
         }
         if scrollPoint == nil {
             scrollPending.dx += delta.dx
             scrollPending.dy += delta.dy
             guard hypot(scrollPending.dx, scrollPending.dy) >= 0.015 else { return }
             scrollPoint = point
-            touch(.down, at: point)
+            sendTouch(.down, at: point)
             moveScroll(by: scrollPending)
             scrollPending = .zero
         } else {
@@ -237,12 +240,22 @@ final class HIDInput: InputSink {
         }
     }
 
+    /// Lifts the scroll's finger, if it is down
+    private func endScroll() {
+        scrollTimer?.invalidate()
+        scrollTimer = nil
+        scrollPending = .zero
+        guard let p = scrollPoint else { return }
+        scrollPoint = nil
+        sendTouch(.up, at: p)
+    }
+
     private func moveScroll(by delta: CGVector) {
         guard var p = scrollPoint else { return }
         p.x = min(max(p.x + delta.dx, 0), 1)
         p.y = min(max(p.y + delta.dy, 0), 1)
         scrollPoint = p
-        touch(.move, at: p)
+        sendTouch(.move, at: p)
     }
 
     func type(_ text: String) { send(["text": text]) }
