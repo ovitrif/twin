@@ -117,9 +117,19 @@ impl Settings {
         }
 
         if let Ok(raw) = toml::to_string_pretty(self) {
-            let _ = fs::write(path, raw);
+            let _ = write_atomically(&path, &raw);
         }
     }
+}
+
+/// Writes beside `path`, then renames over it, so a reader (dmb checking
+/// `agent_ui`, or the next launch) never sees a half-written file
+fn write_atomically(path: &std::path::Path, raw: &str) -> std::io::Result<()> {
+    let temp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+    fs::write(&temp, raw)?;
+    fs::rename(&temp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp);
+    })
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -139,6 +149,18 @@ fn config_path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn atomic_write_replaces_the_file_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join(format!("twin-config-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "agent_ui = true\n").unwrap();
+        super::write_atomically(&path, "agent_ui = false\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "agent_ui = false\n");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     use super::*;
 
     #[test]

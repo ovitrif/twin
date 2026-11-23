@@ -205,11 +205,7 @@ func agentUIAllowed() -> Bool {
         ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config")
     guard let text = try? String(contentsOf: base.appendingPathComponent("twin/config.toml"), encoding: .utf8)
     else { return true }
-    for line in text.split(separator: "\n") {
-        let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-        if parts.count == 2, parts[0] == "agent_ui" { return parts[1] != "false" }
-    }
-    return true
+    return AgentUI.allowed(config: text)
 }
 
 /// dmb-hid: beside this binary in the app, or the installed app's
