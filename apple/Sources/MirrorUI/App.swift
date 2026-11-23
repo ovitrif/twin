@@ -194,7 +194,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         frame.origin.x += (frame.width - newSize.width) / 2
         frame.origin.y += (frame.height - newSize.height) / 2
         frame.size = newSize
-        window.contentAspectRatio = newSize
+        // A phone turned sideways can outgrow the screen's width
+        if let visible = (window.screen ?? NSScreen.main)?.visibleFrame { frame = fit(frame, in: visible) }
+        window.contentAspectRatio = frame.size
         window.setFrame(frame, display: true, animate: false)
         styler.applyStyle()
     }

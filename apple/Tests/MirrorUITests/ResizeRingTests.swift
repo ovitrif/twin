@@ -66,3 +66,23 @@ import Testing
     view.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 189, y: 156), ring))
     #expect(ended == 1)
 }
+
+@Test func theRingStopsAtTheScreensSidesAsWellAsItsTop() {
+    let screen = NSSize(width: 1440, height: 900)
+    // A portrait phone reaches the top first
+    #expect(RingView.clampedHeight(2000, aspect: 0.5, visible: screen) == 900)
+    // Two phones turned sideways side by side reach the sides first
+    #expect(RingView.clampedHeight(800, aspect: 4, visible: screen) == 360)
+    #expect(RingView.clampedHeight(100, aspect: 0.5, visible: screen) == 320)  // the minimum
+}
+
+@Test func aTurnedPhoneShrinksOntoTheScreen() {
+    let visible = NSRect(x: 0, y: 25, width: 1440, height: 875)
+    // A tall phone turned sideways about its center: 1800 × 830, centered at x 720
+    let fitted = fit(NSRect(x: -180, y: 60, width: 1800, height: 830), in: visible)
+    #expect(fitted.width == 1440 && fitted.height == 664)
+    #expect(visible.contains(fitted))
+    // One that fits only moves back onto the screen
+    #expect(fit(NSRect(x: 1300, y: 0, width: 400, height: 800), in: visible)
+        == NSRect(x: 1040, y: 25, width: 400, height: 800))
+}

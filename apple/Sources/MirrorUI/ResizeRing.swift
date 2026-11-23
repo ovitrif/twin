@@ -113,8 +113,7 @@ final class RingView: NSView {
         var height = startFrame.height + max(dy, dx / aspect)
         if edge.x == 0 { height = startFrame.height + dy }
         if edge.y == 0 { height = startFrame.height + dx / aspect }
-        let screen = mirror.screen?.visibleFrame.height ?? .greatestFiniteMagnitude
-        height = min(max(height, minimumHeight), screen).rounded()
+        height = Self.clampedHeight(height, aspect: aspect, visible: mirror.screen?.visibleFrame.size)
         let width = (height * aspect).rounded()
         // The opposite sides stay put; a side drag keeps the top, a top or
         // bottom drag keeps the left
@@ -129,6 +128,13 @@ final class RingView: NSView {
         // The ring resizes with setFrame, which AppKit never reports as a
         // live resize; say it ended, so the window keeps the size chosen
         if let mirror { NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: mirror) }
+    }
+
+    /// A height from the minimum to what fits the screen, both ways: a wide
+    /// window reaches the screen's sides before its top
+    static func clampedHeight(_ height: CGFloat, aspect: CGFloat, visible: NSSize?) -> CGFloat {
+        let fits = visible.map { min($0.height, $0.width / aspect) } ?? .greatestFiniteMagnitude
+        return min(max(height, minimumHeight), fits).rounded()
     }
 
     private func screenPoint(_ event: NSEvent) -> NSPoint {

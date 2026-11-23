@@ -61,3 +61,19 @@ func deviceHub(helper: URL, udid: String, view: MirrorView,
     }
     return (hid, hub)
 }
+
+/// `frame` shrunk to fit `visible`, keeping its shape and center, then moved
+/// onto it
+func fit(_ frame: NSRect, in visible: NSRect) -> NSRect {
+    var frame = frame
+    let scale = min(1, visible.width / frame.width, visible.height / frame.height)
+    if scale < 1 {
+        let size = NSSize(width: (frame.width * scale).rounded(.down), height: (frame.height * scale).rounded(.down))
+        frame.origin.x += (frame.width - size.width) / 2
+        frame.origin.y += (frame.height - size.height) / 2
+        frame.size = size
+    }
+    frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - frame.width)
+    frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
+    return frame
+}
