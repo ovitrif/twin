@@ -1,8 +1,9 @@
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::net::Ipv4Addr;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -16,7 +17,15 @@ struct ResolvedService {
     port: u16,
 }
 
+/// Whether `dns-sd` (macOS Bonjour) is there to ask; elsewhere only adb's
+/// own mDNS discovery runs
+pub const AVAILABLE: bool = cfg!(target_os = "macos");
+
 pub fn discover_pairing_endpoint(instance: &str, timeout: Duration) -> Result<Option<String>> {
+    if !AVAILABLE {
+        return Ok(None);
+    }
+
     let Some(service) = resolve_instance(instance, PAIRING_SERVICE_TYPE, timeout)? else {
         return Ok(None);
     };
@@ -28,6 +37,10 @@ pub fn discover_pairing_endpoint(instance: &str, timeout: Duration) -> Result<Op
 }
 
 pub fn discover_connect_endpoints(pairing_address: &str, timeout: Duration) -> Result<Vec<String>> {
+    if !AVAILABLE {
+        return Ok(Vec::new());
+    }
+
     let browse_timeout = timeout.min(Duration::from_secs(4));
     let resolve_timeout = timeout.min(Duration::from_secs(3));
     let instances = browse_connect_instances(browse_timeout)?;
@@ -53,7 +66,10 @@ pub fn discover_connect_endpoints(pairing_address: &str, timeout: Duration) -> R
 }
 
 fn browse_connect_instances(timeout: Duration) -> Result<Vec<String>> {
-    let output = run_dns_sd_for(["-B", CONNECT_SERVICE_TYPE, LOCAL_DOMAIN], timeout)?;
+    // Browsing has no last answer to wait for: it runs the whole time
+    let output = run_dns_sd_until(["-B", CONNECT_SERVICE_TYPE, LOCAL_DOMAIN], timeout, |_| {
+        false
+    })?;
     Ok(parse_browse_instances(&output))
 }
 
@@ -62,16 +78,28 @@ fn resolve_instance(
     service_type: &str,
     timeout: Duration,
 ) -> Result<Option<ResolvedService>> {
-    let output = run_dns_sd_for(["-L", instance, service_type, LOCAL_DOMAIN], timeout)?;
+    let output = run_dns_sd_until(
+        ["-L", instance, service_type, LOCAL_DOMAIN],
+        timeout,
+        |output| parse_resolved_service(output).is_some(),
+    )?;
     Ok(parse_resolved_service(&output))
 }
 
 fn resolve_host_to_ipv4(host: &str, timeout: Duration) -> Result<Option<String>> {
-    let output = run_dns_sd_for(["-G", "v4", host], timeout)?;
+    let output = run_dns_sd_until(["-G", "v4", host], timeout, |output| {
+        parse_ipv4_address(output).is_some()
+    })?;
     Ok(parse_ipv4_address(&output))
 }
 
-fn run_dns_sd_for<const N: usize>(args: [&str; N], timeout: Duration) -> Result<String> {
+/// Runs `dns-sd`, which never exits on its own, until `timeout` or until
+/// `done` accepts what it has printed so far, then stops it
+fn run_dns_sd_until<const N: usize>(
+    args: [&str; N],
+    timeout: Duration,
+    done: impl Fn(&str) -> bool,
+) -> Result<String> {
     let mut child = Command::new("dns-sd")
         .args(args)
         .stdout(Stdio::piped())
@@ -79,25 +107,52 @@ fn run_dns_sd_for<const N: usize>(args: [&str; N], timeout: Duration) -> Result<
         .spawn()
         .context("failed to run dns-sd")?;
 
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .context("failed to capture dns-sd stdout")?;
-
-    let output_reader = thread::spawn(move || {
-        let mut output = String::new();
-        let _ = stdout.read_to_string(&mut output);
-        output
+    let (lines, received) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
     });
 
-    thread::sleep(timeout);
+    let output = collect_until(&received, Instant::now() + timeout, done);
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(output)
+}
 
-    if child.try_wait()?.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
+/// The lines `received` delivers before `deadline`, or up to the first one
+/// after which `done` accepts the output
+fn collect_until(
+    received: &Receiver<String>,
+    deadline: Instant,
+    done: impl Fn(&str) -> bool,
+) -> String {
+    let mut output = String::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return output;
+        }
+
+        match received.recv_timeout(remaining) {
+            Ok(line) => {
+                output.push_str(&line);
+                output.push('\n');
+                if done(&output) {
+                    return output;
+                }
+            }
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return output,
+        }
     }
-
-    Ok(output_reader.join().unwrap_or_default())
 }
 
 fn parse_browse_instances(output: &str) -> Vec<String> {
@@ -144,9 +199,17 @@ fn parse_resolved_service(output: &str) -> Option<ResolvedService> {
             continue;
         };
 
-        let target = after.split_whitespace().next()?;
-        let (host, port) = target.rsplit_once(':')?;
-        let port = port.parse::<u16>().ok()?;
+        // One garbled line must not hide a good one after it
+        let Some((host, port)) = after
+            .split_whitespace()
+            .next()
+            .and_then(|target| target.rsplit_once(':'))
+        else {
+            continue;
+        };
+        let Ok(port) = port.parse::<u16>() else {
+            continue;
+        };
 
         return Some(ResolvedService {
             host: normalize_dns_name(host),
@@ -262,6 +325,105 @@ Lookup adb-5C020DLCH0007Q-tfPgZw._adb-tls-connect._tcp.local
                 port: 37197
             })
         );
+    }
+
+    #[test]
+    fn skips_a_garbled_resolve_line() {
+        let output = "\
+10:44:01.123  x._adb-tls-connect._tcp.local. can be reached at 
+10:44:01.124  x._adb-tls-connect._tcp.local. can be reached at pixel.local.:notaport (interface 4)
+10:44:01.125  x._adb-tls-connect._tcp.local. can be reached at pixel.local.:37197 (interface 4)
+";
+
+        assert_eq!(
+            parse_resolved_service(output),
+            Some(ResolvedService {
+                host: "pixel.local".to_string(),
+                port: 37197
+            })
+        );
+    }
+
+    #[test]
+    fn stops_collecting_once_the_answer_is_in() {
+        let (lines, received) = mpsc::channel();
+        for line in [
+            "DATE: ---Mon 23 Nov 2026---",
+            "14:02:11.482  Add    40000002      14  pixel.local.   192.168.68.54   120",
+            "14:02:11.483  Add    40000002      14  pixel.local.   192.168.68.99   120",
+        ] {
+            lines.send(line.to_string()).unwrap();
+        }
+        // The sender stays open, as with a dns-sd still running
+        let started = Instant::now();
+        let output = collect_until(
+            &received,
+            Instant::now() + Duration::from_secs(5),
+            |output| parse_ipv4_address(output).is_some(),
+        );
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!output.contains("192.168.68.99"));
+        assert_eq!(
+            parse_ipv4_address(&output).as_deref(),
+            Some("192.168.68.54")
+        );
+        drop(lines);
+    }
+
+    #[test]
+    fn collects_until_the_deadline_without_an_answer() {
+        let (lines, received) = mpsc::channel::<String>();
+        let started = Instant::now();
+        let output = collect_until(
+            &received,
+            Instant::now() + Duration::from_millis(100),
+            |_| false,
+        );
+
+        assert!(output.is_empty());
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        drop(lines);
+    }
+
+    /// Random dns-sd-like lines never panic the parsers
+    #[test]
+    fn parsers_survive_generated_input() {
+        use rand::{Rng, SeedableRng};
+
+        let pieces = [
+            "Add",
+            "Rmv",
+            "  ",
+            "\t",
+            "\n",
+            "_adb-tls-connect._tcp.",
+            "local.",
+            " can be reached at ",
+            "pixel.local.:",
+            "37197",
+            ":",
+            "0.0.0.0",
+            "192.168.1.5",
+            "127.0.0.1",
+            "é",
+            "[",
+            "]",
+            ".",
+        ];
+        let mut rng = rand::rngs::StdRng::seed_from_u64(11);
+        for _ in 0..2_000 {
+            let input: String = (0..rng.gen_range(0..14))
+                .map(|_| pieces[rng.gen_range(0..pieces.len())])
+                .collect();
+            let _ = parse_browse_instances(&input);
+            let _ = parse_resolved_service(&input);
+            if let Some(address) = parse_ipv4_address(&input) {
+                let address: Ipv4Addr = address.parse().unwrap();
+                assert!(!address.is_unspecified() && !address.is_loopback());
+            }
+            let _ = endpoint_host(&input);
+        }
     }
 
     #[test]
