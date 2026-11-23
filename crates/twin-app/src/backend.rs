@@ -210,16 +210,25 @@ fn local_utc_offset_seconds() -> i64 {
             .output()
             .ok()
             .and_then(|output| String::from_utf8(output.stdout).ok())
-            .and_then(|raw| {
-                let raw = raw.trim();
-                let (sign, digits) = raw.split_at(1);
-                let hours: i64 = digits.get(0..2)?.parse().ok()?;
-                let minutes: i64 = digits.get(2..4)?.parse().ok()?;
-                let offset = hours * 3600 + minutes * 60;
-                Some(if sign == "-" { -offset } else { offset })
-            })
+            .and_then(|raw| parse_utc_offset(&raw))
             .unwrap_or(0)
     })
+}
+
+/// `date +%z` output such as `+0100` or `-0330`, in seconds; `None` for
+/// anything else, empty output included
+fn parse_utc_offset(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    let sign = raw.get(..1)?;
+    let digits = raw.get(1..)?;
+    let hours: i64 = digits.get(0..2)?.parse().ok()?;
+    let minutes: i64 = digits.get(2..4)?.parse().ok()?;
+    let offset = hours * 3600 + minutes * 60;
+    match sign {
+        "-" => Some(-offset),
+        "+" => Some(offset),
+        _ => None,
+    }
 }
 
 pub fn refresh_status(shared: Arc<Mutex<Shared>>, ctx: Context) {
@@ -388,7 +397,13 @@ fn collect_snapshot() -> (Snapshot, AppleLookups) {
     // iPhones and simulators come from Xcode's tools, which can be slow;
     // ask them alongside adb rather than after it
     let xcode = xcode_info();
-    let iphones = thread::spawn(|| {
+    // dmb lists iPhones through /usr/bin/xcrun, which asks a Mac without
+    // Xcode to install the developer tools
+    let has_xcode = xcode.available;
+    let iphones = thread::spawn(move || {
+        if !has_xcode {
+            return Vec::new();
+        }
         Dmb::resolve()
             .and_then(|dmb| dmb.iphones())
             .unwrap_or_default()
@@ -836,6 +851,8 @@ pub fn start_mirror(
     let mirror_key = device.mirror_key.clone();
     {
         let mut state = shared.lock().unwrap();
+        // A mirror closed in the last seconds is still listed until reaped
+        state.reap_finished_mirrors();
         if state.mirrors.contains_key(&mirror_key)
             || !state.starting_mirrors.insert(mirror_key.clone())
         {
@@ -918,6 +935,7 @@ pub fn start_iphone_mirror(
 ) {
     let mirror_key = iphone_mirror_key(&iphone);
     let mut state = shared.lock().unwrap();
+    state.reap_finished_mirrors();
     if state.mirrors.contains_key(&mirror_key) {
         state.log(format!("Already mirroring {}", iphone.name));
         return;
@@ -950,6 +968,7 @@ pub fn start_pair(
     options: PairOptions,
 ) {
     let mut state = shared.lock().unwrap();
+    state.reap_finished_mirrors();
     if state.pair.is_some() {
         state.log("Side by side is already open");
         return;
@@ -1530,6 +1549,17 @@ fn sleep_or_cancel(cancel: &Arc<AtomicBool>, duration: Duration) -> anyhow::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_offset_parses_date_output_and_rejects_the_rest() {
+        assert_eq!(parse_utc_offset("+0100\n"), Some(3600));
+        assert_eq!(parse_utc_offset("-0330"), Some(-(3 * 3600 + 30 * 60)));
+        // Empty output used to panic in split_at while Shared was locked
+        assert_eq!(parse_utc_offset(""), None);
+        assert_eq!(parse_utc_offset("\n"), None);
+        assert_eq!(parse_utc_offset("+1"), None);
+        assert_eq!(parse_utc_offset("é0100"), None);
+    }
 
     #[test]
     fn deletion_rejects_running_starting_and_already_deleting_avds() {
