@@ -273,9 +273,12 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         source.start()
     }
 
+    /// dmb-hid sits next to this binary in the app bundle; DMB_HID overrides it
     private var hidHelper: URL? {
-        let helper = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid")
-        return helper.flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
+        let candidates = [ProcessInfo.processInfo.environment["DMB_HID"],
+                          Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid").path]
+        return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
+            .map { URL(fileURLWithPath: $0) }
     }
 
     /// The iPhone's screen and touch over one Device Hub session, which keeps
