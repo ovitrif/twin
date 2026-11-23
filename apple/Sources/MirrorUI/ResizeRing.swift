@@ -123,7 +123,13 @@ final class RingView: NSView {
         mirror.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 
-    override func mouseUp(with event: NSEvent) { dragEdge = nil }
+    override func mouseUp(with event: NSEvent) {
+        guard dragEdge != nil else { return }
+        dragEdge = nil
+        // The ring resizes with setFrame, which AppKit never reports as a
+        // live resize; say it ended, so the window keeps the size chosen
+        if let mirror { NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: mirror) }
+    }
 
     private func screenPoint(_ event: NSEvent) -> NSPoint {
         window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation

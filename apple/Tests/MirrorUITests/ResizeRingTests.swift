@@ -51,3 +51,18 @@ import Testing
     #expect(mirror.frame.maxX == 250 && mirror.frame.maxY == 400)
     #expect(mirror.frame.size == NSSize(width: 165, height: 330))
 }
+
+@MainActor @Test func releasingADragReportsTheResizeEnd() {
+    let (mirror, ring) = makeRing(small: true)
+    let view = ring.view
+    var ended = 0
+    let token = NotificationCenter.default.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: mirror,
+                                                       queue: nil) { _ in ended += 1 }
+    defer { NotificationCenter.default.removeObserver(token) }
+    view.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 159, y: 156), ring))
+    #expect(ended == 0)    // no drag, no resize
+    view.mouseDown(with: mouse(.leftMouseDown, NSPoint(x: 159, y: 156), ring))
+    view.mouseDragged(with: mouse(.leftMouseDragged, NSPoint(x: 189, y: 156), ring))
+    view.mouseUp(with: mouse(.leftMouseUp, NSPoint(x: 189, y: 156), ring))
+    #expect(ended == 1)
+}
