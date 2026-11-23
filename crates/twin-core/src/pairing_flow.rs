@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
@@ -124,12 +125,13 @@ where
     })?;
     delegate.on_event(PairingEvent::QrReady(qr.clone()))?;
 
-    let pairing_address = match wait_for_pairing_endpoint(adb, &qr.instance, timeout, delegate)? {
-        PairingWaitOutcome::PairingEndpoints(pairing_addresses) => {
-            pair_with_pairing_endpoints(adb, &pairing_addresses, &qr.secret, delegate)?
-        }
-        PairingWaitOutcome::AlreadyConnected(phone) => return Ok(phone),
-    };
+    let pairing_address =
+        match wait_for_pairing_endpoint(adb, &qr.instance, &baseline_devices, timeout, delegate)? {
+            PairingWaitOutcome::PairingEndpoints(pairing_addresses) => {
+                pair_with_pairing_endpoints(adb, &pairing_addresses, &qr.secret, delegate)?
+            }
+            PairingWaitOutcome::AlreadyConnected(phone) => return Ok(phone),
+        };
 
     delegate.on_event(PairingEvent::Status(
         "Looking for the wireless debugging connection endpoint...".to_string(),
@@ -153,6 +155,7 @@ where
 fn wait_for_pairing_endpoint<D>(
     adb: &Adb,
     instance: &str,
+    baseline_devices: &HashSet<String>,
     timeout: Duration,
     delegate: &mut D,
 ) -> Result<PairingWaitOutcome>
@@ -170,7 +173,11 @@ where
             PairingProgress::new(
                 PairingProgressKind::WaitingForQrScan,
                 "Waiting for QR scan",
-                format!("Listening for pairing service `{instance}` via ADB mDNS and Bonjour."),
+                if dnssd::AVAILABLE {
+                    format!("Listening for pairing service `{instance}` via ADB mDNS and Bonjour.")
+                } else {
+                    format!("Listening for pairing service `{instance}` via ADB mDNS.")
+                },
             )
             .deadline(deadline),
         ))?;
@@ -185,7 +192,9 @@ where
                     devices = adb.devices().unwrap_or(devices);
                 }
 
-                let ready_phones = connected_phones_from_devices(devices, services);
+                // The phones ADB already had are the ones the user chose not
+                // to use; offer only one that connected since
+                let ready_phones = new_connected_phones(devices, services, baseline_devices);
                 if !ready_phones.is_empty() {
                     match delegate.choose_already_connected(&ready_phones)? {
                         AlreadyConnectedChoice::Use(index) if index < ready_phones.len() => {
@@ -209,15 +218,20 @@ where
             Err(_) => {}
         }
 
-        if !reported_direct_check {
+        if dnssd::AVAILABLE && !reported_direct_check {
             delegate.on_event(PairingEvent::Status(
                 "Also checking macOS Bonjour directly for the QR pairing service...".to_string(),
             ))?;
             reported_direct_check = true;
         }
 
-        let discovery =
-            pairing::discover_pairing_endpoint_candidates(adb, instance, Duration::from_secs(2));
+        let discovery = pairing::discover_pairing_endpoint_candidates(
+            services_result
+                .as_deref()
+                .map_err(|error| format!("{error:#}")),
+            instance,
+            Duration::from_secs(2),
+        );
 
         if !discovery.endpoints.is_empty() {
             if discovery.endpoints.len() == 1 {
@@ -234,22 +248,22 @@ where
             return Ok(PairingWaitOutcome::PairingEndpoints(discovery.endpoints));
         }
 
-        if let Some(error) = discovery.adb_error {
-            if !reported_adb_error {
-                delegate.on_event(PairingEvent::Warning(format!(
-                    "adb mDNS lookup failed: {error}"
-                )))?;
-                reported_adb_error = true;
-            }
+        if let Some(error) = discovery.adb_error
+            && !reported_adb_error
+        {
+            delegate.on_event(PairingEvent::Warning(format!(
+                "adb mDNS lookup failed: {error}"
+            )))?;
+            reported_adb_error = true;
         }
 
-        if let Some(error) = discovery.bonjour_error {
-            if !reported_bonjour_error {
-                delegate.on_event(PairingEvent::Warning(format!(
-                    "Bonjour pairing lookup failed: {error}"
-                )))?;
-                reported_bonjour_error = true;
-            }
+        if let Some(error) = discovery.bonjour_error
+            && !reported_bonjour_error
+        {
+            delegate.on_event(PairingEvent::Warning(format!(
+                "Bonjour pairing lookup failed: {error}"
+            )))?;
+            reported_bonjour_error = true;
         }
 
         if Instant::now() >= deadline {
@@ -408,10 +422,13 @@ where
     let mut attempt = 0;
     let mut last_candidate_summary = String::new();
     let mut last_bonjour_check = None;
+    let mut last_screen_check = None;
     let mut reported_connect_mdns_error = false;
     let mut reported_failed_connects = HashSet::new();
 
     loop {
+        let mut screen_checked = false;
+
         delegate.on_event(PairingEvent::Progress(
             PairingProgress::new(
                 PairingProgressKind::WaitingForConnectionEndpoint,
@@ -495,19 +512,18 @@ where
             last_candidate_summary = candidate_summary;
         }
 
-        if candidates.is_empty() && should_check_bonjour(last_bonjour_check) {
-            last_bonjour_check = Some(Instant::now());
-
-            if let Some(device) = try_direct_bonjour_connect(
+        if candidates.is_empty()
+            && fallback_due(&mut last_bonjour_check, Instant::now())
+            && let Some(device) = try_direct_bonjour_connect(
                 adb,
                 pairing_address,
                 baseline_devices,
-                None,
+                &reported_failed_connects,
                 timeout,
                 delegate,
-            )? {
-                return Ok(device);
-            }
+            )?
+        {
+            return Ok(device);
         }
 
         for service in candidates {
@@ -583,28 +599,36 @@ where
             }
         }
 
+        // Once an advertised endpoint failed, look elsewhere too, but at
+        // most every few seconds: both fallbacks block for a while
         if !reported_failed_connects.is_empty() {
-            if let Some(device) = try_direct_bonjour_connect(
-                adb,
-                pairing_address,
-                baseline_devices,
-                None,
-                timeout,
-                delegate,
-            )? {
+            if fallback_due(&mut last_bonjour_check, Instant::now())
+                && let Some(device) = try_direct_bonjour_connect(
+                    adb,
+                    pairing_address,
+                    baseline_devices,
+                    &reported_failed_connects,
+                    timeout,
+                    delegate,
+                )?
+            {
                 return Ok(device);
             }
 
-            if let Some(device) =
-                try_ui_hierarchy_connect(adb, baseline_devices, timeout, delegate)?
-            {
-                return Ok(device);
+            if fallback_due(&mut last_screen_check, Instant::now()) {
+                screen_checked = true;
+                if let Some(device) =
+                    try_ui_hierarchy_connect(adb, baseline_devices, timeout, delegate)?
+                {
+                    return Ok(device);
+                }
             }
         }
 
         if Instant::now() >= deadline {
-            if let Some(device) =
-                try_ui_hierarchy_connect(adb, baseline_devices, timeout, delegate)?
+            if !screen_checked
+                && let Some(device) =
+                    try_ui_hierarchy_connect(adb, baseline_devices, timeout, delegate)?
             {
                 return Ok(device);
             }
@@ -629,13 +653,17 @@ fn try_direct_bonjour_connect<D>(
     adb: &Adb,
     pairing_address: &str,
     baseline_devices: &HashSet<String>,
-    skipped_endpoint: Option<&str>,
+    tried_endpoints: &HashSet<String>,
     timeout: Duration,
     delegate: &mut D,
 ) -> Result<Option<adb::AdbDevice>>
 where
     D: PairingFlowDelegate,
 {
+    if !dnssd::AVAILABLE {
+        return Ok(None);
+    }
+
     delegate.on_event(PairingEvent::Status(
         "Checking macOS Bonjour directly for wireless debugging endpoints...".to_string(),
     ))?;
@@ -669,14 +697,14 @@ where
         timeout.min(Duration::from_secs(8))
     };
 
-    for endpoint in endpoints {
-        if skipped_endpoint == Some(endpoint.as_str()) {
-            delegate.on_event(PairingEvent::Status(format!(
-                "Skipping {endpoint}; ADB already tried it."
-            )))?;
-            continue;
-        }
+    let (endpoints, skipped) = untried_endpoints(endpoints, tried_endpoints);
+    for endpoint in skipped {
+        delegate.on_event(PairingEvent::Status(format!(
+            "Skipping {endpoint}; ADB already tried it."
+        )))?;
+    }
 
+    for endpoint in endpoints {
         match connect_to_endpoint(adb, &endpoint, baseline_devices, verify_timeout, delegate) {
             Ok(device) => return Ok(Some(device)),
             Err(error) => delegate.on_event(PairingEvent::Warning(format!(
@@ -900,13 +928,17 @@ fn matching_ready_device_before_connect(
         })
 }
 
-fn connected_phones_from_devices(
+/// The ready phones ADB sees that were not among `baseline_devices`, by
+/// serial or as another alias of the same wireless transport
+fn new_connected_phones(
     devices: Vec<adb::AdbDevice>,
     services: &[adb::MdnsService],
+    baseline_devices: &HashSet<String>,
 ) -> Vec<ConnectedPhone> {
     adb::dedupe_ready_devices(devices, services)
         .into_iter()
         .filter(|device| device.state == adb::DeviceState::Device)
+        .filter(|device| !is_baseline_device(device, services, baseline_devices))
         .map(|device| ConnectedPhone {
             serial: device.serial.clone(),
             display_name: device.display_name(),
@@ -954,11 +986,45 @@ fn ui_hierarchy_candidate_devices(
         .collect()
 }
 
-fn should_check_bonjour(last_check: Option<Instant>) -> bool {
-    match last_check {
-        Some(last_check) => last_check.elapsed() >= Duration::from_secs(10),
-        None => true,
+fn is_baseline_device(
+    device: &adb::AdbDevice,
+    services: &[adb::MdnsService],
+    baseline_devices: &HashSet<String>,
+) -> bool {
+    baseline_devices.contains(&device.serial)
+        || services
+            .iter()
+            .filter(|service| service.is_connect_service())
+            .filter(|service| adb::device_matches_connect_service(device, service))
+            .any(|service| {
+                baseline_devices.iter().any(|serial| {
+                    *serial == service.address
+                        || adb::serial_matches_connect_service(serial, service)
+                })
+            })
+}
+
+/// How often a slow fallback (Bonjour, reading the phone's screen) may run
+const FALLBACK_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Whether a fallback last run at `last_run` may run again at `now`; if so,
+/// records `now` as its last run
+fn fallback_due(last_run: &mut Option<Instant>, now: Instant) -> bool {
+    let due = last_run.is_none_or(|last_run| now.duration_since(last_run) >= FALLBACK_INTERVAL);
+    if due {
+        *last_run = Some(now);
     }
+    due
+}
+
+/// `endpoints` split into those ADB has not tried yet and those it has
+fn untried_endpoints(
+    endpoints: Vec<String>,
+    tried_endpoints: &HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    endpoints
+        .into_iter()
+        .partition(|endpoint| !tried_endpoints.contains(endpoint))
 }
 
 fn extract_ipv4_endpoints(input: &str) -> Vec<String> {
@@ -967,7 +1033,7 @@ fn extract_ipv4_endpoints(input: &str) -> Vec<String> {
     for token in input.split(|character: char| {
         !(character.is_ascii_digit() || character == '.' || character == ':')
     }) {
-        let token = token.trim_matches('.');
+        let token = token.trim_matches(|character| character == '.' || character == ':');
 
         if is_ipv4_endpoint(token) && !endpoints.iter().any(|endpoint| endpoint == token) {
             endpoints.push(token.to_string());
@@ -986,9 +1052,9 @@ fn is_ipv4_endpoint(endpoint: &str) -> bool {
         return false;
     }
 
-    let mut host_parts = host.split('.');
-
-    host_parts.clone().count() == 4 && host_parts.all(|part| part.parse::<u8>().is_ok())
+    // A phone on the LAN: never this machine or the unspecified address
+    host.parse::<Ipv4Addr>()
+        .is_ok_and(|host| !host.is_unspecified() && !host.is_loopback())
 }
 
 fn endpoint_summary(services: &[adb::MdnsService]) -> String {
@@ -1055,6 +1121,76 @@ mod tests {
     }
 
     #[test]
+    fn extracts_only_lan_endpoints_from_screen_text() {
+        for (text, endpoints) in [
+            (
+                "IP address & Port 192.168.1.5:5555:",
+                vec!["192.168.1.5:5555"],
+            ),
+            (":192.168.1.5:5555.", vec!["192.168.1.5:5555"]),
+            ("0.0.0.0:5555", vec![]),
+            ("127.0.0.1:5555", vec![]),
+            ("10.0.0.7:41000 and 10.0.0.7:41000", vec!["10.0.0.7:41000"]),
+            ("1.2.3:5555", vec![]),
+        ] {
+            assert_eq!(extract_ipv4_endpoints(text), endpoints, "{text}");
+        }
+    }
+
+    #[test]
+    fn offers_only_phones_that_connected_after_pairing_began() {
+        let service = mdns_connect_service("adb-R5CT123ABC-Vn71rT", "192.168.68.54:37197");
+        let baseline_devices = HashSet::from([
+            "emulator-5554".to_string(),
+            "192.168.68.54:37197".to_string(),
+        ]);
+        let devices = vec![
+            adb_device("emulator-5554"),
+            // The baseline phone, now also under its mDNS alias
+            adb_device("adb-R5CT123ABC-Vn71rT._adb-tls-connect._tcp"),
+            adb_device("R5CTNEWUSB"),
+        ];
+
+        let phones = new_connected_phones(devices, &[service], &baseline_devices);
+
+        assert_eq!(
+            phones
+                .iter()
+                .map(|phone| phone.serial.as_str())
+                .collect::<Vec<_>>(),
+            vec!["R5CTNEWUSB"]
+        );
+    }
+
+    #[test]
+    fn throttles_slow_fallbacks() {
+        let start = Instant::now();
+        let mut last_run = None;
+
+        assert!(fallback_due(&mut last_run, start));
+        assert!(!fallback_due(&mut last_run, start + Duration::from_secs(2)));
+        assert!(!fallback_due(&mut last_run, start + Duration::from_secs(9)));
+        assert!(fallback_due(&mut last_run, start + FALLBACK_INTERVAL));
+        assert_eq!(last_run, Some(start + FALLBACK_INTERVAL));
+    }
+
+    #[test]
+    fn bonjour_skips_endpoints_adb_already_tried() {
+        let tried = HashSet::from(["192.168.68.54:37197".to_string()]);
+
+        let (untried, skipped) = untried_endpoints(
+            vec![
+                "192.168.68.54:37197".to_string(),
+                "192.168.68.54:40001".to_string(),
+            ],
+            &tried,
+        );
+
+        assert_eq!(untried, vec!["192.168.68.54:40001"]);
+        assert_eq!(skipped, vec!["192.168.68.54:37197"]);
+    }
+
+    #[test]
     fn ui_hierarchy_candidates_skip_baseline_devices() {
         let mut baseline_devices = HashSet::new();
         baseline_devices.insert("already-ready".to_string());
@@ -1073,6 +1209,8 @@ mod tests {
         assert!(!is_ipv4_endpoint("192.168.68.54:0"));
         assert!(!is_ipv4_endpoint("999.168.68.54:37197"));
         assert!(!is_ipv4_endpoint("192.168.68.54:notaport"));
+        assert!(!is_ipv4_endpoint("0.0.0.0:5555"));
+        assert!(!is_ipv4_endpoint("127.0.0.1:5555"));
     }
 
     #[test]

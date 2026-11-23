@@ -1,7 +1,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
-use crate::adb::{self, Adb};
+use crate::adb;
 use crate::dnssd;
 
 #[derive(Debug, Default)]
@@ -11,33 +11,46 @@ pub struct PairingEndpointDiscovery {
     pub bonjour_error: Option<String>,
 }
 
+/// The endpoints advertising pairing `instance`: from the `adb mdns
+/// services` the caller already ran (`Err` holds its failure), and from
+/// Bonjour, which is asked only when adb found no routable IPv4 endpoint
 pub fn discover_pairing_endpoint_candidates(
-    adb: &Adb,
+    services: Result<&[adb::MdnsService], String>,
     instance: &str,
     bonjour_timeout: Duration,
 ) -> PairingEndpointDiscovery {
     let mut discovery = PairingEndpointDiscovery::default();
 
-    match adb.mdns_services() {
+    match services {
         Ok(services) => {
             for service in services
-                .into_iter()
+                .iter()
                 .filter(|service| service.instance == instance && service.is_pairing_service())
             {
-                push_endpoint(&mut discovery.endpoints, service.address);
+                push_endpoint(&mut discovery.endpoints, service.address.clone());
             }
         }
-        Err(error) => discovery.adb_error = Some(format!("{error:#}")),
+        Err(error) => discovery.adb_error = Some(error),
     }
 
-    match dnssd::discover_pairing_endpoint(instance, bonjour_timeout) {
-        Ok(Some(endpoint)) => push_endpoint(&mut discovery.endpoints, endpoint),
-        Ok(None) => {}
-        Err(error) => discovery.bonjour_error = Some(format!("{error:#}")),
+    if needs_bonjour(&discovery.endpoints) {
+        match dnssd::discover_pairing_endpoint(instance, bonjour_timeout) {
+            Ok(Some(endpoint)) => push_endpoint(&mut discovery.endpoints, endpoint),
+            Ok(None) => {}
+            Err(error) => discovery.bonjour_error = Some(format!("{error:#}")),
+        }
     }
 
     order_endpoints(&mut discovery.endpoints);
     discovery
+}
+
+/// Bonjour blocks for seconds; skip it once adb has an endpoint to pair with
+fn needs_bonjour(endpoints: &[String]) -> bool {
+    dnssd::AVAILABLE
+        && !endpoints
+            .iter()
+            .any(|endpoint| endpoint_preference(endpoint) == 0)
 }
 
 fn push_endpoint(endpoints: &mut Vec<String>, endpoint: String) {
@@ -78,6 +91,46 @@ fn endpoint_preference(endpoint: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skips_bonjour_once_adb_has_a_routable_endpoint() {
+        let adb_found = |endpoints: &[&str]| {
+            needs_bonjour(
+                &endpoints
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        assert!(!adb_found(&["192.168.0.42:37000"]));
+        assert!(!adb_found(&["Android.local:37000", "192.168.0.42:37000"]));
+        assert_eq!(adb_found(&[]), dnssd::AVAILABLE);
+        assert_eq!(adb_found(&["169.254.1.42:37000"]), dnssd::AVAILABLE);
+        assert_eq!(adb_found(&["Android.local:37000"]), dnssd::AVAILABLE);
+    }
+
+    #[test]
+    fn takes_pairing_endpoints_from_the_given_adb_services() {
+        let services = [
+            adb::MdnsService {
+                instance: "twin-abc123".to_string(),
+                service_type: "_adb-tls-pairing._tcp".to_string(),
+                address: "192.168.0.42:37000".to_string(),
+            },
+            adb::MdnsService {
+                instance: "someone-else".to_string(),
+                service_type: "_adb-tls-pairing._tcp".to_string(),
+                address: "192.168.0.43:37000".to_string(),
+            },
+        ];
+
+        let discovery =
+            discover_pairing_endpoint_candidates(Ok(&services), "twin-abc123", Duration::ZERO);
+        assert_eq!(discovery.endpoints, vec!["192.168.0.42:37000"]);
+        assert_eq!(discovery.adb_error, None);
+        assert_eq!(discovery.bonjour_error, None);
+    }
 
     #[test]
     fn prefers_routable_ipv4_pairing_endpoints() {
