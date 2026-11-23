@@ -28,39 +28,51 @@ pub fn ensure_pairing_wifi_ready() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn ensure_macos_pairing_wifi_ready() -> Result<()> {
-    let state = macos_wifi_state()?;
+    let ports = command_stdout("networksetup", ["-listallhardwareports"])?;
+    let wifi = parse_wifi_device(&ports).map(macos_wifi_state);
 
-    if !state.power_on {
-        bail!(
-            "Wi-Fi is off on this Mac. QR pairing needs the Mac and phone on the same Wi-Fi network. Turn Wi-Fi on, join the phone's network, then try again."
-        );
+    if let Some(state) = &wifi
+        && wifi_connected(
+            state.network.as_deref(),
+            state.link_active,
+            state.ipv4_address.as_deref(),
+        )
+    {
+        return Ok(());
     }
 
-    if !wifi_connected(
-        state.network.as_deref(),
-        state.link_active,
-        state.ipv4_address.as_deref(),
-    ) {
-        bail!(
-            "Wi-Fi is not connected on this Mac ({}). QR pairing needs the Mac and phone on the same Wi-Fi network. Join the phone's Wi-Fi network, then try again.",
+    // A Mac on Ethernet in the phone's LAN pairs as well as one on its Wi-Fi
+    if wired_lan_address(&ports, ipconfig_address).is_some() {
+        return Ok(());
+    }
+
+    match wifi {
+        None => bail!(
+            "This Mac has no Wi-Fi interface and no wired network connection. QR pairing needs the Mac and phone on the same network."
+        ),
+        Some(state) if !state.power_on => bail!(
+            "Wi-Fi is off on this Mac and no wired network is connected. QR pairing needs the Mac and phone on the same network. Turn Wi-Fi on and join the phone's network, or connect the Mac to the phone's LAN by Ethernet, then try again."
+        ),
+        Some(state) => bail!(
+            "Wi-Fi is not connected on this Mac ({}) and no wired network is connected. QR pairing needs the Mac and phone on the same network. Join the phone's Wi-Fi network, or connect the Mac to its LAN by Ethernet, then try again.",
             state.device
-        );
+        ),
     }
-
-    Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn macos_wifi_state() -> Result<MacWifiState> {
-    let ports = command_stdout("networksetup", ["-listallhardwareports"])?;
-    let device = parse_wifi_device(&ports)
-        .context("could not find a Wi-Fi interface on this Mac for QR pairing")?;
+fn ipconfig_address(device: &str) -> Option<String> {
+    command_stdout("ipconfig", ["getifaddr", device])
+        .ok()
+        .and_then(|output| parse_ipconfig_ipv4_address(&output))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_wifi_state(device: String) -> MacWifiState {
     let interface = command_stdout("ifconfig", [&device]).unwrap_or_default();
     let link_active = parse_ifconfig_link_active(&interface);
-    let ipconfig_address = command_stdout("ipconfig", ["getifaddr", &device])
-        .ok()
-        .and_then(|output| parse_ipconfig_ipv4_address(&output));
-    let ipv4_address = parse_ifconfig_ipv4_address(&interface).or(ipconfig_address);
+    let ipv4_address =
+        parse_ifconfig_ipv4_address(&interface).or_else(|| ipconfig_address(&device));
     let power_on = command_stdout("networksetup", ["-getairportpower", &device])
         .map(|output| parse_airport_power(&output))
         .unwrap_or(link_active)
@@ -69,13 +81,13 @@ fn macos_wifi_state() -> Result<MacWifiState> {
         .ok()
         .and_then(|output| parse_airport_network(&output));
 
-    Ok(MacWifiState {
+    MacWifiState {
         device,
         power_on,
         network,
         link_active,
         ipv4_address,
-    })
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -106,13 +118,36 @@ fn parse_wifi_device(output: &str) -> Option<String> {
             continue;
         }
 
-        if saw_wifi_port {
-            if let Some(device) = line.strip_prefix("Device: ") {
-                let device = device.trim();
-                if !device.is_empty() {
-                    return Some(device.to_string());
-                }
-            }
+        if saw_wifi_port
+            && let Some(device) = line.strip_prefix("Device: ").map(str::trim)
+            && !device.is_empty()
+        {
+            return Some(device.to_string());
+        }
+    }
+
+    None
+}
+
+/// The usable IPv4 address of the first connected port other than Wi-Fi
+/// (Ethernet, a USB or Thunderbolt adapter), as `address_of` reports it
+#[cfg(any(target_os = "macos", test))]
+fn wired_lan_address(ports: &str, address_of: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let mut port = "";
+
+    for line in ports.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix("Hardware Port: ") {
+            port = name;
+            continue;
+        }
+
+        if let Some(device) = line.strip_prefix("Device: ").map(str::trim)
+            && !device.is_empty()
+            && !matches!(port, "Wi-Fi" | "AirPort")
+            && let Some(address) =
+                address_of(device).and_then(|address| usable_ipv4_address(&address))
+        {
+            return Some(address);
         }
     }
 
@@ -218,6 +253,44 @@ Ethernet Address: f4:d4:88:8e:e3:ea
 "#;
 
         assert_eq!(parse_wifi_device(output).as_deref(), Some("en0"));
+    }
+
+    #[test]
+    fn finds_a_wired_lan_address_beside_wifi() {
+        let ports = r#"
+Hardware Port: Ethernet
+Device: en7
+Ethernet Address: 9c:69:d3:22:c1:a3
+
+Hardware Port: Wi-Fi
+Device: en0
+Ethernet Address: f4:d4:88:8e:e3:ea
+
+Hardware Port: Thunderbolt Bridge
+Device: bridge0
+"#;
+        let addresses = |device: &str| match device {
+            "en7" => Some("192.168.68.20".to_string()),
+            "en0" => Some("192.168.68.59".to_string()),
+            _ => None,
+        };
+
+        assert_eq!(
+            wired_lan_address(ports, addresses).as_deref(),
+            Some("192.168.68.20")
+        );
+        // Wi-Fi alone is not a wired connection, and a self-assigned
+        // address is no LAN
+        assert_eq!(
+            wired_lan_address(ports, |device| (device == "en0")
+                .then(|| "192.168.68.59".to_string())),
+            None
+        );
+        assert_eq!(
+            wired_lan_address(ports, |device| (device == "en7")
+                .then(|| "169.254.3.3".to_string())),
+            None
+        );
     }
 
     #[test]
