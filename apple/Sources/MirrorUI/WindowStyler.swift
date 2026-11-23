@@ -141,11 +141,6 @@ final class WindowStyler: NSObject {
         self.timer = timer
     }
 
-    var title: String {
-        get { titleLabel.stringValue }
-        set { titleLabel.stringValue = newValue }
-    }
-
     // The title bar: a rounded strip just above the phone, as wide as it
     private func makeBar(frame: NSRect) {
         bar.isReleasedWhenClosed = false
