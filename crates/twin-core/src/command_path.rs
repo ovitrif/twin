@@ -44,25 +44,34 @@ fn find_on_path(name: &str) -> Result<PathBuf> {
     bail!("{name} not found on PATH")
 }
 
+/// PATH for a tool Twin starts: `extra_dirs` (the adb Twin resolved), then
+/// the user's own PATH, so their toolchains and stubs win, then the standard
+/// locations a launchd PATH lacks
 pub(crate) fn path_env_with_tool_dirs(
     extra_dirs: impl IntoIterator<Item = PathBuf>,
 ) -> Option<OsString> {
+    join_tool_path(extra_dirs, env::var_os("PATH"), standard_dirs())
+}
+
+fn join_tool_path(
+    extra_dirs: impl IntoIterator<Item = PathBuf>,
+    user_path: Option<OsString>,
+    standard_dirs: impl IntoIterator<Item = PathBuf>,
+) -> Option<OsString> {
     let mut dirs = Vec::new();
 
-    for dir in extra_dirs.into_iter().chain(standard_dirs()) {
+    for dir in extra_dirs
+        .into_iter()
+        .chain(user_path.iter().flat_map(env::split_paths))
+        .chain(standard_dirs)
+    {
         push_unique_dir(&mut dirs, dir);
-    }
-
-    if let Some(path_var) = env::var_os("PATH") {
-        for dir in env::split_paths(&path_var) {
-            push_unique_dir(&mut dirs, dir);
-        }
     }
 
     env::join_paths(dirs).ok()
 }
 
-/// Common macOS install locations for adb, emulator, scrcpy and dmb, probed when PATH is the
+/// Common macOS and Linux install locations for adb, emulator, scrcpy and dmb, probed when PATH is the
 /// minimal launchd environment rather than the user's shell.
 fn standard_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
@@ -72,11 +81,7 @@ fn standard_dirs() -> Vec<PathBuf> {
     ];
 
     if let Some(home) = env::var_os("HOME") {
-        // Where twin installs itself
-        dirs.push(PathBuf::from(&home).join(".local/bin"));
-        dirs.extend(android_sdk_tool_dirs(
-            &PathBuf::from(home).join("Library/Android/sdk"),
-        ));
+        dirs.extend(home_tool_dirs(Path::new(&home)));
     }
 
     for var in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
@@ -85,6 +90,16 @@ fn standard_dirs() -> Vec<PathBuf> {
         }
     }
 
+    dirs
+}
+
+fn home_tool_dirs(home: &Path) -> Vec<PathBuf> {
+    // Where twin installs itself
+    let mut dirs = vec![home.join(".local/bin")];
+    // Android Studio's SDK: macOS, then Linux
+    for sdk in ["Library/Android/sdk", "Android/Sdk"] {
+        dirs.extend(android_sdk_tool_dirs(&home.join(sdk)));
+    }
     dirs
 }
 
@@ -131,6 +146,41 @@ mod tests {
         let dirs = standard_dirs();
         assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
         assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+    }
+
+    #[test]
+    fn user_path_comes_before_tool_dirs() {
+        let user_path = env::join_paths(["/home/me/bin", "/usr/bin"]).unwrap();
+        let joined = join_tool_path(
+            [PathBuf::from("/sdk/platform-tools")],
+            Some(user_path),
+            [
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/bin"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            env::split_paths(&joined).collect::<Vec<_>>(),
+            [
+                PathBuf::from("/sdk/platform-tools"),
+                PathBuf::from("/home/me/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/opt/homebrew/bin"),
+            ]
+        );
+    }
+
+    #[test]
+    fn home_dirs_include_the_macos_and_linux_android_sdks() {
+        let dirs = home_tool_dirs(Path::new("/home/me"));
+
+        assert!(dirs.contains(&PathBuf::from("/home/me/.local/bin")));
+        assert!(dirs.contains(&PathBuf::from(
+            "/home/me/Library/Android/sdk/platform-tools"
+        )));
+        assert!(dirs.contains(&PathBuf::from("/home/me/Android/Sdk/platform-tools")));
     }
 
     #[test]

@@ -74,12 +74,13 @@ fn pairing_instance_name() -> String {
 fn machine_name_candidates() -> Vec<String> {
     let mut candidates = Vec::new();
 
-    if let Some(name) = command_stdout("scutil", ["--get", "LocalHostName"]) {
-        candidates.push(name);
-    }
-
-    if let Some(name) = command_stdout("scutil", ["--get", "ComputerName"]) {
-        candidates.push(name);
+    // scutil is macOS only
+    if cfg!(target_os = "macos") {
+        for key in ["LocalHostName", "ComputerName"] {
+            if let Some(name) = command_stdout("scutil", ["--get", key]) {
+                candidates.push(name);
+            }
+        }
     }
 
     if let Some(name) = command_stdout("hostname", ["-s"]) {

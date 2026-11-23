@@ -149,7 +149,11 @@ impl Scrcpy {
     }
 
     fn update_hint(&self) -> &'static str {
-        "run `brew upgrade scrcpy`"
+        if cfg!(target_os = "macos") {
+            "run `brew upgrade scrcpy`"
+        } else {
+            "update scrcpy (https://github.com/Genymobile/scrcpy)"
+        }
     }
 
     pub fn launch(&self, serial: &str, options: &ScrcpyOptions) -> Result<()> {
