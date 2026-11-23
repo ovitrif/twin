@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import DMBCore
 @testable import MirrorUI
 
 @Test func aLineSplitAcrossChunksArrivesWhole() {

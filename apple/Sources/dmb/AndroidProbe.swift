@@ -96,8 +96,12 @@ func iphoneProbe(_ args: [String]) {
     process.standardOutput = output
     process.standardError = errors
     var screen = CGSize.zero
+    var lines = LineBuffer()
     errors.fileHandleForReading.readabilityHandler = { handle in
-        for line in String(decoding: handle.availableData, as: UTF8.self).split(separator: "\n") {
+        let data = handle.availableData
+        // At EOF the handler would run again at once, forever
+        guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+        for line in lines.append(data) {
             print("helper: \(line)")
             let parts = line.split(separator: " ")
             if parts.count == 3, parts[0] == "screen", let w = Double(parts[1]), let h = Double(parts[2]) {
@@ -110,7 +114,9 @@ func iphoneProbe(_ args: [String]) {
     var buffer = Data(), units = 0, done = false
     let deadline = Date().addingTimeInterval(15)
     while !done && Date() < deadline {
-        buffer.append(output.fileHandleForReading.availableData)
+        let chunk = output.fileHandleForReading.availableData
+        if chunk.isEmpty { break }  // dmb-hid ended
+        buffer.append(chunk)
         while buffer.count >= 4 {
             let length = buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
             guard buffer.count >= 4 + length else { break }
