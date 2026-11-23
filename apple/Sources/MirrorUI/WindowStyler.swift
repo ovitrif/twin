@@ -283,15 +283,23 @@ final class WindowStyler: NSObject {
             // Keep the bar while it drags the window
             let dragging = barShown && (NSEvent.pressedMouseButtons & 1) != 0
                 && (bar.contentView as? TitleBarView)?.dragging == true
-            let over = paneRects.firstIndex { $0.frame.contains(mouse) }
+            let rects = paneRects
+            let over = rects.firstIndex { $0.frame.contains(mouse) }
+            let activePane = rects.isEmpty ? window.frame : rects[min(barPane, rects.count - 1)].frame
             // Once up, the bar stays while the pointer is on it or crossing
-            // the gap down to the phone, with or without ⌘, so its lights
-            // can be clicked
-            let gap = NSRect(x: bar.frame.minX, y: bar.frame.minY - barGap, width: bar.frame.width, height: barGap)
-            // The gap counts only where no other app's window covers it
-            let gapOurs = NSApp.window(withWindowNumber: top) != nil
-            let overBar = barShown && ((bar.frame.contains(mouse) && top == bar.windowNumber)
-                || (gap.contains(mouse) && gapOurs))
+            // the gap (and rounded top-corner cutaway under the lights) down
+            // to the phone, with or without ⌘, so its lights can be clicked
+            let onBridge = barShown && Self.overBarBridge(
+                mouse: mouse,
+                barFrame: bar.frame,
+                parentFrame: activePane,
+                cornerRadius: radius(of: activePane),
+                top: top,
+                mirrorWindowNumber: window.windowNumber,
+                isOwnWindow: { NSApp.window(withWindowNumber: $0) != nil },
+                isAboveMirror: { self.isWindowAboveMirror($0) }
+            )
+            let overBar = barShown && ((bar.frame.contains(mouse) && top == bar.windowNumber) || onBridge)
             let command = NSEvent.modifierFlags.contains(.command)
             hovered = (onTop && over != nil && command) || overBar || dragging || forceBar || Date() < introUntil
             // The bar moves to the phone under the pointer
@@ -308,6 +316,32 @@ final class WindowStyler: NSObject {
             timer?.invalidate()
             timer = nil
         }
+    }
+
+    /// Whether the pointer is in the gap between a shown bar and the phone — or
+    /// in the phone's transparent top rounded-corner cutaway beneath the
+    /// traffic lights — with no window above the mirror covering that spot.
+    static func overBarBridge(mouse: NSPoint, barFrame: NSRect, parentFrame: NSRect,
+                              cornerRadius: CGFloat, top: Int, mirrorWindowNumber: Int,
+                              isOwnWindow: (Int) -> Bool,
+                              isAboveMirror: (Int) -> Bool) -> Bool {
+        let gap = NSRect(x: barFrame.minX, y: barFrame.minY - barGap,
+                         width: barFrame.width, height: barGap)
+        let cornerStrip = barFrame.minY >= parentFrame.maxY
+            ? NSRect(x: barFrame.minX, y: max(parentFrame.minY, parentFrame.maxY - cornerRadius),
+                     width: barFrame.width, height: min(cornerRadius, parentFrame.height))
+            : .zero
+        let inBridge = gap.contains(mouse)
+            || (cornerStrip.contains(mouse) && top != mirrorWindowNumber)
+        guard inBridge else { return false }
+        if top == 0 || isOwnWindow(top) { return true }
+        return !isAboveMirror(top)
+    }
+
+    private func isWindowAboveMirror(_ number: Int) -> Bool {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements],
+                                              CGWindowID(window.windowNumber)) as? [[String: Any]] ?? []
+        return list.contains { ($0[kCGWindowNumber as String] as? Int) == number }
     }
 
     /// Flashes the bar once the window is on screen
