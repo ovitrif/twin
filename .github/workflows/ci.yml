@@ -22,6 +22,10 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            apple/hid
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -34,6 +38,14 @@ jobs:
 
       - name: Unit tests
         run: cargo test
+
+      - name: Check dmb-hid
+        # apple/hid sits outside the workspace, so the steps above skip it
+        working-directory: apple/hid
+        run: |
+          cargo fmt -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
 
       - name: Mirror tests
         run: cd apple && swift test

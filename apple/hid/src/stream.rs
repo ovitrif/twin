@@ -31,8 +31,14 @@ pub async fn start(
     let mut client = DisplayServiceClient::connect_rsd(adapter, handshake)
         .await
         .map_err(|e| format!("no display service: {e:?}"))?;
-    let audio_udp = adapter.bind_udp(0).await.map_err(|e| format!("bind audio: {e:?}"))?;
-    let video_udp = adapter.bind_udp(0).await.map_err(|e| format!("bind video: {e:?}"))?;
+    let audio_udp = adapter
+        .bind_udp(0)
+        .await
+        .map_err(|e| format!("bind audio: {e:?}"))?;
+    let video_udp = adapter
+        .bind_udp(0)
+        .await
+        .map_err(|e| format!("bind video: {e:?}"))?;
     let receiver_ip = adapter.host_ip().to_string();
     let sender_ip = adapter.peer_ip().to_string();
     let call_info = CallInfoBlob {
@@ -51,8 +57,13 @@ pub async fn start(
         .map_err(|e| format!("audio offer: {e:?}"))?;
     client
         .start_media_stream(build_start_audio_parameters(
-            &receiver_ip, audio_udp.local_port(), &sender_ip, 50000, audio_offer,
-            CLIENT_SUPPORTED_FEATURES, session,
+            &receiver_ip,
+            audio_udp.local_port(),
+            &sender_ip,
+            50000,
+            audio_offer,
+            CLIENT_SUPPORTED_FEATURES,
+            session,
         ))
         .await
         .map_err(|e| format!("audio stream: {e:?}"))?;
@@ -62,10 +73,21 @@ pub async fn start(
         .map_err(|e| format!("video offer: {e:?}"))?;
     client
         .start_media_stream(build_start_video_parameters(
-            &receiver_ip, video_udp.local_port(), &sender_ip, 50001, video_offer,
-            CLIENT_SUPPORTED_FEATURES, 1, session,
+            &receiver_ip,
+            video_udp.local_port(),
+            &sender_ip,
+            50001,
+            video_offer,
+            CLIENT_SUPPORTED_FEATURES,
+            1,
+            session,
         ))
         .await
         .map_err(|e| format!("video stream: {e:?}"))?;
-    Ok(ScreenMediaStream { client, audio_udp, video_udp, ssrc })
+    Ok(ScreenMediaStream {
+        client,
+        audio_udp,
+        video_udp,
+        ssrc,
+    })
 }
