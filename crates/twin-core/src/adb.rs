@@ -19,9 +19,14 @@ const ADB_DEVICES_TIMEOUT: Duration = Duration::from_secs(5);
 const ADB_MDNS_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const ADB_PAIR_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const ADB_SHELL_TIMEOUT: Duration = Duration::from_secs(8);
+/// The state `adb devices` shows on Linux without udev rules for the phone
+const NO_PERMISSIONS: &str = "no permissions";
 
 /// The adb Twin.app ships, from Google's platform-tools
 const BUNDLED_ADB: &str = "Contents/Helpers/platform-tools/adb";
+
+/// Where `uiautomator dump` writes when it cannot print to the terminal
+const UI_DUMP_PATH: &str = "/sdcard/twin-window.xml";
 
 #[derive(Debug, Clone)]
 pub struct Adb {
@@ -308,24 +313,40 @@ impl Adb {
             return Ok(direct_text);
         }
 
-        ensure_success(
+        // The file sits on shared storage: never read a stale dump, and never
+        // leave the screen's text behind
+        let remove_dump = || {
+            let _ = self.run(["-s", serial, "shell", "rm", "-f", UI_DUMP_PATH]);
+        };
+        remove_dump();
+        let hierarchy = self.dump_ui_hierarchy_to_file(serial);
+        remove_dump();
+        hierarchy
+    }
+
+    fn dump_ui_hierarchy_to_file(&self, serial: &str) -> Result<String> {
+        let dump_output = ensure_success(
             "adb shell uiautomator dump",
-            self.run([
-                "-s",
-                serial,
-                "shell",
-                "uiautomator",
-                "dump",
-                "/sdcard/twin-window.xml",
-            ])?,
+            self.run(["-s", serial, "shell", "uiautomator", "dump", UI_DUMP_PATH])?,
         )?;
+        let dump_text = dump_output.combined_output();
+        if ui_dump_failed(&dump_text) {
+            bail!("adb shell uiautomator dump failed: {dump_text}");
+        }
 
         let cat_output = ensure_success(
-            "adb exec-out cat /sdcard/twin-window.xml",
-            self.run(["-s", serial, "exec-out", "cat", "/sdcard/twin-window.xml"])?,
+            "adb exec-out cat",
+            self.run(["-s", serial, "exec-out", "cat", UI_DUMP_PATH])?,
         )?;
+        let hierarchy = cat_output.combined_output();
+        if !hierarchy.contains("<hierarchy") {
+            bail!(
+                "uiautomator did not write a screen hierarchy: {}",
+                fallback_message(&hierarchy)
+            );
+        }
 
-        Ok(cat_output.combined_output())
+        Ok(hierarchy)
     }
 
     fn run<I, S>(&self, args: I) -> Result<CommandResult>
@@ -569,10 +590,14 @@ pub fn pairing_error_is_retryable(message: &str) -> bool {
     .any(|needle| message.contains(needle))
 }
 
+/// The host of `host:port`; a serial with no numeric port (`usb:1-1`,
+/// `R5CT123ABC`) is its own host
 pub fn endpoint_host(endpoint: &str) -> String {
     let endpoint = endpoint.trim();
 
-    if let Some((host, _port)) = endpoint.rsplit_once(':') {
+    if let Some((host, port)) = endpoint.rsplit_once(':')
+        && port.parse::<u16>().is_ok()
+    {
         return host
             .trim_start_matches('[')
             .trim_end_matches(']')
@@ -624,6 +649,7 @@ pub fn connect_service_serial(service: &MdnsService) -> String {
 pub fn normalize_mdns_serial(serial: &str) -> String {
     serial
         .trim()
+        .trim_end_matches('.')
         .trim_end_matches(".local")
         .trim_end_matches('.')
         .to_string()
@@ -669,16 +695,24 @@ pub fn parse_devices(output: &str) -> Vec<AdbDevice> {
                 return None;
             }
 
-            let mut parts = line.split_whitespace();
-            let serial = parts.next()?.to_string();
-            let state = DeviceState::from_adb(parts.next()?);
+            let serial = line.split_whitespace().next()?;
+            let rest = line[serial.len()..].trim_start();
+            let serial = serial.to_string();
+            // Linux without udev rules: "no permissions (user in plugdev
+            // group; are your udev rules wrong?); see [...] usb:1-1"
+            let (state, details) = if rest.starts_with(NO_PERMISSIONS) {
+                (DeviceState::Other(NO_PERMISSIONS.to_string()), rest)
+            } else {
+                let state = rest.split_whitespace().next()?;
+                (DeviceState::from_adb(state), &rest[state.len()..])
+            };
 
             let mut product = None;
             let mut model = None;
             let mut device = None;
             let mut transport_id = None;
 
-            for token in parts {
+            for token in details.split_whitespace() {
                 if let Some(value) = token.strip_prefix("product:") {
                     product = Some(value.to_string());
                 } else if let Some(value) = token.strip_prefix("model:") {
@@ -712,10 +746,22 @@ pub fn parse_mdns_services(output: &str) -> Vec<MdnsService> {
                 return None;
             }
 
-            let mut parts = line.split_whitespace();
-            let instance = parts.next()?.to_string();
-            let service_type = normalize_service_type(parts.next()?);
-            let address = parts.next()?.to_string();
+            // adb separates the columns with tabs, and an instance name can
+            // hold spaces; older output used spaces only
+            let parts: Vec<&str> = if line.contains('\t') {
+                line.split('\t')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .collect()
+            } else {
+                line.split_whitespace().collect()
+            };
+            let [instance, service_type, address, ..] = parts[..] else {
+                return None;
+            };
+            let instance = instance.to_string();
+            let service_type = normalize_service_type(service_type);
+            let address = address.to_string();
 
             Some(MdnsService {
                 instance,
@@ -747,6 +793,11 @@ fn ensure_success(command: &str, output: CommandResult) -> Result<CommandResult>
         "{command} failed: {}",
         fallback_message(&output.combined_output())
     )
+}
+
+/// uiautomator reports some failures with exit 0 and an `ERROR:` line
+fn ui_dump_failed(output: &str) -> bool {
+    output.contains("ERROR:")
 }
 
 fn output_looks_failed(output: &str) -> bool {
@@ -944,8 +995,123 @@ ignored _printer._tcp 192.168.1.10:1234
 
     #[test]
     fn extracts_endpoint_host() {
-        assert_eq!(endpoint_host("192.168.1.23:40233"), "192.168.1.23");
-        assert_eq!(endpoint_host("[fe80::1]:40233"), "fe80::1");
+        for (endpoint, host) in [
+            ("192.168.1.23:40233", "192.168.1.23"),
+            ("[fe80::1]:40233", "fe80::1"),
+            ("usb:1-1", "usb:1-1"),
+            ("R5CT123ABC", "R5CT123ABC"),
+            ("emulator-5554", "emulator-5554"),
+            ("pixel.local:37197", "pixel.local"),
+        ] {
+            assert_eq!(endpoint_host(endpoint), host, "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn normalizes_mdns_serials() {
+        for serial in [
+            "adb-XYZ._adb-tls-connect._tcp",
+            "adb-XYZ._adb-tls-connect._tcp.",
+            "adb-XYZ._adb-tls-connect._tcp.local",
+            "adb-XYZ._adb-tls-connect._tcp.local.",
+        ] {
+            assert_eq!(
+                normalize_mdns_serial(serial),
+                "adb-XYZ._adb-tls-connect._tcp",
+                "{serial}"
+            );
+            assert!(is_mdns_wireless_serial(serial), "{serial}");
+        }
+    }
+
+    #[test]
+    fn parses_tab_separated_mdns_services_with_spaces_in_names() {
+        let services = parse_mdns_services(
+            "List of discovered mdns services\n\
+             Studio Pixel 10\t_adb-tls-pairing._tcp\t192.168.1.23:37199\n\
+             adb-XYZ-QXjCrW\t_adb-tls-connect._tcp.\t192.168.1.23:40233\n\
+             broken\t_adb-tls-connect._tcp\n",
+        );
+
+        assert_eq!(
+            services,
+            vec![
+                MdnsService {
+                    instance: "Studio Pixel 10".to_string(),
+                    service_type: PAIRING_SERVICE_TYPE.to_string(),
+                    address: "192.168.1.23:37199".to_string(),
+                },
+                MdnsService {
+                    instance: "adb-XYZ-QXjCrW".to_string(),
+                    service_type: CONNECT_SERVICE_TYPE.to_string(),
+                    address: "192.168.1.23:40233".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_linux_no_permissions_devices() {
+        let devices = parse_devices(
+            "List of devices attached\n\
+             0A1B2C3D4E\tno permissions (missing udev rules? user is in the plugdev group); see [http://developer.android.com/tools/device.html] usb:3-4 transport_id:2\n",
+        );
+
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].serial, "0A1B2C3D4E");
+        assert_eq!(
+            devices[0].state,
+            DeviceState::Other("no permissions".to_string())
+        );
+        assert_eq!(devices[0].transport_id.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn flags_uiautomator_errors_reported_with_exit_zero() {
+        assert!(ui_dump_failed(
+            "ERROR: null root node returned by UiTestAutomationBridge."
+        ));
+        assert!(!ui_dump_failed(
+            "UI hierchary dumped to: /sdcard/twin-window.xml"
+        ));
+    }
+
+    /// Random adb-like lines never panic the parsers
+    #[test]
+    fn parsers_survive_generated_input() {
+        use rand::{Rng, SeedableRng};
+
+        let pieces = [
+            "List of devices attached",
+            "device",
+            "offline",
+            "no permissions",
+            "usb:1-1",
+            "model:Pixel_8",
+            "_adb-tls-connect._tcp",
+            "_adb-tls-pairing._tcp.",
+            "192.168.1.5:5555",
+            "[fe80::1]:5",
+            ":",
+            ".local.",
+            "\t",
+            " ",
+            "\n",
+            "é",
+            "",
+            "transport_id:",
+        ];
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        for _ in 0..2_000 {
+            let input: String = (0..rng.gen_range(0..12))
+                .map(|_| pieces[rng.gen_range(0..pieces.len())])
+                .collect();
+            let _ = parse_devices(&input);
+            let _ = parse_mdns_services(&input);
+            let _ = endpoint_host(&input);
+            let _ = normalize_mdns_serial(&input);
+            let _ = connect_serial_from_output(&input);
+        }
     }
 
     #[test]
