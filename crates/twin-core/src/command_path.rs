@@ -44,27 +44,25 @@ fn find_on_path(name: &str) -> Result<PathBuf> {
     bail!("{name} not found on PATH")
 }
 
-/// PATH for a tool Twin starts: `extra_dirs` (the adb Twin resolved), then
-/// the user's own PATH, so their toolchains and stubs win, then the standard
-/// locations a launchd PATH lacks
+/// PATH for a tool Twin starts: the user's own PATH first, so their
+/// toolchains and stubs win, then `extra_dirs` and the standard locations a
+/// launchd PATH lacks. The adb Twin resolved reaches scrcpy through `ADB`.
 pub(crate) fn path_env_with_tool_dirs(
     extra_dirs: impl IntoIterator<Item = PathBuf>,
 ) -> Option<OsString> {
-    join_tool_path(extra_dirs, env::var_os("PATH"), standard_dirs())
+    join_tool_path(
+        env::var_os("PATH"),
+        extra_dirs.into_iter().chain(standard_dirs()),
+    )
 }
 
 fn join_tool_path(
-    extra_dirs: impl IntoIterator<Item = PathBuf>,
     user_path: Option<OsString>,
-    standard_dirs: impl IntoIterator<Item = PathBuf>,
+    tool_dirs: impl IntoIterator<Item = PathBuf>,
 ) -> Option<OsString> {
     let mut dirs = Vec::new();
 
-    for dir in extra_dirs
-        .into_iter()
-        .chain(user_path.iter().flat_map(env::split_paths))
-        .chain(standard_dirs)
-    {
+    for dir in user_path.iter().flat_map(env::split_paths).chain(tool_dirs) {
         push_unique_dir(&mut dirs, dir);
     }
 
@@ -152,9 +150,9 @@ mod tests {
     fn user_path_comes_before_tool_dirs() {
         let user_path = env::join_paths(["/home/me/bin", "/usr/bin"]).unwrap();
         let joined = join_tool_path(
-            [PathBuf::from("/sdk/platform-tools")],
             Some(user_path),
             [
+                PathBuf::from("/sdk/platform-tools"),
                 PathBuf::from("/opt/homebrew/bin"),
                 PathBuf::from("/usr/bin"),
             ],
@@ -164,9 +162,9 @@ mod tests {
         assert_eq!(
             env::split_paths(&joined).collect::<Vec<_>>(),
             [
-                PathBuf::from("/sdk/platform-tools"),
                 PathBuf::from("/home/me/bin"),
                 PathBuf::from("/usr/bin"),
+                PathBuf::from("/sdk/platform-tools"),
                 PathBuf::from("/opt/homebrew/bin"),
             ]
         );

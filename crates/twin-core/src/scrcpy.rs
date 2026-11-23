@@ -543,7 +543,11 @@ mod tests {
         let path_dirs: Vec<_> = std::env::split_paths(path_env).collect();
 
         assert_eq!(adb_env, adb_path.as_os_str());
-        assert_eq!(path_dirs.first().map(PathBuf::as_path), adb_path.parent());
+        assert!(
+            path_dirs
+                .iter()
+                .any(|dir| Some(dir.as_path()) == adb_path.parent())
+        );
     }
 
     #[test]
