@@ -2883,7 +2883,10 @@ impl App {
             kit::card(ui, |ui| {
                 if let Some((android, iphone)) = pair {
                     let iphone_key = backend::iphone_mirror_key(iphone);
-                    let paired = pair_keys.contains(&android.mirror_key);
+                    // Each phone is in the open pair on its own: the pair
+                    // can hold this Android with another iPhone, or neither
+                    let android_paired = pair_keys.contains(&android.mirror_key);
+                    let iphone_paired = pair_keys.contains(&iphone_key);
                     let android_mirroring = mirrors.contains(&android.mirror_key);
                     let iphone_mirroring = mirrors.contains(&iphone_key);
                     // An open pair shows as one to stop, whichever phones
@@ -2935,8 +2938,14 @@ impl App {
                     phones_block(ui, |ui| {
                         // In an open pair, a phone's button hides or shows
                         // its side of the window
-                        if android_phone_row(ui, android, android_mirroring, scrcpy_ok, paired) {
-                            if paired {
+                        if android_phone_row(
+                            ui,
+                            android,
+                            android_mirroring,
+                            scrcpy_ok,
+                            android_paired,
+                        ) {
+                            if android_paired {
                                 backend::set_pair_pane(shared, 0, !android_mirroring);
                             } else if android_mirroring {
                                 backend::stop_mirror(shared, &android.mirror_key);
@@ -2951,8 +2960,8 @@ impl App {
                             }
                         }
                         ui.add_space(16.0);
-                        if iphone_phone_row(ui, iphone, iphone_mirroring, paired) {
-                            if paired {
+                        if iphone_phone_row(ui, iphone, iphone_mirroring, iphone_paired) {
+                            if iphone_paired {
                                 backend::set_pair_pane(shared, 1, !iphone_mirroring);
                             } else if iphone_mirroring {
                                 backend::stop_mirror(shared, &iphone_key);
