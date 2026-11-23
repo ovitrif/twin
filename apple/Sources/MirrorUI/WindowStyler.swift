@@ -86,6 +86,7 @@ final class WindowStyler: NSObject {
     private var lights: [NSButton] = []
     private let titleLabel: NSTextField
     private var timer: Timer?
+    private var monitor: Any?
     private var barShown = false
     /// The bar shows for a moment when the window opens, so it can be found
     private var introUntil = Date.distantPast
@@ -113,8 +114,28 @@ final class WindowStyler: NSObject {
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
             center.addObserver(self, selector: #selector(updateLights), name: name, object: window)
         }
-        // Poll the pointer so the bar follows it over a covered window too.
-        // It runs in the common modes so it keeps firing during a drag.
+        // A drag to the screen's top moves the bar over the phone
+        center.addObserver(self, selector: #selector(windowMoved), name: NSWindow.didMoveNotification, object: window)
+        // The pointer reaching the window, or ⌘, starts the polling below
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .mouseEntered, .flagsChanged]) {
+            [weak self] event in
+            self?.startPolling()
+            return event
+        }
+        startPolling()
+    }
+
+    deinit {
+        timer?.invalidate()
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    /// Polls the pointer so the bar follows it over a covered window too,
+    /// only while the pointer is near the window or the bar is up. It runs
+    /// in the common modes so it keeps firing during a drag.
+    private func startPolling() {
+        guard timer == nil else { return }
         let timer = Timer(timeInterval: hoverPollInterval, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -190,8 +211,9 @@ final class WindowStyler: NSObject {
 
     // Fit the bar to the hovered phone's width, just above it; against the
     // top of the screen there is no room, so it lies over the phone's top
-    private func layoutBar() {
+    func layoutBar() {
         let rects = paneRects
+        guard !rects.isEmpty else { return }
         let pane = rects[min(barPane, rects.count - 1)]
         let parent = pane.frame
         if panes != nil { titleLabel.stringValue = pane.title }
@@ -233,6 +255,11 @@ final class WindowStyler: NSObject {
     @objc private func windowChanged() {
         applyStyle()
         if barShown { layoutBar() }
+        startPolling()
+    }
+
+    @objc private func windowMoved() {
+        if barShown { layoutBar() }
     }
 
     // Colored while the mirror window is active, gray otherwise, like AppKit's
@@ -266,7 +293,10 @@ final class WindowStyler: NSObject {
             // the gap down to the phone, with or without ⌘, so its lights
             // can be clicked
             let gap = NSRect(x: bar.frame.minX, y: bar.frame.minY - barGap, width: bar.frame.width, height: barGap)
-            let overBar = barShown && ((bar.frame.contains(mouse) && top == bar.windowNumber) || gap.contains(mouse))
+            // The gap counts only where no other app's window covers it
+            let gapOurs = NSApp.window(withWindowNumber: top) != nil
+            let overBar = barShown && ((bar.frame.contains(mouse) && top == bar.windowNumber)
+                || (gap.contains(mouse) && gapOurs))
             let command = NSEvent.modifierFlags.contains(.command)
             hovered = (onTop && over != nil && command) || overBar || dragging || forceBar || Date() < introUntil
             // The bar moves to the phone under the pointer
@@ -277,11 +307,18 @@ final class WindowStyler: NSObject {
         }
         if barShown && bar.level != window.level { bar.level = window.level }
         if hovered && !barShown { showBar() } else if !hovered && barShown { hideBar() }
+        // Idle once the pointer is away from the window and its bar
+        let reach = window.frame.union(window.frame.offsetBy(dx: 0, dy: titleBarHeight + barGap))
+        if !hovered, !barShown, !reach.contains(NSEvent.mouseLocation) {
+            timer?.invalidate()
+            timer = nil
+        }
     }
 
     /// Flashes the bar once the window is on screen
     func introduceBar(for seconds: TimeInterval = 1.5) {
         introUntil = Date().addingTimeInterval(seconds)
+        startPolling()
     }
 
     private func showBar() {
