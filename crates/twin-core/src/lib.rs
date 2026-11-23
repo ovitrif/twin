@@ -6,6 +6,7 @@ pub mod dnssd;
 pub mod emulator;
 pub mod pairing;
 pub mod pairing_flow;
+mod process;
 pub mod qr;
 pub mod scrcpy;
 pub mod simulator;

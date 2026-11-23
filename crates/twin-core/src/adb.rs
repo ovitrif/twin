@@ -4,11 +4,12 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use crate::command_path::resolve_program;
+use crate::process::{Waited, wait_with_timeout};
 
 const PAIRING_SERVICE_TYPE: &str = "_adb-tls-pairing._tcp";
 const CONNECT_SERVICE_TYPE: &str = "_adb-tls-connect._tcp";
@@ -345,37 +346,22 @@ impl Adb {
             .map(|arg| arg.as_ref().to_os_string())
             .collect();
         let command_display = command_display(&self.path, &args);
-        let mut child = Command::new(&self.path)
+        let child = Command::new(&self.path)
             .args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("failed to run {}", self.path.display()))?;
 
-        let deadline = Instant::now() + timeout;
-
-        loop {
-            if child
-                .try_wait()
-                .with_context(|| format!("failed to poll {command_display}"))?
-                .is_some()
-            {
-                let output = child
-                    .wait_with_output()
-                    .with_context(|| format!("failed to read {command_display} output"))?;
-
-                return Ok(CommandResult {
-                    status: output.status,
-                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-                });
-            }
-
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let output = child
-                    .wait_with_output()
-                    .with_context(|| format!("failed to stop timed-out {command_display}"))?;
+        match wait_with_timeout(child, timeout)
+            .with_context(|| format!("failed to wait for {command_display}"))?
+        {
+            Waited::Exited(output) => Ok(CommandResult {
+                status: output.status,
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }),
+            Waited::TimedOut(output) => {
                 let combined = String::from_utf8_lossy(&output.stderr);
 
                 bail!(
@@ -384,8 +370,6 @@ impl Adb {
                     timeout_hint(&combined)
                 );
             }
-
-            thread::sleep(Duration::from_millis(25));
         }
     }
 }
@@ -813,6 +797,20 @@ fn summarize_wifi_status(output: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn times_out_even_when_a_grandchild_holds_the_pipes() {
+        let adb = Adb::from_resolved_path(PathBuf::from("/bin/sh"));
+        let started = std::time::Instant::now();
+        // `; :` makes sh fork, so the sleep outlives the killed sh
+        let error = adb
+            .run_with_timeout(["-c", "sleep 5; :"], Duration::from_millis(300))
+            .expect_err("a sleeping child should time out");
+
+        assert!(format!("{error:#}").contains("/bin/sh -c sleep 5; : timed out after 0 seconds"));
+        assert!(started.elapsed() < Duration::from_millis(1500));
+    }
 
     #[test]
     fn parses_adb_devices() {

@@ -1,13 +1,13 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use crate::adb::Adb;
 use crate::command_path::{path_env_with_tool_dirs, resolve_program};
+use crate::process::{Waited, wait_with_timeout};
 
 pub const DEFAULT_WINDOW_WIDTH: u32 = 480;
 pub const DEFAULT_WINDOW_HEIGHT: u32 = 1_071;
@@ -234,34 +234,17 @@ impl Scrcpy {
         let command_display = format!("{} {arg}", self.path.display());
         let mut command = self.metadata_command(arg);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = command
+        let child = command
             .spawn()
             .with_context(|| format!("failed to run {command_display}"))?;
-        let deadline = Instant::now() + timeout;
-
-        loop {
-            if child
-                .try_wait()
-                .with_context(|| format!("failed to poll {command_display}"))?
-                .is_some()
-            {
-                return child
-                    .wait_with_output()
-                    .with_context(|| format!("failed to read {command_display} output"));
-            }
-
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                child
-                    .wait()
-                    .with_context(|| format!("failed to reap timed-out {command_display}"))?;
-                bail!(
-                    "{command_display} timed out after {} seconds",
-                    timeout.as_secs_f32()
-                );
-            }
-
-            thread::sleep(Duration::from_millis(25));
+        match wait_with_timeout(child, timeout)
+            .with_context(|| format!("failed to wait for {command_display}"))?
+        {
+            Waited::Exited(output) => Ok(output),
+            Waited::TimedOut(_) => bail!(
+                "{command_display} timed out after {} seconds",
+                timeout.as_secs_f32()
+            ),
         }
     }
 
@@ -602,7 +585,7 @@ mod tests {
     fn metadata_commands_time_out_and_reap_the_process() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)

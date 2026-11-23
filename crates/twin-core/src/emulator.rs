@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use crate::command_path::resolve_program;
+use crate::process::{Waited, wait_with_timeout};
 
 const EMULATOR_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 const AVD_REMOVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -115,31 +115,16 @@ pub(crate) fn output_with_timeout(
     action: &str,
 ) -> Result<Output> {
     let program = command.get_program().to_string_lossy().into_owned();
-    let mut child = command
+    let child = command
         .spawn()
         .with_context(|| format!("failed to run {program}"))?;
-    let deadline = Instant::now() + timeout;
-
-    loop {
-        if child
-            .try_wait()
-            .with_context(|| format!("failed to poll {program}"))?
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .with_context(|| format!("failed to read {program} output"));
+    match wait_with_timeout(child, timeout)
+        .with_context(|| format!("failed to wait for {program}"))?
+    {
+        Waited::Exited(output) => Ok(output),
+        Waited::TimedOut(_) => {
+            bail!("{action} timed out after {} seconds", timeout.as_secs_f32())
         }
-
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            child
-                .wait()
-                .with_context(|| format!("failed to stop timed-out {program}"))?;
-            bail!("{action} timed out after {} seconds", timeout.as_secs_f32());
-        }
-
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -155,6 +140,24 @@ fn parse_avds(output: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_output_larger_than_the_pipe_buffer() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "head -c 200000 /dev/zero | tr '\\0' a"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = std::time::Instant::now();
+        let output = output_with_timeout(command, Duration::from_secs(5), "chatty")
+            .expect("a chatty child should finish before the timeout");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 200_000);
+        assert!(output.stdout.iter().all(|&byte| byte == b'a'));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[cfg(unix)]
     #[test]
