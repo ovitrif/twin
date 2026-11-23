@@ -2973,6 +2973,7 @@ impl App {
                                     settings.window_height,
                                     &settings.iphone_title,
                                     settings.touch_pointer,
+                                    settings.always_on_top,
                                 );
                             }
                         }
@@ -3025,6 +3026,7 @@ impl App {
                                         settings.window_height,
                                         &settings.iphone_title,
                                         settings.touch_pointer,
+                                        settings.always_on_top,
                                     );
                                 }
                             }

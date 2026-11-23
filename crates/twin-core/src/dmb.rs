@@ -77,12 +77,16 @@ impl Dmb {
         height: u32,
         title: &str,
         touch_pointer: bool,
+        on_top: bool,
     ) -> Result<Child> {
         let mut command = Command::new(&self.path);
         command.args(["mirror", "--wait", "--udid", udid]);
         add_window_args(&mut command, height, touch_pointer);
         if !title.is_empty() {
             command.args(["--title", title]);
+        }
+        if on_top {
+            command.arg("--on-top");
         }
         Self::spawn(command)
     }

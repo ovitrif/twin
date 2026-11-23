@@ -932,6 +932,7 @@ pub fn start_iphone_mirror(
     height: u32,
     title: &str,
     touch_pointer: bool,
+    on_top: bool,
 ) {
     let mirror_key = iphone_mirror_key(&iphone);
     let mut state = shared.lock().unwrap();
@@ -941,7 +942,7 @@ pub fn start_iphone_mirror(
         return;
     }
     match Dmb::resolve()
-        .and_then(|dmb| dmb.spawn_mirror(&iphone.udid, height, title, touch_pointer))
+        .and_then(|dmb| dmb.spawn_mirror(&iphone.udid, height, title, touch_pointer, on_top))
     {
         Ok(mut child) => {
             state.log(format!("Mirroring {} (pid {})", iphone.name, child.id()));
