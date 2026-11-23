@@ -428,6 +428,8 @@ where
 
     loop {
         let mut screen_checked = false;
+        // What adb connect tried in this round, for Bonjour not to repeat
+        let mut tried_this_round = HashSet::new();
 
         delegate.on_event(PairingEvent::Progress(
             PairingProgress::new(
@@ -518,7 +520,7 @@ where
                 adb,
                 pairing_address,
                 baseline_devices,
-                &reported_failed_connects,
+                &tried_this_round,
                 timeout,
                 delegate,
             )?
@@ -535,6 +537,7 @@ where
             }
 
             attempt += 1;
+            tried_this_round.insert(service.address.clone());
             delegate.on_event(PairingEvent::Progress(
                 PairingProgress::new(
                     PairingProgressKind::Connecting,
@@ -607,7 +610,7 @@ where
                     adb,
                     pairing_address,
                     baseline_devices,
-                    &reported_failed_connects,
+                    &tried_this_round,
                     timeout,
                     delegate,
                 )?
