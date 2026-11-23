@@ -54,11 +54,15 @@ impl Simctl {
             .args(["list", "devices", "booted", "-j"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         // A wedged CoreSimulator service must not hold up the device list
         let output = output_with_timeout(command, LIST_TIMEOUT, "simctl list")?;
         if !output.status.success() {
-            bail!("simctl list failed (exit {})", output.status);
+            bail!(
+                "simctl list failed (exit {}){}",
+                output.status,
+                stderr_detail(&output.stderr)
+            );
         }
         parse_booted(&String::from_utf8_lossy(&output.stdout))
     }
@@ -69,12 +73,27 @@ impl Simctl {
             .args(["shutdown", udid])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         let output = output_with_timeout(command, SHUTDOWN_TIMEOUT, "simctl shutdown")?;
         if !output.status.success() {
-            bail!("simctl shutdown {udid} failed (exit {})", output.status);
+            bail!(
+                "simctl shutdown {udid} failed (exit {}){}",
+                output.status,
+                stderr_detail(&output.stderr)
+            );
         }
         Ok(())
+    }
+}
+
+/// simctl's own explanation, for an error message: ": <stderr>" or nothing
+fn stderr_detail(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        String::new()
+    } else {
+        format!(": {stderr}")
     }
 }
 
@@ -122,6 +141,15 @@ fn runtime_label(identifier: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn errors_carry_simctl_stderr() {
+        assert_eq!(
+            stderr_detail(b"Invalid device: NOPE\n"),
+            ": Invalid device: NOPE"
+        );
+        assert_eq!(stderr_detail(b"  \n"), "");
+    }
 
     #[test]
     fn lists_booted_ios_simulators_only() {

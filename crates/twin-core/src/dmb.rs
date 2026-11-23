@@ -39,7 +39,7 @@ impl Dmb {
     /// `TWIN_DMB` (tests and demos), else the dmb inside Twin.app's mirror,
     /// else one on PATH (a dev build)
     pub fn resolve() -> Result<Self> {
-        let path = match std::env::var_os("TWIN_DMB").map(PathBuf::from) {
+        let path = match dmb_override(std::env::var_os("TWIN_DMB")) {
             Some(path) => path,
             None => match bundle::find(BUNDLED_DMB) {
                 Some(path) => path,
@@ -202,6 +202,11 @@ fn add_window_args(command: &mut Command, height: u32, touch_pointer: bool) {
     }
 }
 
+/// `TWIN_DMB` as a path; set but empty counts as unset
+fn dmb_override(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
 pub fn parse_status(json: &str) -> Result<Vec<Iphone>> {
     Ok(serde_json::from_str::<Status>(json)
         .context("reading dmb status")?
@@ -226,6 +231,16 @@ mod tests {
             command
                 .get_envs()
                 .any(|(key, value)| key == "ADB" && value == Some("/opt/twin/adb".as_ref()))
+        );
+    }
+
+    #[test]
+    fn ignores_an_empty_twin_dmb() {
+        assert_eq!(dmb_override(Some("".into())), None);
+        assert_eq!(dmb_override(None), None);
+        assert_eq!(
+            dmb_override(Some("/tmp/dmb".into())),
+            Some(PathBuf::from("/tmp/dmb"))
         );
     }
 
