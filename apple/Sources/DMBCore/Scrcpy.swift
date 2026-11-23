@@ -265,13 +265,33 @@ public final class ScrcpySession {
         }
     }
 
-    /// adb next to an Android SDK, on PATH, or where Homebrew puts it
+    /// adb from ADB, on PATH, bundled with Twin, next to an Android SDK, or
+    /// where Homebrew puts it
     public static func findADB() -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        var candidates = [ProcessInfo.processInfo.environment["ADB"]].compactMap { $0 }
-        candidates += (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { "\($0)/adb" }
-        candidates += ["\(home)/Library/Android/sdk/platform-tools/adb", "/opt/homebrew/bin/adb", "/usr/local/bin/adb"]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+        let executable = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        return adbCandidates(environment: ProcessInfo.processInfo.environment,
+                             executable: executable.resolvingSymlinksInPath(),
+                             home: FileManager.default.homeDirectoryForCurrentUser.path)
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Where `findADB` looks, in order. Twin bundles adb in
+    /// Twin.app/Contents/Helpers/platform-tools: the app this binary runs
+    /// inside (Twin Mirror.app and dmb sit within it), then the installed one.
+    static func adbCandidates(environment: [String: String], executable: URL, home: String) -> [String] {
+        var candidates = [environment["ADB"]].compactMap { $0 }
+        candidates += (environment["PATH"] ?? "").split(separator: ":").map { "\($0)/adb" }
+        var dir = executable.deletingLastPathComponent()
+        while dir.pathComponents.count > 1 {
+            if dir.pathExtension == "app" {
+                candidates.append(dir.appendingPathComponent("Contents/Helpers/platform-tools/adb").path)
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        candidates += ["/Applications/Twin.app/Contents/Helpers/platform-tools/adb",
+                       "\(home)/Applications/Twin.app/Contents/Helpers/platform-tools/adb",
+                       "\(home)/Library/Android/sdk/platform-tools/adb", "/opt/homebrew/bin/adb", "/usr/local/bin/adb"]
+        return candidates
     }
 
     @discardableResult

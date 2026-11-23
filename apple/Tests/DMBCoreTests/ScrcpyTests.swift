@@ -84,3 +84,14 @@ import Testing
     #expect(open == true)
     #expect(box.use { $0 } == nil)
 }
+
+@Test func findsTheAdbBundledWithTwin() {
+    let mirror = URL(fileURLWithPath: "/Users/me/Applications/Twin.app/Contents/Helpers/Twin Mirror.app/Contents/MacOS/Twin")
+    let candidates = ScrcpySession.adbCandidates(environment: ["ADB": "/x/adb", "PATH": "/bin"], executable: mirror,
+                                                 home: "/Users/me")
+    #expect(Array(candidates.prefix(2)) == ["/x/adb", "/bin/adb"])
+    // The app it runs in comes before the installed ones, and the outer Twin.app holds adb
+    let bundled = "/Users/me/Applications/Twin.app/Contents/Helpers/platform-tools/adb"
+    #expect(candidates.firstIndex(of: bundled)! < candidates.firstIndex(of: "/Applications/Twin.app/Contents/Helpers/platform-tools/adb")!)
+    #expect(candidates.contains("/Users/me/Library/Android/sdk/platform-tools/adb"))
+}
