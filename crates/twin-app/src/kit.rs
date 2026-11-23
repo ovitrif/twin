@@ -347,7 +347,17 @@ pub fn square_button(ui: &mut Ui, glyph: Glyph, look: ButtonLook, tooltip: &str)
         Sense::click()
     };
     let (rect, response) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), sense);
-    button_info(&response, look != ButtonLook::Disabled, tooltip);
+    // A button without a tooltip still reads as its glyph: "Play"
+    let glyph_name = format!("{glyph:?}");
+    button_info(
+        &response,
+        !matches!(look, ButtonLook::Disabled | ButtonLook::Busy),
+        if tooltip.is_empty() {
+            &glyph_name
+        } else {
+            tooltip
+        },
+    );
     let (hover, _) = overlay(ui, &response);
     let painter = ui.painter();
     // No background at rest; Active shows in the icon's green
