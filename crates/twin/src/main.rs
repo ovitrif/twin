@@ -16,10 +16,14 @@ use twin_core::adb::{self, Adb};
 use twin_core::dmb::{Dmb, Iphone};
 use twin_core::pairing_flow::{self, AlreadyConnectedChoice, PairingEvent, PairingFlowDelegate};
 use twin_core::scrcpy::{
-    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, Scrcpy, ScrcpyOptions, ScrcpyRunMode,
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, Scrcpy, ScrcpyDiagnostics, ScrcpyOptions,
+    ScrcpyRunMode,
 };
 
 const BINARY_NAME: &str = "twin";
+/// The longest wait a flag can ask for, a day: `Instant::now()` plus a
+/// larger one can overflow and panic
+const MAX_WAIT_SECONDS: u64 = 24 * 60 * 60;
 const APP_BINARY_NAME: &str = "twin-app";
 use twin_core::bundle::installed_bundles;
 
@@ -43,6 +47,7 @@ struct Args {
         long,
         default_value_t = 60,
         value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(..=MAX_WAIT_SECONDS),
         help = "How long to wait for phone pairing and connection discovery"
     )]
     timeout: u64,
@@ -123,6 +128,7 @@ struct Args {
         long,
         default_value_t = 5,
         value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(..=MAX_WAIT_SECONDS),
         help = "Seconds between ADB keepalive checks in watch mode"
     )]
     keepalive_interval: u64,
@@ -641,7 +647,7 @@ fn collect_adb_mdns_status(adb: &Adb) -> (Option<bool>, Option<String>) {
 fn collect_scrcpy_status(args: &Args, adb: Option<Adb>) -> ToolStatus {
     match Scrcpy::resolve_with_adb(args.scrcpy.clone(), args.no_scrcpy_check, adb) {
         Ok(scrcpy) => {
-            let diagnostics = scrcpy.diagnostics(&args.scrcpy_options());
+            let diagnostics = scrcpy_diagnostics(args, &scrcpy);
             ToolStatus {
                 path: Some(scrcpy.path().display().to_string()),
                 available: true,
@@ -740,22 +746,30 @@ fn handle_connected_phone(
     args: &Args,
     action: ConnectedAction,
 ) -> Result<()> {
-    if args.watch_enabled() {
-        return match action {
-            ConnectedAction::StartBackground => {
-                watch_connected_phone(adb, phone, args, Some(ScrcpyRunMode::Background))
-            }
-            ConnectedAction::StartForeground => {
-                watch_connected_phone(adb, phone, args, Some(ScrcpyRunMode::Foreground))
-            }
-            ConnectedAction::Close => Ok(()),
-        };
+    if let Some(scrcpy_mode) = watch_plan(args, action) {
+        return watch_connected_phone(adb, phone, args, scrcpy_mode);
     }
 
     match action {
         ConnectedAction::StartBackground => start_scrcpy_background(adb, phone, args),
         ConnectedAction::StartForeground => start_scrcpy_foreground(adb, phone, args),
         ConnectedAction::Close => Ok(()),
+    }
+}
+
+/// With `--watch` (or `--stable`), what watch mode runs beside the
+/// keepalives: scrcpy in this mode, or nothing for `--connect-only`; `None`
+/// when Twin does not watch (no `--watch`, or Close picked in the menu)
+fn watch_plan(args: &Args, action: ConnectedAction) -> Option<Option<ScrcpyRunMode>> {
+    if !args.watch_enabled() {
+        return None;
+    }
+
+    match action {
+        ConnectedAction::StartBackground => Some(Some(ScrcpyRunMode::Background)),
+        ConnectedAction::StartForeground => Some(Some(ScrcpyRunMode::Foreground)),
+        ConnectedAction::Close if args.connect_only => Some(None),
+        ConnectedAction::Close => None,
     }
 }
 
@@ -831,12 +845,19 @@ fn watch_connected_phone(
     args: &Args,
     scrcpy_mode: Option<ScrcpyRunMode>,
 ) -> Result<()> {
+    // scrcpy in the foreground owns the terminal: no raw-mode key reads
+    // while it runs, so ⌃ + C (which stops both) is the way out
+    let stop_hint = if scrcpy_mode == Some(ScrcpyRunMode::Foreground) {
+        "Press ⌃ + C to stop watching, or close the scrcpy window."
+    } else {
+        "Press either ⌃ + C, ESC, C or X to stop watching."
+    };
     ui::section(
         "Watch mode",
         [
             "Sending ADB keepalives to detect stale wireless transports.",
             "When the device drops, Twin tries adb reconnect and mDNS endpoints.",
-            "Press either ⌃ + C, ESC, C or X to stop watching.",
+            stop_hint,
         ],
     );
 
@@ -847,29 +868,29 @@ fn watch_connected_phone(
     };
     let scrcpy_options = args.scrcpy_options();
     let mut serial = phone.serial.clone();
-    let mut child = match (&scrcpy, scrcpy_mode) {
-        (Some(scrcpy), Some(mode)) => Some(spawn_supervised_scrcpy(
+    // Killed on every way out of watch mode, cancel and errors too
+    let mut child = SupervisedChild::default();
+    if let (Some(scrcpy), Some(mode)) = (&scrcpy, scrcpy_mode) {
+        child.start(spawn_supervised_scrcpy(
             scrcpy,
             &serial,
             &scrcpy_options,
             mode,
-        )?),
-        _ => None,
-    };
+        )?);
+    }
     let mut failed_keepalives = 0;
     let mut last_wifi_status = None;
 
     loop {
-        if let Some(scrcpy_child) = child.as_mut() {
-            if let Some(status) = scrcpy_child
-                .try_wait()
-                .context("failed to check scrcpy status")?
-            {
-                ui::warn(format!(
-                    "scrcpy exited with status {status}; it will restart when ADB is ready."
-                ));
-                child = None;
+        if let Some(status) = child.exited().context("failed to check scrcpy status")? {
+            if status.success() {
+                ui::success("scrcpy closed; stopped watching.");
+                return Ok(());
             }
+
+            ui::warn(format!(
+                "scrcpy exited with status {status}; it will restart when ADB is ready."
+            ));
         }
 
         match adb.keepalive(&serial) {
@@ -884,15 +905,15 @@ fn watch_connected_phone(
                     report_wifi_status(adb, &serial, &mut last_wifi_status);
                 }
 
-                if child.is_none() {
-                    if let (Some(scrcpy), Some(mode)) = (&scrcpy, scrcpy_mode) {
-                        child = Some(spawn_supervised_scrcpy(
-                            scrcpy,
-                            &serial,
-                            &scrcpy_options,
-                            mode,
-                        )?);
-                    }
+                if !child.is_running()
+                    && let (Some(scrcpy), Some(mode)) = (&scrcpy, scrcpy_mode)
+                {
+                    child.start(spawn_supervised_scrcpy(
+                        scrcpy,
+                        &serial,
+                        &scrcpy_options,
+                        mode,
+                    )?);
                 }
             }
             Err(error) => {
@@ -905,6 +926,10 @@ fn watch_connected_phone(
                 if failed_keepalives >= args.keepalive_failures() {
                     match reconnect_watched_phone(adb, &serial) {
                         Ok(reconnected) => {
+                            if reconnected.serial != serial {
+                                // scrcpy still mirrors the dropped serial
+                                child.stop();
+                            }
                             serial = reconnected.serial;
                             failed_keepalives = 0;
                             last_wifi_status = None;
@@ -921,7 +946,52 @@ fn watch_connected_phone(
             }
         }
 
-        ui::sleep_or_cancel(args.keepalive_interval())?;
+        if scrcpy_mode == Some(ScrcpyRunMode::Foreground) && child.is_running() {
+            thread::sleep(args.keepalive_interval());
+        } else {
+            ui::sleep_or_cancel(args.keepalive_interval())?;
+        }
+    }
+}
+
+/// The scrcpy watch mode supervises, killed and reaped when replaced,
+/// stopped or dropped
+#[derive(Default)]
+struct SupervisedChild(Option<Child>);
+
+impl SupervisedChild {
+    fn start(&mut self, child: Child) {
+        self.stop();
+        self.0 = Some(child);
+    }
+
+    fn is_running(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// The exit status once the child has ended; it is then no longer held
+    fn exited(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        let Some(child) = self.0.as_mut() else {
+            return Ok(None);
+        };
+        let status = child.try_wait()?;
+        if status.is_some() {
+            self.0 = None;
+        }
+        Ok(status)
+    }
+
+    fn stop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for SupervisedChild {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -947,13 +1017,13 @@ fn reconnect_watched_phone(adb: &Adb, current_serial: &str) -> Result<ConnectedP
 
     let timeout = Duration::from_secs(10);
 
-    if is_plausible_endpoint(current_serial) {
-        if let Ok(device) = connect_to_endpoint(adb, current_serial, &baseline_devices, timeout) {
-            return Ok(ConnectedPhone {
-                serial: device.serial.clone(),
-                display_name: device.display_name(),
-            });
-        }
+    if is_plausible_endpoint(current_serial)
+        && let Ok(device) = connect_to_endpoint(adb, current_serial, &baseline_devices, timeout)
+    {
+        return Ok(ConnectedPhone {
+            serial: device.serial.clone(),
+            display_name: device.display_name(),
+        });
     }
 
     for endpoint in reconnect_endpoints(adb, current_serial) {
@@ -1093,11 +1163,23 @@ fn resolve_scrcpy(args: &Args, adb: &Adb) -> Result<Scrcpy> {
         Scrcpy::resolve_with_adb(args.scrcpy.clone(), args.no_scrcpy_check, Some(adb.clone()))
             .context("scrcpy was not found. Install scrcpy, then try again")?;
 
-    for warning in scrcpy.diagnostics(&args.scrcpy_options()).warnings {
+    for warning in scrcpy_diagnostics(args, &scrcpy).warnings {
         ui::warn(warning);
     }
 
     Ok(scrcpy)
+}
+
+/// scrcpy's version and option warnings; `--no-scrcpy-check` skips running it
+fn scrcpy_diagnostics(args: &Args, scrcpy: &Scrcpy) -> ScrcpyDiagnostics {
+    if args.no_scrcpy_check {
+        return ScrcpyDiagnostics {
+            version_line: None,
+            warnings: Vec::new(),
+        };
+    }
+
+    scrcpy.diagnostics(&args.scrcpy_options())
 }
 
 fn startup_device_choice(adb: &Adb) -> Result<StartupDeviceChoice> {
@@ -1359,11 +1441,11 @@ fn is_plausible_endpoint(endpoint: &str) -> bool {
         return false;
     }
 
-    let Some((_host, port)) = endpoint.rsplit_once(':') else {
+    let Some((host, port)) = endpoint.rsplit_once(':') else {
         return false;
     };
 
-    port.parse::<u16>().is_ok()
+    !host.is_empty() && matches!(port.parse::<u16>(), Ok(port) if port > 0)
 }
 
 fn connect_to_endpoint(
@@ -1449,8 +1531,8 @@ fn matching_ready_device_from_snapshot(
 
 fn pair_and_connect(adb: &Adb, timeout: Duration) -> Result<ConnectedPhone> {
     let mut delegate = CliPairingDelegate::default();
+    // Dropping the delegate ends its countdown, on errors too
     let phone = pairing_flow::pair_and_connect(adb, timeout, &mut delegate)?;
-    delegate.finish_countdown();
 
     Ok(ConnectedPhone {
         serial: phone.serial,
@@ -1488,6 +1570,12 @@ impl CliPairingDelegate {
         }
 
         Ok(())
+    }
+}
+
+impl Drop for CliPairingDelegate {
+    fn drop(&mut self) {
+        self.finish_countdown();
     }
 }
 
@@ -1840,9 +1928,110 @@ mod tests {
     }
 
     #[test]
+    fn bounds_waits_so_deadlines_cannot_overflow() {
+        assert!(Args::try_parse_from(["twin", "--timeout", &u64::MAX.to_string()]).is_err());
+        assert!(
+            Args::try_parse_from(["twin", "--keepalive-interval", &u64::MAX.to_string()]).is_err()
+        );
+        assert!(
+            Args::try_parse_from(["twin", "--timeout", &(MAX_WAIT_SECONDS + 1).to_string()])
+                .is_err()
+        );
+
+        let args =
+            Args::try_parse_from(["twin", "--timeout", &MAX_WAIT_SECONDS.to_string()]).unwrap();
+        let _deadline = Instant::now() + Duration::from_secs(args.timeout);
+    }
+
+    #[test]
+    fn connect_only_watch_watches_without_scrcpy() {
+        let args = Args::try_parse_from(["twin", "--connect-only", "--watch"]).unwrap();
+        let action = connected_phone_action(&args).unwrap();
+
+        assert_eq!(watch_plan(&args, action), Some(None));
+    }
+
+    #[test]
+    fn watch_plan_follows_the_chosen_action() {
+        let watch = Args::try_parse_from(["twin", "--watch"]).unwrap();
+        assert_eq!(
+            watch_plan(&watch, ConnectedAction::StartForeground),
+            Some(Some(ScrcpyRunMode::Foreground))
+        );
+        assert_eq!(
+            watch_plan(&watch, ConnectedAction::StartBackground),
+            Some(Some(ScrcpyRunMode::Background))
+        );
+        // Close picked in the menu ends Twin, watch or not
+        assert_eq!(watch_plan(&watch, ConnectedAction::Close), None);
+
+        let plain = Args::try_parse_from(["twin"]).unwrap();
+        assert_eq!(watch_plan(&plain, ConnectedAction::StartBackground), None);
+    }
+
+    #[test]
+    fn no_scrcpy_check_skips_running_scrcpy() {
+        let args = Args::try_parse_from([
+            "twin",
+            "--no-scrcpy-check",
+            "--scrcpy",
+            "/nonexistent/twin-test/scrcpy",
+        ])
+        .unwrap();
+
+        let status = collect_scrcpy_status(&args, None);
+
+        assert!(status.available);
+        assert_eq!(status.version, None);
+        assert!(status.warnings.is_empty(), "{:?}", status.warnings);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_the_supervised_child_kills_it() {
+        let child = ProcessCommand::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id().to_string();
+        let mut supervised = SupervisedChild::default();
+        supervised.start(child);
+        assert!(supervised.is_running());
+
+        drop(supervised);
+
+        let alive = ProcessCommand::new("kill")
+            .args(["-0", &pid])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!alive.success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervised_child_reports_its_exit_once() {
+        let child = ProcessCommand::new("true").spawn().unwrap();
+        let mut supervised = SupervisedChild::default();
+        supervised.start(child);
+
+        let started = Instant::now();
+        let status = loop {
+            if let Some(status) = supervised.exited().unwrap() {
+                break status;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5));
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        assert!(status.success());
+        assert!(!supervised.is_running());
+        assert!(supervised.exited().unwrap().is_none());
+    }
+
+    #[test]
     fn validates_ipv4_endpoint_shape() {
         assert!(is_plausible_endpoint("192.168.68.54:42209"));
         assert!(is_plausible_endpoint("localhost:5555"));
+        assert!(!is_plausible_endpoint(":5555"));
+        assert!(!is_plausible_endpoint("192.168.68.54:0"));
         assert!(!is_plausible_endpoint("192.168.68.54"));
         assert!(!is_plausible_endpoint("192.168.68.54:notaport"));
         assert!(!is_plausible_endpoint("192.168.68.54:70000"));
