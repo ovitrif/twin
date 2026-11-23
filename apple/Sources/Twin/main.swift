@@ -6,6 +6,9 @@ import MirrorUI
 // iPhone when --udid names one; otherwise just the iPhone. Opened on its own (Finder,
 // Spotlight) it quits, since only dmb knows which phones to show.
 
+// A write to a phone that just dropped returns an error instead of ending the app
+signal(SIGPIPE, SIG_IGN)
+
 let args = Array(CommandLine.arguments.dropFirst())
 let app = NSApplication.shared
 let pair = PairOptions(args)

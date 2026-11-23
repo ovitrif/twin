@@ -198,7 +198,7 @@ public final class ScrcpySession {
         // The server listens a moment after it starts; until then adb accepts
         // and closes, so a connection counts once its dummy byte arrives
         var video: Int32 = -1
-        for _ in 0..<100 {
+        for _ in 0..<100 where !stopped {
             let fd = Self.connect(port: port)
             if fd >= 0 {
                 var byte: UInt8 = 0
@@ -211,7 +211,8 @@ public final class ScrcpySession {
         videoFD = video
         controlFD = Self.connect(port: port)
         guard controlFD >= 0 else { stop(); throw DMBError("no scrcpy control socket") }
-        let name = try readExactly(videoFD, 64)
+        let name: Data
+        do { name = try readExactly(videoFD, 64) } catch { stop(); throw error }
         deviceName = String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
         Thread.detachNewThread { [weak self] in self?.readVideo() }
         Thread.detachNewThread { [weak self] in self?.drainControl() }
@@ -220,8 +221,14 @@ public final class ScrcpySession {
     public func stop() {
         guard !stopped else { return }
         stopped = true
-        if videoFD >= 0 { close(videoFD) }
-        if controlFD >= 0 { close(controlFD) }
+        // shutdown wakes the reader threads blocked in recv before the
+        // descriptors close, so none reads a number reused meanwhile
+        for fd in [videoFD, controlFD] where fd >= 0 {
+            shutdown(fd, SHUT_RDWR)
+            close(fd)
+        }
+        videoFD = -1
+        controlFD = -1
         shell?.terminate()
         if port > 0 { _ = try? run(["forward", "--remove", "tcp:\(port)"]) }
     }
@@ -233,6 +240,7 @@ public final class ScrcpySession {
                 var offset = 0
                 while offset < buffer.count {
                     let n = Darwin.send(self.controlFD, buffer.baseAddress! + offset, buffer.count - offset, 0)
+                    if n < 0 && errno == EINTR { continue }
                     if n <= 0 { return }
                     offset += n
                 }
@@ -255,6 +263,8 @@ public final class ScrcpySession {
         guard ok == 0 else { close(fd); return -1 }
         var one: Int32 = 1
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, socklen_t(MemoryLayout<Int32>.size))
+        // A send on a dropped phone returns EPIPE instead of raising SIGPIPE
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         return fd
     }
 
@@ -264,6 +274,7 @@ public final class ScrcpySession {
         try data.withUnsafeMutableBytes { buffer in
             while offset < count {
                 let n = recv(fd, buffer.baseAddress! + offset, count - offset, 0)
+                if n < 0 && errno == EINTR { continue }
                 if n <= 0 { throw DMBError("scrcpy stream ended") }
                 offset += n
             }
