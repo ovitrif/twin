@@ -541,8 +541,10 @@ fn rerender_interactive_menu<W: Write>(
     render_interactive_menu(writer, options, selected, auto_default)
 }
 
+/// Lines from the prompt up to the first option: one per option, as the
+/// prompt has no newline
 fn rerender_menu_line_count(option_count: usize) -> u16 {
-    option_count.saturating_add(1) as u16
+    option_count as u16
 }
 
 fn rerender_menu_option_line_offset(option_count: usize, option_index: usize) -> u16 {
@@ -752,8 +754,12 @@ mod tests {
     }
 
     #[test]
-    fn rerender_includes_prompt_line() {
-        assert_eq!(rerender_menu_line_count(3), 4);
+    fn rerender_moves_up_to_the_first_option() {
+        let mut output = Vec::new();
+        render_interactive_menu(&mut output, &["One", "Two", "Three"], 0, &None).unwrap();
+        let newlines = String::from_utf8(output).unwrap().matches("\r\n").count();
+
+        assert_eq!(rerender_menu_line_count(3) as usize, newlines);
     }
 
     #[test]
