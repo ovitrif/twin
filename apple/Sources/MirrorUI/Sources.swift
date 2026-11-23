@@ -122,7 +122,7 @@ final class ReplaySource: FrameSource {
             let url = urls[index % urls.count]
             index += 1
             let asset = AVURLAsset(url: url)
-            guard let track = asset.tracks(withMediaType: .video).first,
+            guard let track = Self.videoTrack(of: asset),
                   let reader = try? AVAssetReader(asset: asset) else {
                 DispatchQueue.main.async { self.onStatus?("Cannot read \(url.lastPathComponent)") }
                 return
@@ -142,6 +142,18 @@ final class ReplaySource: FrameSource {
                 onFrame?(buffer)
             }
         }
+    }
+
+    /// The file's first video track; this queue waits for the load
+    private static func videoTrack(of asset: AVURLAsset) -> AVAssetTrack? {
+        let loaded = DispatchSemaphore(value: 0)
+        var track: AVAssetTrack?
+        asset.loadTracks(withMediaType: .video) { tracks, _ in
+            track = tracks?.first
+            loaded.signal()
+        }
+        loaded.wait()
+        return track
     }
 }
 
