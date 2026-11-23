@@ -1,4 +1,5 @@
 import AppKit
+import CoreMedia
 import Testing
 @testable import MirrorUI
 
@@ -80,4 +81,51 @@ private func key(_ chars: String, code: UInt16, flags: NSEvent.ModifierFlags = [
         .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
         .compactMap { $0["touch"] as? String }
     #expect(phases == ["down", "move", "move", "up"])
+}
+
+/// A frame of this size, as the capture path delivers them
+private func frame(_ width: Int, _ height: Int) -> CMSampleBuffer {
+    let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)!
+    return MJPEGSource.sampleBuffer(image: context.makeImage()!)!
+}
+
+@MainActor @Test func aPaddedFrameNeverSizesTheWindowBeforeTheScreenSize() async throws {
+    let (view, _, _) = makeView()
+    view.waitsForScreenSize = true
+    // The Device Hub stream pads 30 × 60 to 32 × 64
+    #expect(view.enqueue(frame(32, 64)) == nil)
+    view.screenSize = CGSize(width: 30, height: 60)
+    #expect(view.enqueue(frame(32, 64)) == CGSize(width: 30, height: 60))
+    try await Task.sleep(for: .milliseconds(50))  // the main queue applies the crop
+    #expect(view.display.videoGravity == .resize)
+}
+
+@MainActor @Test func fallingBackToCaptureShowsWholeFramesAgain() async throws {
+    let (view, _, _) = makeView()
+    view.waitsForScreenSize = true
+    view.screenSize = CGSize(width: 30, height: 60)
+    view.enqueue(frame(32, 64))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(view.display.videoGravity == .resize)
+    view.resetForCapture()
+    #expect(view.enqueue(frame(40, 80)) == CGSize(width: 40, height: 80))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(view.display.videoGravity == .resizeAspectFill)
+    #expect(view.display.autoresizingMask == [.layerWidthSizable, .layerHeightSizable])
+}
+
+@MainActor @Test func keyFrameRequestsComeAtMostTwiceASecond() throws {
+    let script = FileManager.default.temporaryDirectory.appendingPathComponent("dmb-hid-\(UUID()).sh")
+    let log = script.appendingPathExtension("log")
+    try "#!/bin/sh\necho ready\ncat > '\(log.path)'\n".write(to: script, atomically: true, encoding: .utf8)
+    chmod(script.path, 0o755)
+    let hid = HIDInput(helper: script, udid: "TEST")
+    try hid.start()
+    hid.requestKeyframe()
+    hid.requestKeyframe()
+    hid.stop()
+    let lines = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+    #expect(lines == [#"{"keyframe":true}"#])
 }

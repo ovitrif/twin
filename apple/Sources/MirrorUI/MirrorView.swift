@@ -51,11 +51,34 @@ final class MirrorView: NSView {
 
     /// The screen's size when the video pads it (the Device Hub stream pads
     /// to a multiple of 16 at the right and bottom); the padding is cropped
-    var screenSize: CGSize? { didSet { needsLayout = true } }
-    private var codedSize = CGSize.zero
+    var screenSize: CGSize? {
+        get { sizes.withLock { screen } }
+        set {
+            sizes.withLock { screen = newValue }
+            needsLayout = true
+        }
+    }
+    /// Frames come on a background queue while the main thread sets the
+    /// screen's size, so the sizes below sit behind this lock
+    private let sizes = NSLock()
+    private var screen: CGSize?
+    private var coded = CGSize.zero
+    private var waits = false
+
+    /// For a stream that pads the screen: until `screenSize` arrives, frames
+    /// show but never size the window to their padded size
+    var waitsForScreenSize: Bool {
+        get { sizes.withLock { waits } }
+        set { sizes.withLock { waits = newValue } }
+    }
+
+    /// The decoder failed and was reset; the stream should send a key frame.
+    /// Runs on the frame's queue.
+    var onDecodeFailure: (() -> Void)?
 
     override func layout() {
         super.layout()
+        let (screenSize, codedSize) = sizes.withLock { (screen, coded) }
         guard var screen = screenSize, codedSize.width > 0, screen.width > 0 else {
             display.frame = bounds
             return
@@ -74,7 +97,8 @@ final class MirrorView: NSView {
     }
 
     /// Shows a frame as soon as it arrives and returns the size the window
-    /// should take: the screen's, without any padding
+    /// should take: the screen's, without any padding; nil while that is
+    /// not known yet. Runs on any queue.
     @discardableResult
     func enqueue(_ buffer: CMSampleBuffer) -> CGSize? {
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true),
@@ -84,24 +108,46 @@ final class MirrorView: NSView {
                                  Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
         }
         let renderer = display.sampleBufferRenderer
-        if renderer.status == .failed { renderer.flush() }
+        if renderer.status == .failed {
+            renderer.flush()
+            onDecodeFailure?()
+        }
         renderer.enqueue(buffer)
         guard let format = CMSampleBufferGetFormatDescription(buffer) else { return nil }
         let dims = CMVideoFormatDescriptionGetDimensions(format)
-        let coded = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
-        guard var screen = screenSize, screen.width > 0 else { return coded }
-        if coded != codedSize {
+        let size = CGSize(width: CGFloat(dims.width), height: CGFloat(dims.height))
+        let (known, changed, waiting) = sizes.withLock { () -> (CGSize?, Bool, Bool) in
+            guard let screen, screen.width > 0 else { return (nil, false, waits) }
+            defer { coded = size }
+            return (screen, coded != size, false)
+        }
+        guard var screen = known else { return waiting ? nil : size }
+        if changed {
             DispatchQueue.main.async {
-                self.codedSize = coded
+                // A capture fallback since then shows whole frames again
+                guard self.sizes.withLock({ self.coded == size }) else { return }
                 self.display.videoGravity = .resize
                 self.display.autoresizingMask = []
                 self.needsLayout = true
             }
         }
-        if (coded.width > coded.height) != (screen.width > screen.height) {
+        if (size.width > size.height) != (screen.width > screen.height) {
             screen = CGSize(width: screen.height, height: screen.width)
         }
         return screen
+    }
+
+    /// Back to whole, unpadded frames filling the view, for the capture path
+    /// after the Device Hub stream failed
+    func resetForCapture() {
+        sizes.withLock {
+            screen = nil
+            coded = .zero
+            waits = false
+        }
+        display.videoGravity = .resizeAspectFill
+        display.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        needsLayout = true
     }
 
     func setStatus(_ text: String?) {

@@ -177,7 +177,15 @@ final class HIDInput: InputSink {
         }
     }
 
-    func requestKeyframe() { send(["keyframe": true]) }
+    private var lastKeyframeRequest = Date.distantPast
+
+    /// Asks dmb-hid for a key frame after a decode failure; every frame
+    /// fails until one arrives, so at most one request per half second
+    func requestKeyframe() {
+        guard Date().timeIntervalSince(lastKeyframeRequest) >= 0.5 else { return }
+        lastKeyframeRequest = Date()
+        send(["keyframe": true])
+    }
 
     /// Closing stdin lets dmb-hid end the media stream, which the phone needs
     /// to accept the next session; terminate only if it hangs

@@ -51,8 +51,12 @@ func deviceHub(helper: URL, udid: String, view: MirrorView,
     let hid = HIDInput(helper: helper, udid: udid, video: true)
     let hub = DeviceHubSource(hid: hid)
     hub.onScreenSize = { [weak view] in view?.screenSize = $0 }
+    // The stream pads the screen, whose size comes on its own line
+    view.waitsForScreenSize = true
+    // A frame lost on the way fails every frame after it until a key frame
+    view.onDecodeFailure = { [weak hid] in DispatchQueue.main.async { hid?.requestKeyframe() } }
     hid.onFailed = { [weak view] in
-        view?.screenSize = nil
+        view?.resetForCapture()
         onFailed()
     }
     return (hid, hub)
