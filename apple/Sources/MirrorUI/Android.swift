@@ -58,8 +58,14 @@ final class ScrcpyInput: InputSink {
     }
 
     private func position(_ p: CGPoint) -> (Int32, Int32, UInt16, UInt16)? {
-        let size = session.videoSize
-        guard size.width > 0 else { return nil }
+        Self.position(p, in: session.videoSize)
+    }
+
+    /// A point from 0 to 1 in pixels of a video this size, with the size as
+    /// scrcpy takes it; nil before the first frame or for a size it cannot carry
+    static func position(_ p: CGPoint, in size: CGSize) -> (Int32, Int32, UInt16, UInt16)? {
+        let limit = CGFloat(UInt16.max)
+        guard size.width > 0, size.height > 0, size.width <= limit, size.height <= limit else { return nil }
         return (Int32((p.x * size.width).rounded()), Int32((p.y * size.height).rounded()),
                 UInt16(size.width), UInt16(size.height))
     }

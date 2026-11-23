@@ -45,3 +45,42 @@ import Testing
     let message = ScrcpyProtocol.text(String(repeating: "€", count: 200))
     #expect(String(data: message.dropFirst(5), encoding: .utf8) == String(repeating: "€", count: 100))
 }
+
+@Test func aCorruptLengthEndsTheStreamInsteadOfAllocating() throws {
+    #expect(try ScrcpyProtocol.checkedLength(1_000, max: ScrcpyProtocol.maxPacket) == 1_000)
+    #expect(throws: DMBError.self) { try ScrcpyProtocol.checkedLength(UInt32.max, max: ScrcpyProtocol.maxPacket) }
+    #expect(throws: DMBError.self) {
+        try ScrcpyProtocol.checkedLength(UInt32(ScrcpyProtocol.maxClipboard + 1), max: ScrcpyProtocol.maxClipboard)
+    }
+}
+
+@Test func closingASocketWakesItsReaderAndClosesOnlyOnceItReturns() throws {
+    var fds: [Int32] = [-1, -1]
+    #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+    defer { close(fds[1]) }
+    let box = SocketBox(fds[0])
+    let woke = DispatchSemaphore(value: 0)
+    var failed = false
+    Thread.detachNewThread {
+        do { _ = try box.read(1) } catch { failed = true }
+        woke.signal()
+    }
+    usleep(100_000)  // the reader blocks in recv
+    box.close()
+    #expect(woke.wait(timeout: .now() + 2) == .success)
+    #expect(failed)
+    #expect(box.use { $0 } == nil)
+}
+
+@Test func aSocketInUseStaysOpenUntilItsUseEnds() {
+    var fds: [Int32] = [-1, -1]
+    #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+    defer { close(fds[1]) }
+    let box = SocketBox(fds[0])
+    let open = box.use { fd -> Bool in
+        box.close()
+        return fcntl(fd, F_GETFD) != -1
+    }
+    #expect(open == true)
+    #expect(box.use { $0 } == nil)
+}
