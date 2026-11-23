@@ -19,6 +19,22 @@ protocol InputSink: AnyObject {
 
 enum ClipboardCommand { case paste, copy, cut }
 
+/// Splits a pipe's chunks into whole lines; a chunk can end inside a line
+struct LineBuffer {
+    private var pending = Data()
+
+    mutating func append(_ chunk: Data) -> [String] {
+        pending.append(chunk)
+        var lines: [String] = []
+        while let end = pending.firstIndex(of: UInt8(ascii: "\n")) {
+            let line = String(decoding: pending[pending.startIndex..<end], as: UTF8.self)
+            pending.removeSubrange(pending.startIndex...end)
+            if !line.isEmpty { lines.append(line) }
+        }
+        return lines
+    }
+}
+
 extension InputSink {
     /// An iPhone's clipboard is out of reach, so ⌘V types the Mac's text
     /// where the focus is; ⌘C and ⌘X do nothing
@@ -65,6 +81,7 @@ final class HIDInput: InputSink {
     }
 
     func start() throws {
+        lastError = ""
         let process = Process()
         process.executableURL = helper
         process.arguments = video ? [udid, "--video"] : [udid]
@@ -86,22 +103,28 @@ final class HIDInput: InputSink {
                 }
             }
         }
+        var buffer = LineBuffer()
         text.fileHandleForReading.readabilityHandler = { handle in
-            for line in String(decoding: handle.availableData, as: UTF8.self).split(separator: "\n") { lines(String(line)) }
+            let data = handle.availableData
+            // At EOF the handler would run again at once, forever
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+            for line in buffer.append(data) { lines(line) }
         }
         if video {
             process.standardError = text
             let frames = Pipe()
             process.standardOutput = frames
-            var buffer = Data()
+            var units = Data()
             frames.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                buffer.append(handle.availableData)
+                let data = handle.availableData
+                guard !data.isEmpty else { handle.readabilityHandler = nil; return }
+                units.append(data)
                 // Each access unit: a 4-byte big-endian length, then the unit
-                while buffer.count >= 4 {
-                    let length = buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
-                    guard buffer.count >= 4 + length else { break }
-                    let unit = buffer.subdata(in: buffer.startIndex + 4..<buffer.startIndex + 4 + length)
-                    buffer.removeSubrange(buffer.startIndex..<buffer.startIndex + 4 + length)
+                while units.count >= 4 {
+                    let length = units.prefix(4).reduce(0) { $0 << 8 | Int($1) }
+                    guard units.count >= 4 + length else { break }
+                    let unit = units.subdata(in: units.startIndex + 4..<units.startIndex + 4 + length)
+                    units.removeSubrange(units.startIndex..<units.startIndex + 4 + length)
                     self?.onVideoFrame?(unit)
                 }
             }
@@ -116,13 +139,13 @@ final class HIDInput: InputSink {
                     // than give up on the Device Hub stream
                     if self.lastError.contains("PasswordProtected") {
                         self.onLocked?()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { try? self.start() }
+                        self.retry()
                     } else if self.lastError.contains("no display service"), self.displayRetries < 10 {
                         // A phone just plugged in lists its display service
                         // a few seconds late; only one that never lists it
                         // has no Device Hub
                         self.displayRetries += 1
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { try? self.start() }
+                        self.retry()
                     } else {
                         self.onFailed?()
                     }
@@ -135,6 +158,14 @@ final class HIDInput: InputSink {
         try process.run()
         self.process = process
         self.stdin = stdin
+    }
+
+    /// Starts again in 2 s, unless the window closed meanwhile
+    private func retry() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, !self.stopping else { return }
+            try? self.start()
+        }
     }
 
     func requestKeyframe() { send(["keyframe": true]) }
@@ -152,7 +183,9 @@ final class HIDInput: InputSink {
 
     private func send(_ command: [String: Any]) {
         guard process?.isRunning == true, let data = try? JSONSerialization.data(withJSONObject: command) else { return }
-        stdin.fileHandleForWriting.write(data + Data("\n".utf8))
+        // dmb-hid can exit between the check and the write; the throwing
+        // write reports that instead of raising an exception that ends the app
+        try? stdin.fileHandleForWriting.write(contentsOf: data + Data("\n".utf8))
     }
 
     func touch(_ phase: TouchPhase, at point: CGPoint) {
