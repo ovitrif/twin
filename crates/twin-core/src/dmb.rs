@@ -110,12 +110,22 @@ impl Dmb {
         &self.path
     }
 
-    /// Runs dmb with these arguments in this terminal, for `twin iphone`
-    pub fn run(&self, args: &[String]) -> Result<std::process::ExitStatus> {
-        Command::new(&self.path)
-            .args(args)
+    /// Runs dmb with these arguments in this terminal, for `twin iphone`,
+    /// with the adb `twin --adb` picks, as for Twin's own mirrors
+    pub fn run(&self, args: &[String], adb: Option<PathBuf>) -> Result<std::process::ExitStatus> {
+        let adb = crate::adb::Adb::resolve(adb).ok();
+        self.run_command(args, adb.as_ref().map(|adb| adb.path()))
             .status()
             .context("running dmb")
+    }
+
+    fn run_command(&self, args: &[String], adb: Option<&std::path::Path>) -> Command {
+        let mut command = Command::new(&self.path);
+        command.args(args);
+        if let Some(adb) = adb {
+            command.env("ADB", adb);
+        }
+        command
     }
 
     /// Shows or hides one phone of the Twin pair showing iPhone `udid`
@@ -197,6 +207,23 @@ pub fn parse_status(json: &str) -> Result<Vec<Iphone>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passes_the_resolved_adb_to_dmb() {
+        let dmb = Dmb {
+            path: PathBuf::from("dmb"),
+        };
+        let command = dmb.run_command(
+            &["devices".into()],
+            Some(std::path::Path::new("/opt/twin/adb")),
+        );
+
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "ADB" && value == Some("/opt/twin/adb".as_ref()))
+        );
+    }
 
     #[test]
     fn reads_dmb_status() {

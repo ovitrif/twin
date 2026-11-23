@@ -438,9 +438,9 @@ fn handle_cli_command(command: &CliCommand, args: &Args) -> Result<()> {
         }
         CliCommand::Completions(args) => print_completions(args),
         CliCommand::App => launch_app(),
-        CliCommand::Iphone { args } => {
+        CliCommand::Iphone { args: dmb_args } => {
             let dmb = Dmb::resolve().context("iPhone mirroring needs Twin.app on macOS")?;
-            let status = dmb.run(args)?;
+            let status = dmb.run(dmb_args, args.adb.clone())?;
             if !status.success() {
                 std::process::exit(status.code().unwrap_or(1));
             }
