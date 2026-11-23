@@ -105,14 +105,44 @@ enum PairingWaitOutcome {
     AlreadyConnected(ConnectedPhone),
 }
 
+/// The phones ADB had before the first of a run of pairing attempts. A retry
+/// keeps them, so a phone ADB connected during a cancelled attempt still
+/// counts as new and the next QR wait offers it.
+#[derive(Debug, Default)]
+pub struct PairingBaseline {
+    devices: Option<HashSet<String>>,
+}
+
+impl PairingBaseline {
+    /// The first attempt's ready devices, taken from `current` on the first
+    /// call only
+    fn devices(&mut self, current: impl FnOnce() -> HashSet<String>) -> HashSet<String> {
+        self.devices.get_or_insert_with(current).clone()
+    }
+}
+
 pub fn pair_and_connect<D>(adb: &Adb, timeout: Duration, delegate: &mut D) -> Result<ConnectedPhone>
+where
+    D: PairingFlowDelegate,
+{
+    pair_and_connect_again(adb, timeout, &mut PairingBaseline::default(), delegate)
+}
+
+/// [`pair_and_connect`] as one attempt of several sharing `baseline`
+pub fn pair_and_connect_again<D>(
+    adb: &Adb,
+    timeout: Duration,
+    baseline: &mut PairingBaseline,
+    delegate: &mut D,
+) -> Result<ConnectedPhone>
 where
     D: PairingFlowDelegate,
 {
     wifi::ensure_pairing_wifi_ready()?;
 
     let baseline_services = adb::connect_services(&adb.mdns_services().unwrap_or_default());
-    let baseline_devices = adb::ready_device_serials(&adb.devices().unwrap_or_default());
+    let baseline_devices =
+        baseline.devices(|| adb::ready_device_serials(&adb.devices().unwrap_or_default()));
     let qr = PairingQr::generate();
 
     delegate.on_event(PairingEvent::Section {
@@ -1163,6 +1193,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["R5CTNEWUSB"]
         );
+    }
+
+    #[test]
+    fn retry_offers_a_phone_a_cancelled_attempt_connected() {
+        let mut baseline = PairingBaseline::default();
+        let first = baseline.devices(|| HashSet::from(["emulator-5554".to_string()]));
+        // The cancelled attempt left the paired phone connected
+        let retry = baseline.devices(|| {
+            HashSet::from([
+                "emulator-5554".to_string(),
+                "192.168.68.54:37197".to_string(),
+            ])
+        });
+
+        assert_eq!(retry, first);
+        let phones = new_connected_phones(
+            vec![
+                adb_device("emulator-5554"),
+                adb_device("192.168.68.54:37197"),
+            ],
+            &[],
+            &retry,
+        );
+        assert_eq!(phones.len(), 1);
+        assert_eq!(phones[0].serial, "192.168.68.54:37197");
     }
 
     #[test]

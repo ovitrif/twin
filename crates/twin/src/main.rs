@@ -1314,8 +1314,11 @@ fn reset_adb_server(adb: &Adb) -> Result<()> {
 }
 
 fn retrying_pairing_flow(adb: &Adb, timeout: Duration) -> Result<ConnectedPhone> {
+    // Shared by every retry, so a phone a cancelled attempt connected is
+    // still offered
+    let mut baseline = pairing_flow::PairingBaseline::default();
     loop {
-        match pair_and_connect(adb, timeout) {
+        match pair_and_connect(adb, timeout, &mut baseline) {
             Ok(phone) => return Ok(phone),
             Err(error) => {
                 if ui::is_cancelled(&error) {
@@ -1529,10 +1532,14 @@ fn matching_ready_device_from_snapshot(
         })
 }
 
-fn pair_and_connect(adb: &Adb, timeout: Duration) -> Result<ConnectedPhone> {
+fn pair_and_connect(
+    adb: &Adb,
+    timeout: Duration,
+    baseline: &mut pairing_flow::PairingBaseline,
+) -> Result<ConnectedPhone> {
     let mut delegate = CliPairingDelegate::default();
     // Dropping the delegate ends its countdown, on errors too
-    let phone = pairing_flow::pair_and_connect(adb, timeout, &mut delegate)?;
+    let phone = pairing_flow::pair_and_connect_again(adb, timeout, baseline, &mut delegate)?;
 
     Ok(ConnectedPhone {
         serial: phone.serial,
