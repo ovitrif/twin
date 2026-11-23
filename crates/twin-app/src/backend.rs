@@ -1213,22 +1213,6 @@ pub fn start_pairing(shared: Arc<Mutex<Shared>>, ctx: Context) {
             session.cancel.store(true, Ordering::Relaxed);
         }
 
-        if mock::pairing().is_none()
-            && let Err(error) = wifi::ensure_pairing_wifi_ready()
-        {
-            let message = format!("{error:#}");
-            state.pairing = Some(PairingSession {
-                phase: PairingPhase::Failed {
-                    message: message.clone(),
-                },
-                cancel: cancel.clone(),
-            });
-            state.log(format!("Pairing blocked: {message}"));
-            drop(state);
-            ctx.request_repaint();
-            return;
-        }
-
         state.pairing = Some(PairingSession {
             phase: PairingPhase::Connecting {
                 progress: PairingProgress::new(
@@ -1244,7 +1228,29 @@ pub fn start_pairing(shared: Arc<Mutex<Shared>>, ctx: Context) {
 
         let shared = shared.clone();
         let ctx = ctx.clone();
-        thread::spawn(move || pairing_worker(shared, ctx, cancel));
+        thread::spawn(move || {
+            // The Wi-Fi check runs several macOS tools; off the UI thread,
+            // with Shared unlocked
+            if mock::pairing().is_none()
+                && let Err(error) = wifi::ensure_pairing_wifi_ready()
+            {
+                let message = format!("{error:#}");
+                let mut state = shared.lock().unwrap();
+                if !cancel.load(Ordering::Relaxed) {
+                    state.pairing = Some(PairingSession {
+                        phase: PairingPhase::Failed {
+                            message: message.clone(),
+                        },
+                        cancel,
+                    });
+                    state.log(format!("Pairing blocked: {message}"));
+                }
+                drop(state);
+                ctx.request_repaint();
+                return;
+            }
+            pairing_worker(shared, ctx, cancel)
+        });
     }
 
     ctx.request_repaint();
