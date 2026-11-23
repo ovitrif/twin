@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -609,13 +609,27 @@ fn is_raw_mode_error(error: &anyhow::Error) -> bool {
 }
 
 pub fn prompt(label: &str) -> Result<String> {
-    print!("{} {label}: ", "?".with(Color::Green));
-    io::stdout().flush().context("failed to flush stdout")?;
+    prompt_from(&mut io::stdin().lock(), &mut io::stdout(), label)
+}
+
+/// Asks on `writer` and reads one line from `reader`; end of input cancels
+fn prompt_from<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    label: &str,
+) -> Result<String> {
+    write!(writer, "{} {label}: ", "?".with(Color::Green)).context("failed to write prompt")?;
+    writer.flush().context("failed to flush stdout")?;
 
     let mut input = String::new();
-    io::stdin()
+    if reader
         .read_line(&mut input)
-        .context("failed to read input")?;
+        .context("failed to read input")?
+        == 0
+    {
+        writeln!(writer).context("failed to write prompt")?;
+        return Err(cancelled());
+    }
 
     Ok(input)
 }
@@ -644,6 +658,19 @@ impl Drop for RawModeGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancels_the_prompt_at_end_of_input() {
+        let mut output = Vec::new();
+        let error = prompt_from(&mut io::Cursor::new(b""), &mut output, "Pairing code")
+            .expect_err("end of input should cancel");
+
+        assert!(is_cancelled(&error));
+        assert_eq!(
+            prompt_from(&mut io::Cursor::new(b"42\n"), &mut output, "Pairing code").unwrap(),
+            "42\n"
+        );
+    }
 
     #[test]
     fn maps_digit_to_selection() {
