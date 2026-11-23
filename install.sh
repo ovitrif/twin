@@ -21,6 +21,12 @@ main() {
     *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
   esac
 
+  # Releases ship macOS builds for Apple silicon only
+  if [ "$os" = "apple-darwin" ] && [ "$arch" != "aarch64" ]; then
+    echo "Twin needs a Mac with Apple silicon" >&2
+    exit 1
+  fi
+
   target="${arch}-${os}"
   latest_url="${GITHUB_URL}/${REPO}/releases/latest"
 
@@ -49,11 +55,11 @@ main() {
   elif command -v shasum >/dev/null 2>&1; then
     actual_checksum="$(shasum -a 256 "$archive" | awk '{print $1}')"
   else
-    echo "Warning: cannot verify checksum (no sha256sum or shasum found)" >&2
-    actual_checksum=""
+    echo "Cannot verify the download: install sha256sum or shasum" >&2
+    exit 1
   fi
 
-  if [ -n "$actual_checksum" ] && [ "$actual_checksum" != "$expected_checksum" ]; then
+  if [ "$actual_checksum" != "$expected_checksum" ]; then
     echo "Checksum verification failed for ${archive}" >&2
     exit 1
   fi
@@ -70,10 +76,21 @@ main() {
   if [ -d "${dir}/Twin.app" ]; then
     apps="/Applications"
     [ -w "$apps" ] || { apps="$HOME/Applications"; mkdir -p "$apps"; }
+    # A running Twin keeps the old binary; quit it and open the new one after
+    running=""
+    if pgrep -xq twin-app; then
+      running=1
+      osascript -e 'quit app "Twin"' >/dev/null 2>&1 || true
+      i=0
+      while pgrep -xq twin-app && [ "$i" -lt 20 ]; do sleep 0.25; i=$((i + 1)); done
+    fi
     rm -rf "${apps}/Twin.app" "${apps}/Android Wifi Bridge.app"
     cp -R "${dir}/Twin.app" "${apps}/Twin.app"
     xattr -dr com.apple.quarantine "${apps}/Twin.app" 2>/dev/null || true
     echo "Installed ${apps}/Twin.app (run 'twin app' for the menu bar app)"
+    if [ -n "$running" ]; then
+      open -g "${apps}/Twin.app" || true
+    fi
   fi
 
   echo "Run '${BINARY}' to get started."
