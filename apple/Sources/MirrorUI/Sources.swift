@@ -17,8 +17,9 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
     var onStatus: ((String) -> Void)?
     private let name: String?
     private let session = AVCaptureSession()
+    /// The session changes, starts and stops only on this queue
     private let queue = DispatchQueue(label: "dmb.capture", qos: .userInteractive)
-    private var observer: NSObjectProtocol?
+    private var observers: [NSObjectProtocol] = []
 
     /// `name` is the phone's name as `devicectl` reports it; nil takes the first iPhone.
     init(name: String?) { self.name = name }
@@ -47,10 +48,17 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
         Self.allowScreenCaptureDevices()
         onStatus?("Waiting for \(name ?? "the iPhone")…")
         // The phone shows up a moment after the property is set, and again
-        // after each replug
-        observer = NotificationCenter.default.addObserver(
-            forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.attach() }
+        // after each replug; an unplug leaves its input stale until removed
+        let center = NotificationCenter.default
+        observers = [
+            center.addObserver(forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: .main) {
+                [weak self] _ in self?.attach()
+            },
+            center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: .main) {
+                [weak self] note in
+                if let device = note.object as? AVCaptureDevice { self?.detach(device) }
+            },
+        ]
         attach()
     }
 
@@ -65,6 +73,10 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
     }
 
     private func attach() {
+        queue.async { [weak self] in self?.attachOnQueue() }
+    }
+
+    private func attachOnQueue() {
         guard session.inputs.isEmpty, let device = findDevice() else { return }
         do {
             let input = try AVCaptureDeviceInput(device: device)
@@ -81,14 +93,29 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
             session.addOutput(output)
             session.commitConfiguration()
             onStatus?("Starting \(device.localizedName)…")
-            queue.async { self.session.startRunning() }
+            session.startRunning()
         } catch {
             onStatus?("Cannot open \(device.localizedName): \(error.localizedDescription)")
         }
     }
 
+    /// Drops the unplugged phone's input and output, so its replug attaches afresh
+    private func detach(_ device: AVCaptureDevice) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let stale = self.session.inputs.filter { ($0 as? AVCaptureDeviceInput)?.device == device }
+            guard !stale.isEmpty else { return }
+            self.session.beginConfiguration()
+            stale.forEach(self.session.removeInput)
+            self.session.outputs.forEach(self.session.removeOutput)
+            self.session.commitConfiguration()
+            self.onStatus?("Waiting for \(self.name ?? "the iPhone")…")
+        }
+    }
+
     func stop() {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
         queue.async { self.session.stopRunning() }
     }
 
@@ -163,34 +190,60 @@ final class MJPEGSource: NSObject, FrameSource, URLSessionDataDelegate {
     var onFrame: ((CMSampleBuffer) -> Void)?
     var onStatus: ((String) -> Void)?
     private let url: URL
+    private let lock = NSLock()
     private var session: URLSession?
+    private var stopped = false
     private var buffer = Data()
+    /// More than this without a whole JPEG is not a Motion JPEG stream
+    static let maxBuffer = 16 << 20
 
     init(url: URL) { self.url = url }
 
     func start() {
+        // A session keeps its delegate until invalidated, so a retry ends the last one
+        let session = lock.withLock { () -> URLSession? in
+            guard !stopped else { return nil }
+            self.session?.invalidateAndCancel()
+            let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+            self.session = session
+            return session
+        }
+        guard let session else { return }
         onStatus?("Connecting to \(url.host ?? "stream")…")
-        let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
         session.dataTask(with: url).resume()
-        self.session = session
     }
 
-    func stop() { session?.invalidateAndCancel() }
+    func stop() {
+        let session = lock.withLock { () -> URLSession? in
+            stopped = true
+            defer { self.session = nil }
+            return self.session
+        }
+        session?.invalidateAndCancel()
+    }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         buffer.append(data)
-        // Each part is one JPEG; keep only the newest complete one
+        if let latest = Self.takeLatestJPEG(&buffer), let frame = Self.sampleBuffer(jpeg: latest) { onFrame?(frame) }
+    }
+
+    /// The newest whole JPEG in `buffer`, which keeps only what follows it;
+    /// a buffer past `limit` with none is dropped
+    static func takeLatestJPEG(_ buffer: inout Data, limit: Int = maxBuffer) -> Data? {
         var latest: Data?
         while let soi = buffer.range(of: Data([0xFF, 0xD8])),
               let eoi = buffer.range(of: Data([0xFF, 0xD9]), in: soi.upperBound..<buffer.endIndex) {
             latest = buffer.subdata(in: soi.lowerBound..<eoi.upperBound)
             buffer.removeSubrange(buffer.startIndex..<eoi.upperBound)
         }
-        if let latest, let frame = Self.sampleBuffer(jpeg: latest) { onFrame?(frame) }
+        if buffer.count > limit { buffer = Data() }
+        return latest
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard session === self.session else { return }
+        // A stopped source, or a retry already under way, has moved on
+        guard lock.withLock({ session === self.session }) else { return }
+        session.finishTasksAndInvalidate()
         DispatchQueue.main.async { self.onStatus?("Stream ended, retrying…") }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.start() }
     }
