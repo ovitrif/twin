@@ -20,6 +20,7 @@
 //! `dmb-hid <udid> --ui` prints the front app's elements as one JSON array and
 //! exits (see ui.rs).
 
+mod frames;
 mod stream;
 mod ui;
 
@@ -146,6 +147,9 @@ async fn main() {
         say(&format!("error: {e}"));
         std::process::exit(1);
     }
+    // Returning would wait for tokio's stdin reader, blocked until a line
+    // comes; the session is already stopped
+    std::process::exit(0);
 }
 
 /// The screen's size in pixels, read from one screenshot's PNG header
@@ -182,6 +186,7 @@ struct VideoPeer {
     ssrc: u32,
     highest_seq: u32,
     fir_seq: u8,
+    sequence: frames::ExtendedSeq,
 }
 
 fn report_block(peer: &VideoPeer) -> idevice::core_device::ReportBlock {
@@ -242,16 +247,60 @@ async fn run(udid: &str) -> Result<(), String> {
 
     let video_mode = VIDEO.load(std::sync::atomic::Ordering::Relaxed);
     if video_mode {
-        let (w, h) = screen_size(&mut adapter, &mut handshake).await?;
-        say(&format!("screen {w} {h}"));
+        // A phone just plugged in can lack its instruments service for a few
+        // seconds, as it lacks the display service; report both alike so the
+        // mirror retries instead of falling back
+        let size = tokio::time::timeout(
+            Duration::from_secs(10),
+            screen_size(&mut adapter, &mut handshake),
+        )
+        .await
+        .map_err(|_| "no display service: screen size timed out".to_string())?
+        .map_err(|e| {
+            if e.contains("ServiceNotFound") {
+                format!("no display service: {e}")
+            } else {
+                e
+            }
+        })?;
+        say(&format!("screen {} {}", size.0, size.1));
     }
-    let media = stream::start(&mut adapter, &mut handshake).await?;
-    let our_ssrc = media.ssrc;
-    let (audio, video) = (media.audio_udp, std::sync::Arc::new(media.video_udp));
+    let stream::ScreenMediaStream {
+        mut client,
+        audio_udp,
+        video_udp,
+        ssrc,
+    } = stream::start(&mut adapter, &mut handshake).await?;
+    let result = serve(
+        &mut adapter,
+        &mut handshake,
+        (audio_udp, video_udp, ssrc),
+        video_mode,
+    )
+    .await;
+    // The phone accepts the next session only once this one is stopped
+    let _ = client.stop_media_stream().await;
+    result
+}
+
+/// Touch, keys and buttons from stdin while the media stream runs
+async fn serve(
+    adapter: &mut idevice::tcp::handle::AdapterHandle,
+    handshake: &mut RsdHandshake,
+    (audio, video, our_ssrc): (
+        idevice::tcp::handle::UdpSocketHandle,
+        idevice::tcp::handle::UdpSocketHandle,
+        u32,
+    ),
+    video_mode: bool,
+) -> Result<(), String> {
+    let video = std::sync::Arc::new(video);
     let peer = std::sync::Arc::new(tokio::sync::Mutex::new(VideoPeer::default()));
     // Set when a media socket ends, as when the phone unplugs: with no
     // input coming, nothing else would notice
     let ended = std::sync::Arc::new(tokio::sync::Notify::new());
+    // Set when the viewer stops reading the video
+    let viewer_gone = std::sync::Arc::new(tokio::sync::Notify::new());
     // The stream must exist for touch to work; its audio is always dropped,
     // its video too unless --video
     let audio_ended = ended.clone();
@@ -260,7 +309,13 @@ async fn run(udid: &str) -> Result<(), String> {
         audio_ended.notify_one();
     });
     if video_mode {
-        spawn_video(video.clone(), peer.clone(), our_ssrc, ended.clone());
+        spawn_video(
+            video.clone(),
+            peer.clone(),
+            our_ssrc,
+            ended.clone(),
+            viewer_gone.clone(),
+        );
     } else {
         let video = video.clone();
         let video_ended = ended.clone();
@@ -272,10 +327,10 @@ async fn run(udid: &str) -> Result<(), String> {
     // The phone needs a moment to match its HID surfaces to the new stream
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let mut touch = UniversalHidServiceClient::connect_rsd(&mut adapter, &mut handshake)
+    let mut touch = UniversalHidServiceClient::connect_rsd(adapter, handshake)
         .await
         .map_err(|e| format!("touch service: {e:?}"))?;
-    let mut indigo = IndigoHidClient::connect_rsd(&mut adapter, &mut handshake)
+    let mut indigo = IndigoHidClient::connect_rsd(adapter, handshake)
         .await
         .map_err(|e| format!("button service: {e:?}"))?;
     say("ready");
@@ -290,6 +345,7 @@ async fn run(udid: &str) -> Result<(), String> {
                 say("error: media stream ended");
                 std::process::exit(3);
             }
+            _ = viewer_gone.notified() => break,
         };
         let Ok(Some(line)) = line else { break };
         let Ok(command) = serde_json::from_str::<Command>(&line) else {
@@ -331,8 +387,6 @@ async fn run(udid: &str) -> Result<(), String> {
             }
         }
     }
-    let mut client = media.client;
-    let _ = client.stop_media_stream().await;
     Ok(())
 }
 
@@ -428,9 +482,12 @@ fn spawn_video(
     peer: std::sync::Arc<tokio::sync::Mutex<VideoPeer>>,
     our_ssrc: u32,
     ended: std::sync::Arc<tokio::sync::Notify>,
+    viewer_gone: std::sync::Arc<tokio::sync::Notify>,
 ) {
     use std::io::Write;
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    // A few frames of slack; a viewer that falls further behind loses frames
+    // and gets a keyframe instead of memory growing without bound
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
     std::thread::spawn(move || {
         let mut out = std::io::BufWriter::new(std::io::stdout());
         while let Ok(frame) = rx.recv() {
@@ -441,7 +498,9 @@ fn spawn_video(
                 .and_then(|_| out.flush())
                 .is_err()
             {
-                std::process::exit(0); // the viewer went away
+                // The viewer went away: end the session properly
+                viewer_gone.notify_one();
+                return;
             }
         }
     });
@@ -462,9 +521,9 @@ fn spawn_video(
     });
     tokio::spawn(async move {
         let mut depacketizer = idevice::core_device::HevcDepacketizer::new();
-        let mut frame: Vec<u8> = Vec::new();
-        let mut frame_ts: Option<u32> = None;
+        let mut units = frames::AccessUnits::new();
         let mut asked = false;
+        let mut dropped = false;
         while let Ok(datagram) = video.recv().await {
             if idevice::core_device::is_rtcp(&datagram.data) {
                 continue;
@@ -476,21 +535,25 @@ fn spawn_video(
                 let mut p = peer.lock().await;
                 p.port = datagram.source_port;
                 p.ssrc = packet.ssrc;
-                p.highest_seq = packet.sequence_number as u32;
+                p.highest_seq = p.sequence.update(packet.sequence_number);
             }
             if !asked {
                 asked = true;
                 let _ = request_keyframe(&video, &peer, our_ssrc).await;
             }
-            // A new timestamp starts the next access unit
-            if frame_ts.is_some_and(|ts| ts != packet.timestamp) && !frame.is_empty() {
-                let _ = tx.send(std::mem::take(&mut frame));
-            }
-            frame_ts = Some(packet.timestamp);
             depacketizer.push(packet.sequence_number, packet.timestamp, packet.payload);
-            frame.extend(depacketizer.take_output());
-            if packet.marker && !frame.is_empty() {
-                let _ = tx.send(std::mem::take(&mut frame));
+            let output = depacketizer.take_output();
+            for unit in units.push(packet.sequence_number, packet.marker, &output) {
+                match tx.try_send(unit) {
+                    Ok(()) => {}
+                    Err(std::sync::mpsc::TrySendError::Full(_)) => dropped = true,
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
+                }
+            }
+            // Frames after a dropped one decode only from the next keyframe
+            if dropped {
+                dropped = false;
+                let _ = request_keyframe(&video, &peer, our_ssrc).await;
             }
         }
         ended.notify_one();
