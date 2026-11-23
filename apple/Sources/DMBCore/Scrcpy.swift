@@ -42,9 +42,21 @@ public enum ScrcpyProtocol {
         return d
     }
 
+    /// At most `limit` bytes of UTF-8, cut between characters so the phone
+    /// never gets half of one
+    static func utf8Prefix(_ text: String, _ limit: Int) -> Data {
+        var data = Data()
+        for scalar in text.unicodeScalars {
+            let bytes = Array(String(scalar).utf8)
+            guard data.count + bytes.count <= limit else { break }
+            data.append(contentsOf: bytes)
+        }
+        return data
+    }
+
     /// INJECT_TEXT: a 4-byte length and UTF-8
     public static func text(_ text: String) -> Data {
-        let bytes = Data(text.utf8.prefix(300))
+        let bytes = utf8Prefix(text, 300)
         var d = Data([1])
         d.appendBE(UInt32(bytes.count))
         d.append(bytes)
@@ -68,7 +80,7 @@ public enum ScrcpyProtocol {
     /// pastes it where the focus is (scrcpy's Ctrl+V)
     public static func setClipboard(_ text: String, paste: Bool) -> Data {
         // scrcpy's SC_CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH
-        let bytes = Data(text.utf8.prefix((1 << 18) - 14))
+        let bytes = utf8Prefix(text, (1 << 18) - 14)
         var d = Data([9])
         d.appendBE(UInt64(0))  // sequence: no acknowledgement
         d.append(paste ? 1 : 0)

@@ -37,3 +37,11 @@ import Testing
     let stream = Data([0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x68, 3, 0, 0, 0, 1, 0x65, 4, 5])
     #expect(ScrcpyProtocol.nalUnits(stream) == [Data([0x67, 1, 2]), Data([0x68, 3]), Data([0x65, 4, 5])])
 }
+
+@Test func cutsLongTextBetweenCharacters() {
+    // "é" is 2 bytes: 3 of them fill 6, a 7-byte cap must not take half of a 4th
+    #expect(ScrcpyProtocol.utf8Prefix("éééé", 7) == Data("ééé".utf8))
+    #expect(ScrcpyProtocol.utf8Prefix("abc", 7) == Data("abc".utf8))
+    let message = ScrcpyProtocol.text(String(repeating: "€", count: 200))
+    #expect(String(data: message.dropFirst(5), encoding: .utf8) == String(repeating: "€", count: 100))
+}

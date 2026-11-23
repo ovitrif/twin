@@ -40,8 +40,17 @@ extension InputSink {
     /// where the focus is; ⌘C and ⌘X do nothing
     func clipboard(_ command: ClipboardCommand) {
         guard command == .paste, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
-        type(text)
+        type(typeable(text))
     }
+}
+
+/// Clipboard text as the phone gets it typed: Mac and Windows line ends
+/// become one newline, and at most 2,000 characters, since touch waits
+/// while dmb-hid types
+func typeable(_ text: String) -> String {
+    let limit = 2_000
+    let lines = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+    return String(lines.prefix(limit))
 }
 
 /// Live touch through `dmb-hid` and the CoreDevice HID service (iOS 27 and

@@ -31,17 +31,14 @@ final class ScrcpyInput: InputSink {
     private let session: ScrcpySession
     private var scrollPending = CGVector.zero
 
-    /// The text last shared either way, so the phone's echo of a paste
-    /// leaves the Mac's clipboard alone
-    private var shared: String?
-
     init(session: ScrcpySession) {
         self.session = session
         // What the phone copies lands on the Mac's clipboard, as in scrcpy
         session.onClipboard = { [weak self] text in
             DispatchQueue.main.async {
-                guard let self, text != self.shared else { return }
-                self.shared = text
+                // The phone echoes a paste back; text the Mac already holds
+                // stays as it is, anything else lands
+                guard self != nil, NSPasteboard.general.string(forType: .string) != text else { return }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
             }
@@ -54,7 +51,6 @@ final class ScrcpyInput: InputSink {
         switch command {
         case .paste:
             guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
-            shared = text
             session.send(ScrcpyProtocol.setClipboard(text, paste: true))
         case .copy: tap(278)  // KEYCODE_COPY
         case .cut: tap(277)   // KEYCODE_CUT

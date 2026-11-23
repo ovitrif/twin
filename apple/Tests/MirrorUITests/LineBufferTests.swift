@@ -8,3 +8,8 @@ import Testing
     #expect(buffer.append(Data("dy\nscreen 1206".utf8)) == ["ready"])
     #expect(buffer.append(Data(" 2622\n\nerr\n".utf8)) == ["screen 1206 2622", "err"])
 }
+
+@Test func pastedTextGetsOneNewlinePerLineAndACap() {
+    #expect(typeable("a\r\nb\rc\n") == "a\nb\nc\n")
+    #expect(typeable(String(repeating: "x", count: 5_000)).count == 2_000)
+}
