@@ -249,14 +249,25 @@ async fn run(udid: &str) -> Result<(), String> {
     let our_ssrc = media.ssrc;
     let (audio, video) = (media.audio_udp, std::sync::Arc::new(media.video_udp));
     let peer = std::sync::Arc::new(tokio::sync::Mutex::new(VideoPeer::default()));
+    // Set when a media socket ends, as when the phone unplugs: with no
+    // input coming, nothing else would notice
+    let ended = std::sync::Arc::new(tokio::sync::Notify::new());
     // The stream must exist for touch to work; its audio is always dropped,
     // its video too unless --video
-    tokio::spawn(async move { while audio.recv().await.is_ok() {} });
+    let audio_ended = ended.clone();
+    tokio::spawn(async move {
+        while audio.recv().await.is_ok() {}
+        audio_ended.notify_one();
+    });
     if video_mode {
-        spawn_video(video.clone(), peer.clone(), our_ssrc);
+        spawn_video(video.clone(), peer.clone(), our_ssrc, ended.clone());
     } else {
         let video = video.clone();
-        tokio::spawn(async move { while video.recv().await.is_ok() {} });
+        let video_ended = ended.clone();
+        tokio::spawn(async move {
+            while video.recv().await.is_ok() {}
+            video_ended.notify_one();
+        });
     }
     // The phone needs a moment to match its HID surfaces to the new stream
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -271,7 +282,16 @@ async fn run(udid: &str) -> Result<(), String> {
 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut last = (0u16, 0u16);
-    while let Ok(Some(line)) = lines.next_line().await {
+    loop {
+        let line = tokio::select! {
+            line = lines.next_line() => line,
+            _ = ended.notified() => {
+                // Exit like a dropped tunnel, so the mirror starts a fresh session
+                say("error: media stream ended");
+                std::process::exit(3);
+            }
+        };
+        let Ok(Some(line)) = line else { break };
         let Ok(command) = serde_json::from_str::<Command>(&line) else {
             say(&format!("error: bad command {line}"));
             continue;
@@ -361,20 +381,16 @@ async fn type_text(
                 .await
                 .map_err(|e| format!("{e:?}"))?;
         }
-        indigo
-            .send_keyboard(usage, ButtonState::Down)
-            .await
-            .map_err(|e| format!("{e:?}"))?;
-        indigo
-            .send_keyboard(usage, ButtonState::Up)
-            .await
-            .map_err(|e| format!("{e:?}"))?;
-        if shift {
-            indigo
-                .send_keyboard(SHIFT, ButtonState::Up)
-                .await
-                .map_err(|e| format!("{e:?}"))?;
+        let mut typed = indigo.send_keyboard(usage, ButtonState::Down).await;
+        if typed.is_ok() {
+            typed = indigo.send_keyboard(usage, ButtonState::Up).await;
         }
+        // Shift comes up even when the key failed, or the phone keeps it held
+        if shift {
+            let released = indigo.send_keyboard(SHIFT, ButtonState::Up).await;
+            typed = typed.and(released);
+        }
+        typed.map_err(|e| format!("{e:?}"))?;
     }
     Ok(())
 }
@@ -411,6 +427,7 @@ fn spawn_video(
     video: std::sync::Arc<idevice::tcp::handle::UdpSocketHandle>,
     peer: std::sync::Arc<tokio::sync::Mutex<VideoPeer>>,
     our_ssrc: u32,
+    ended: std::sync::Arc<tokio::sync::Notify>,
 ) {
     use std::io::Write;
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -476,5 +493,6 @@ fn spawn_video(
                 let _ = tx.send(std::mem::take(&mut frame));
             }
         }
+        ended.notify_one();
     });
 }
