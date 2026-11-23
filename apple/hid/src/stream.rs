@@ -67,15 +67,47 @@ pub async fn start(
         ))
         .await
         .map_err(|e| format!("audio stream: {e:?}"))?;
+    match start_video(
+        &mut client,
+        &receiver_ip,
+        &sender_ip,
+        &video_udp,
+        &call_info,
+        session,
+    )
+    .await
+    {
+        Ok(ssrc) => Ok(ScreenMediaStream {
+            client,
+            audio_udp,
+            video_udp,
+            ssrc,
+        }),
+        Err(e) => {
+            // The audio half already runs; leave the phone free for the next try
+            let _ = client.stop_media_stream().await;
+            Err(e)
+        }
+    }
+}
+
+async fn start_video(
+    client: &mut DisplayServiceClient<Box<dyn ReadWrite>>,
+    receiver_ip: &str,
+    sender_ip: &str,
+    video_udp: &UdpSocketHandle,
+    call_info: &CallInfoBlob,
+    session: uuid::Uuid,
+) -> Result<u32, String> {
     let video_call = uuid::Uuid::new_v4().to_string().to_uppercase();
     let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
-    let video_offer = build_screen_video_offer(&video_call, &call_info, ssrc)
+    let video_offer = build_screen_video_offer(&video_call, call_info, ssrc)
         .map_err(|e| format!("video offer: {e:?}"))?;
     client
         .start_media_stream(build_start_video_parameters(
-            &receiver_ip,
+            receiver_ip,
             video_udp.local_port(),
-            &sender_ip,
+            sender_ip,
             50001,
             video_offer,
             CLIENT_SUPPORTED_FEATURES,
@@ -84,10 +116,5 @@ pub async fn start(
         ))
         .await
         .map_err(|e| format!("video stream: {e:?}"))?;
-    Ok(ScreenMediaStream {
-        client,
-        audio_udp,
-        video_udp,
-        ssrc,
-    })
+    Ok(ssrc)
 }
