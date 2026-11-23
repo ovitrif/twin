@@ -36,12 +36,7 @@ func pidFile(_ udid: String) -> URL { stateDir.appendingPathComponent("mirror-\(
 
 /// The running mirror for this phone, if any.
 func mirrorPID(_ udid: String) -> pid_t? {
-    guard let text = try? String(contentsOf: pidFile(udid), encoding: .utf8),
-          let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-          kill(pid, 0) == 0,
-          NSRunningApplication(processIdentifier: pid) != nil
-    else { return nil }
-    return pid
+    MirrorPIDFile.read(pidFile(udid)) { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
 }
 
 /// Twin's binary: inside the app next to this one, the installed app, or the
@@ -258,8 +253,16 @@ func uiTree(_ args: [String]) {
     let output = Pipe()
     process.standardOutput = output
     do { try process.run() } catch { fail("cannot start dmb-hid: \(error.localizedDescription)") }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
+    // Read while waiting, so a full pipe never stalls dmb-hid
+    var data = Data()
+    let read = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        data = output.fileHandleForReading.readDataToEndOfFile()
+        read.signal()
+    }
+    // A walk through a long list takes a while; a hung phone takes forever
+    guard process.waitUntilExit(timeout: 180) else { fail("dmb-hid --ui timed out reading \(device.name)'s screen") }
+    guard read.wait(timeout: .now() + 5) == .success else { fail("dmb-hid --ui left its output open") }
     guard process.terminationStatus == 0 else { exit(process.terminationStatus) }
     if json {
         FileHandle.standardOutput.write(data)

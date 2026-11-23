@@ -15,7 +15,7 @@ public enum Devices {
     /// The physical iOS devices CoreDevice knows, wired or not.
     public static func list() throws -> [Device] {
         let out = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dmb-devicectl-\(getpid()).json")
+            .appendingPathComponent("dmb-devicectl-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: out) }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
@@ -24,13 +24,7 @@ public enum Devices {
         task.standardError = FileHandle.nullDevice
         try task.run()
         // A hung CoreDevice ends here rather than leaving devicectl behind
-        let deadline = Date().addingTimeInterval(15)
-        while task.isRunning && Date() < deadline { usleep(50_000) }
-        if task.isRunning {
-            task.terminate()
-            task.waitUntilExit()
-            throw DMBError("devicectl timed out")
-        }
+        guard task.waitUntilExit(timeout: 15) else { throw DMBError("devicectl timed out") }
         guard task.terminationStatus == 0 else {
             throw DMBError("devicectl failed (exit \(task.terminationStatus)); is Xcode installed?")
         }
