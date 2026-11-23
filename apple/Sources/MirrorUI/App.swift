@@ -74,14 +74,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         if let log = options.log { freopen(log, "a", stderr) }
-        if let parent = options.parent {
-            let watch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
-            watch.setEventHandler { NSApp.terminate(nil) }
-            watch.resume()
-            parentWatch = watch
-            if kill(parent, 0) != 0 { NSApp.terminate(nil) }
-        }
-        buildMenu()
+        parentWatch = watchParent(options.parent)
+        buildMenu(target: self, home: #selector(home), lock: #selector(lock))
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let height = options.height ?? (screen.height * 0.8).rounded()
         // iPhone Air proportions until the first frame says otherwise
@@ -132,31 +126,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// dmb-hid
     private func deviceHub() -> DeviceHubSource? {
         guard options.wda == nil, let udid = options.udid, let helper = hidHelper else { return nil }
-        let hid = HIDInput(helper: helper, udid: udid, video: true)
-        let hub = DeviceHubSource(hid: hid)
-        hub.onScreenSize = { [weak self] in self?.view.screenSize = $0 }
         // Before iOS 27 there is no Device Hub: fall back to the capture path
-        hid.onFailed = { [weak self] in self?.fallBackToCapture() }
+        let (hid, hub) = MirrorUI.deviceHub(helper: helper, udid: udid, view: view) { [weak self] in
+            self?.fallBackToCapture()
+        }
         self.hid = hid
         return hub
     }
 
     private func fallBackToCapture() {
         FileHandle.standardError.write(Data("dmb: no Device Hub stream, capturing the screen instead\n".utf8))
-        view.screenSize = nil
         source = CaptureSource(name: options.name)
         startSource()
         hid = nil
         input = nil
         connectInput()
-    }
-
-    /// dmb-hid sits next to this binary in the app bundle
-    private var hidHelper: URL? {
-        let candidates = [ProcessInfo.processInfo.environment["DMB_HID"],
-                          Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid").path]
-        return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) }
     }
 
     private func connectInput() {
@@ -213,24 +197,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentAspectRatio = newSize
         window.setFrame(frame, display: true, animate: false)
         styler.applyStyle()
-    }
-
-    private func buildMenu() {
-        let main = NSMenu()
-        let appItem = NSMenuItem()
-        let app = NSMenu()
-        app.addItem(withTitle: "Quit Twin", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        appItem.submenu = app
-        main.addItem(appItem)
-        let deviceItem = NSMenuItem()
-        let device = NSMenu(title: "Device")
-        device.addItem(withTitle: "Home", action: #selector(home), keyEquivalent: "h").target = self
-        device.addItem(withTitle: "Lock", action: #selector(lock), keyEquivalent: "l").target = self
-        device.addItem(withTitle: "Close", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "w")
-        device.addItem(withTitle: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
-        deviceItem.submenu = device
-        main.addItem(deviceItem)
-        NSApp.mainMenu = main
     }
 
     @objc private func home() { input?.button("home") }

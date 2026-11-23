@@ -161,14 +161,8 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         if let log = options.log { freopen(log, "a", stderr) }
-        if let parent = options.parent {
-            let watch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
-            watch.setEventHandler { NSApp.terminate(nil) }
-            watch.resume()
-            parentWatch = watch
-            if kill(parent, 0) != 0 { NSApp.terminate(nil) }
-        }
-        buildMenu()
+        parentWatch = watchParent(options.parent)
+        buildMenu(target: self, home: #selector(home), lock: #selector(lock), back: #selector(back))
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let height = options.height ?? (screen.height * 0.8).rounded()
@@ -273,14 +267,6 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         source.start()
     }
 
-    /// dmb-hid sits next to this binary in the app bundle; DMB_HID overrides it
-    private var hidHelper: URL? {
-        let candidates = [ProcessInfo.processInfo.environment["DMB_HID"],
-                          Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dmb-hid").path]
-        return candidates.compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) }
-    }
-
     /// The iPhone's screen and touch over one Device Hub session, which keeps
     /// the phone's real status bar; the capture path without one
     private func startIPhone() {
@@ -289,12 +275,11 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if let udid = options.udid, let helper = hidHelper {
-            let hid = HIDInput(helper: helper, udid: udid, video: true)
+            let (hid, hub) = deviceHub(helper: helper, udid: udid, view: pair.iphone) { [weak self] in
+                self?.captureIPhone()
+            }
             hid.onError = { [weak self] in self?.log($0) }
             hid.onReady = { [weak self] in self?.log("iPhone input ready") }
-            hid.onFailed = { [weak self] in self?.captureIPhone() }
-            let hub = DeviceHubSource(hid: hid)
-            hub.onScreenSize = { [weak self] in self?.pair.iphone.screenSize = $0 }
             pair.iphone.input = hid
             self.hid = hid
             run(hub)
@@ -307,7 +292,6 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     /// through a dmb-hid session started on its first frame
     private func captureIPhone() {
         log("no Device Hub stream for the iPhone, capturing its screen instead")
-        pair.iphone.screenSize = nil
         if let udid = options.udid, let helper = hidHelper {
             let hid = HIDInput(helper: helper, udid: udid)
             hid.onError = { [weak self] in self?.log($0) }
@@ -373,25 +357,6 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
     /// The phone the pointer last used takes Home, Lock and typing
     private var activeInput: InputSink? {
         (window.firstResponder as? MirrorView)?.input ?? androidInput
-    }
-
-    private func buildMenu() {
-        let main = NSMenu()
-        let appItem = NSMenuItem()
-        let app = NSMenu()
-        app.addItem(withTitle: "Quit Twin", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        appItem.submenu = app
-        main.addItem(appItem)
-        let deviceItem = NSMenuItem()
-        let device = NSMenu(title: "Device")
-        device.addItem(withTitle: "Home", action: #selector(home), keyEquivalent: "h").target = self
-        device.addItem(withTitle: "Lock", action: #selector(lock), keyEquivalent: "l").target = self
-        device.addItem(withTitle: "Back", action: #selector(back), keyEquivalent: "b").target = self
-        device.addItem(withTitle: "Close", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "w")
-        device.addItem(withTitle: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
-        deviceItem.submenu = device
-        main.addItem(deviceItem)
-        NSApp.mainMenu = main
     }
 
     @objc private func home() { activeInput?.button("home") }
