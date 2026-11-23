@@ -23,10 +23,9 @@ mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
 cp "$APP_BIN" "${APP}/Contents/MacOS/twin-app"
 
-# Liquid Glass icon: actool compiles the Icon Composer bundle into Assets.car
-# (light, dark, clear and tinted variants) plus AppIcon.icns for older macOS.
-# Without an actool that understands .icon files, fall back to the flat icon.
-# Made with apple/scripts/make-icon.swift cast
+# The app icon, made with apple/scripts/make-icon.swift cast. The Icon
+# Composer source, crates/twin-app/assets/AppIcon.icon, is not compiled in:
+# actool needs Xcode, and release builds must not
 cp "$(dirname "$0")/../apple/assets/Twin.icns" "${APP}/Contents/Resources/AppIcon.icns"
 
 # The mirror windows, the dmb CLI and dmb-hid (macOS only, built with Swift)
@@ -44,8 +43,13 @@ pt_cache="${HOME}/.cache/twin"
 pt_zip="${pt_cache}/platform-tools-${PT_VERSION}-darwin.zip"
 mkdir -p "$pt_cache"
 if ! echo "${PT_SHA256}  ${pt_zip}" | shasum -a 256 -c - >/dev/null 2>&1; then
-  curl -fsSL "https://dl.google.com/android/repository/platform-tools_${PT_VERSION}-darwin.zip" -o "$pt_zip"
-  echo "${PT_SHA256}  ${pt_zip}" | shasum -a 256 -c - >/dev/null || { echo "platform-tools checksum mismatch" >&2; exit 1; }
+  # Download beside the cache and move it in only once it checks out, so an
+  # interrupted download never sits in the cache
+  pt_part="${pt_zip}.$$.part"
+  curl -fsSL "https://dl.google.com/android/repository/platform-tools_${PT_VERSION}-darwin.zip" -o "$pt_part"
+  echo "${PT_SHA256}  ${pt_part}" | shasum -a 256 -c - >/dev/null || {
+    rm -f "$pt_part"; echo "platform-tools checksum mismatch" >&2; exit 1; }
+  mv -f "$pt_part" "$pt_zip"
 fi
 mkdir -p "${APP}/Contents/Helpers"
 unzip -q -o "$pt_zip" platform-tools/adb platform-tools/NOTICE.txt platform-tools/source.properties \
@@ -64,7 +68,7 @@ cat > "${APP}/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>${VERSION}</string>
-  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
