@@ -51,6 +51,9 @@ struct Focus {
 
 pub struct Inspector {
     server: RemoteServerClient<Box<dyn idevice::ReadWrite>>,
+    /// A reply came too late: it may still arrive and would be read as the
+    /// answer to the next call, since idevice keeps message ids private
+    desynced: bool,
 }
 
 fn passthrough(v: Value) -> Value {
@@ -155,7 +158,10 @@ impl Inspector {
             .await
             .map_err(|e| format!("inspector check-in: {e:?}"))?;
         let server = RemoteServerClient::new(device.get_socket().ok_or("inspector: no socket")?);
-        let mut inspector = Self { server };
+        let mut inspector = Self {
+            server,
+            desynced: false,
+        };
         // The daemon opens with its capabilities and API version; it ignores
         // the inspector until those are read
         for _ in 0..2 {
@@ -215,7 +221,10 @@ impl Inspector {
             }
         })
         .await
-        .map_err(|_| format!("{method}: no answer"))??;
+        .map_err(|_| {
+            self.desynced = true;
+            format!("{method}: no answer")
+        })??;
         if reply
             .as_ref()
             .and_then(|r| r.as_dictionary())
@@ -269,6 +278,9 @@ impl Inspector {
     }
 
     async fn attribute(&mut self, focus: &Focus, name: &str) -> String {
+        if self.desynced {
+            return String::new();
+        }
         let Some((_, attribute)) = focus.attributes.iter().find(|(n, _)| n == name) else {
             return String::new();
         };
@@ -324,10 +336,11 @@ impl Inspector {
         }
         // Back to the start; the second element is usually the top of the
         // content, so stopping there scrolls a long list back up
+        // (a failure here keeps the elements already read)
         if seen.len() > 1 {
-            self.step(FIRST, 0, quick).await?;
-            self.step(NEXT, 0, quick).await?;
-            self.step(FIRST, 0, quick).await?;
+            let _ = self.step(FIRST, 0, quick).await;
+            let _ = self.step(NEXT, 0, quick).await;
+            let _ = self.step(FIRST, 0, quick).await;
         }
         Ok(seen)
     }
