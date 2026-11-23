@@ -47,3 +47,15 @@ import Testing
     #expect(steps.map { $0["type"] as? String } == ["pointerMove", "pointerDown", "pointerMove", "pointerMove", "pointerUp"])
     #expect(steps.map { $0["duration"] as? Int } == [0, nil, 200, 500, nil])
 }
+
+@Test func devicectlComesFromAnInstalledXcodeNeverXcrun() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("dmb-xcode-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    #expect(Devices.devicectl(in: [root]) == nil)    // no Xcode: no tool, and no xcrun prompt
+    let bin = root.appendingPathComponent("Xcode-beta.app/Contents/Developer/usr/bin")
+    try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+    let tool = bin.appendingPathComponent("devicectl")
+    FileManager.default.createFile(atPath: tool.path, contents: Data(), attributes: [.posixPermissions: 0o755])
+    #expect(Devices.devicectl(in: [root])?.path == tool.path)
+}

@@ -14,12 +14,15 @@ public struct Device: Codable, Equatable {
 public enum Devices {
     /// The physical iOS devices CoreDevice knows, wired or not.
     public static func list() throws -> [Device] {
+        guard let devicectl = devicectl() else {
+            throw DMBError("iPhones need Xcode; install it from the App Store and open it once")
+        }
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("dmb-devicectl-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: out) }
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        task.arguments = ["devicectl", "list", "devices", "--quiet", "--json-output", out.path]
+        task.executableURL = devicectl
+        task.arguments = ["list", "devices", "--quiet", "--json-output", out.path]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         try task.run()
@@ -29,6 +32,23 @@ public enum Devices {
             throw DMBError("devicectl failed (exit \(task.terminationStatus)); is Xcode installed?")
         }
         return try parse(Data(contentsOf: out))
+    }
+
+    /// devicectl inside an installed Xcode, found without /usr/bin/xcrun:
+    /// on a Mac without Xcode, xcrun asks to install the developer tools.
+    /// Twin's menu bar app looks it up the same way.
+    static func devicectl(in applications: [URL] = [
+        URL(fileURLWithPath: "/Applications"),
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+    ]) -> URL? {
+        for folder in applications {
+            let apps = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+            for app in apps.sorted() where app.hasPrefix("Xcode") && app.hasSuffix(".app") {
+                let tool = folder.appendingPathComponent(app).appendingPathComponent("Contents/Developer/usr/bin/devicectl")
+                if FileManager.default.isExecutableFile(atPath: tool.path) { return tool }
+            }
+        }
+        return nil
     }
 
     /// Reads `devicectl list devices --json-output`, preferring its `properties`
