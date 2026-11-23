@@ -8,6 +8,7 @@ use eframe::egui::{
     Shape, Stroke, StrokeKind, Ui, pos2, vec2,
 };
 
+use crate::glyph::svg_path_of;
 use crate::theme;
 
 /// The popover's inner padding and the grid most gaps use
@@ -338,18 +339,15 @@ pub enum ButtonLook {
     Busy,
 }
 
-pub enum Face {
-    Glyph(Glyph),
-}
-
 /// A 36-point icon button
-pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -> Response {
+pub fn square_button(ui: &mut Ui, glyph: Glyph, look: ButtonLook, tooltip: &str) -> Response {
     let sense = if matches!(look, ButtonLook::Disabled | ButtonLook::Busy) {
         Sense::hover()
     } else {
         Sense::click()
     };
     let (rect, response) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), sense);
+    button_info(&response, look != ButtonLook::Disabled, tooltip);
     let (hover, _) = overlay(ui, &response);
     let painter = ui.painter();
     // No background at rest; Active shows in the icon's green
@@ -373,7 +371,6 @@ pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -
         // An opaque dim ink: a translucent one would show darker dots where
         // the glyph's strokes overlap
         let ink = if disabled { theme::ink_disabled() } else { ink };
-        let Face::Glyph(glyph) = face;
         paint_glyph(painter, icon_rect, glyph, ink);
     }
     let response = if look == ButtonLook::Disabled || look == ButtonLook::Busy {
@@ -388,9 +385,23 @@ pub fn square_button(ui: &mut Ui, face: Face, look: ButtonLook, tooltip: &str) -
     }
 }
 
+/// Names a painted button for VoiceOver and AccessKit
+pub fn button_info(response: &Response, enabled: bool, label: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+}
+
+/// Names one choice of a segmented control or a sidebar, and whether it is
+/// the selected one
+pub fn tab_info(response: &Response, selected: bool, label: &str) {
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
+    });
+}
+
 /// A plain icon button with no fill until hovered: Refresh
 pub fn ghost_button(ui: &mut Ui, glyph: Glyph, tooltip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), Sense::click());
+    button_info(&response, true, tooltip);
     let (hover, progress) = overlay(ui, &response);
     let highlight = highlight_rect(rect);
     ui.painter().rect_filled(highlight, HIGHLIGHT_RADIUS, hover);
@@ -417,6 +428,7 @@ pub fn link_button(ui: &mut Ui, glyph: Glyph, label: &str) -> Response {
         .x;
     let size = vec2(8.0 + ICON + 8.0 + width + 8.0, BUTTON);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    button_info(&response, true, label);
     let (hover, progress) = overlay(ui, &response);
     let ink = theme::tab_inactive().lerp_to_gamma(theme::text_strong(), progress);
     let highlight = Rect::from_center_size(rect.center(), vec2(rect.width(), HIGHLIGHT));
@@ -511,6 +523,7 @@ pub fn segmented(
             ui.id().with(("segment", *label)),
             Sense::click(),
         );
+        tab_info(&response, index == selected, label);
         let (hover, progress) = overlay(ui, &response);
         if index != selected {
             painter.rect_filled(rect, 7.0, hover);
@@ -606,7 +619,7 @@ pub fn paint_brand(painter: &Painter, rect: Rect, brand: Brand, line: Option<f32
 fn brand_image(d: &str, line: Option<f32>, px: u32) -> egui::ColorImage {
     let size = [px as usize, px as usize];
     let empty = || egui::ColorImage::new(size, vec![Color32::TRANSPARENT; size[0] * size[1]]);
-    let (Some(mut pixmap), Some(path)) = (tiny_skia::Pixmap::new(px, px), svg_path(d)) else {
+    let (Some(mut pixmap), Some(path)) = (tiny_skia::Pixmap::new(px, px), svg_path_of(d)) else {
         return empty();
     };
     let mut paint = tiny_skia::Paint::default();
@@ -632,210 +645,15 @@ fn brand_image(d: &str, line: Option<f32>, px: u32) -> egui::ColorImage {
     egui::ColorImage::from_rgba_premultiplied(size, pixmap.data())
 }
 
-/// Reads an SVG path's M, L, H, V, C, S, A and Z commands, absolute or
-/// relative
-fn svg_path(d: &str) -> Option<tiny_skia::Path> {
-    let bytes = d.as_bytes();
-    let mut i = 0;
-    let skip = |i: &mut usize| {
-        while *i < bytes.len() && (bytes[*i] == b' ' || bytes[*i] == b',') {
-            *i += 1;
-        }
-    };
-    let number = |i: &mut usize| -> Option<f32> {
-        skip(i);
-        let start = *i;
-        if *i < bytes.len() && (bytes[*i] == b'-' || bytes[*i] == b'+') {
-            *i += 1;
-        }
-        let mut dot = false;
-        while *i < bytes.len() && (bytes[*i].is_ascii_digit() || (bytes[*i] == b'.' && !dot)) {
-            dot |= bytes[*i] == b'.';
-            *i += 1;
-        }
-        d.get(start..*i)?.parse().ok()
-    };
-    // Arc flags are one digit each, and may run into what follows
-    let flag = |i: &mut usize| -> Option<bool> {
-        skip(i);
-        let value = match bytes.get(*i)? {
-            b'0' => false,
-            b'1' => true,
-            _ => return None,
-        };
-        *i += 1;
-        Some(value)
-    };
-    let mut path = tiny_skia::PathBuilder::new();
-    let (mut x, mut y, mut start_x, mut start_y) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    let mut control: Option<(f32, f32)> = None;
-    let mut command = b'M';
-    loop {
-        skip(&mut i);
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i].is_ascii_alphabetic() {
-            command = bytes[i];
-            i += 1;
-            if command.eq_ignore_ascii_case(&b'z') {
-                path.close();
-                (x, y) = (start_x, start_y);
-                control = None;
-                continue;
-            }
-        }
-        let relative = command.is_ascii_lowercase();
-        let (ox, oy) = if relative { (x, y) } else { (0.0, 0.0) };
-        match command.to_ascii_uppercase() {
-            b'M' => {
-                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                (start_x, start_y) = (x, y);
-                path.move_to(x, y);
-                // Further pairs after a move are lines
-                command = if relative { b'l' } else { b'L' };
-                control = None;
-            }
-            b'L' => {
-                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                path.line_to(x, y);
-                control = None;
-            }
-            b'H' => {
-                x = number(&mut i)? + ox;
-                path.line_to(x, y);
-                control = None;
-            }
-            b'V' => {
-                y = number(&mut i)? + oy;
-                path.line_to(x, y);
-                control = None;
-            }
-            b'C' => {
-                let (x1, y1) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                let (x2, y2) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                path.cubic_to(x1, y1, x2, y2, x, y);
-                control = Some((x2, y2));
-            }
-            b'S' => {
-                let (x1, y1) = control.map_or((x, y), |(cx, cy)| (2.0 * x - cx, 2.0 * y - cy));
-                let (x2, y2) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                (x, y) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                path.cubic_to(x1, y1, x2, y2, x, y);
-                control = Some((x2, y2));
-            }
-            b'A' => {
-                let (rx, ry, rotation) = (number(&mut i)?, number(&mut i)?, number(&mut i)?);
-                let large = flag(&mut i)?;
-                let sweep = flag(&mut i)?;
-                let (x2, y2) = (number(&mut i)? + ox, number(&mut i)? + oy);
-                arc_to(
-                    &mut path,
-                    (x, y),
-                    (rx, ry),
-                    rotation,
-                    large,
-                    sweep,
-                    (x2, y2),
-                );
-                (x, y) = (x2, y2);
-                control = None;
-            }
-            _ => return None,
-        }
-    }
-    path.finish()
-}
-
-/// An SVG elliptical arc from `from` to `to`, as cubic curves (the SVG
-/// spec's endpoint-to-center conversion)
-fn arc_to(
-    path: &mut tiny_skia::PathBuilder,
-    from: (f32, f32),
-    radii: (f32, f32),
-    rotation: f32,
-    large: bool,
-    sweep: bool,
-    to: (f32, f32),
-) {
-    use std::f32::consts::{FRAC_PI_2, TAU};
-    let ((x1, y1), (x2, y2)) = (from, to);
-    let (mut rx, mut ry) = (radii.0.abs(), radii.1.abs());
-    if rx == 0.0 || ry == 0.0 || (x1 == x2 && y1 == y2) {
-        path.line_to(x2, y2);
-        return;
-    }
-    let (sin, cos) = rotation.to_radians().sin_cos();
-    let (dx, dy) = ((x1 - x2) / 2.0, (y1 - y2) / 2.0);
-    let (x1p, y1p) = (cos * dx + sin * dy, -sin * dx + cos * dy);
-    let lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
-    if lambda > 1.0 {
-        rx *= lambda.sqrt();
-        ry *= lambda.sqrt();
-    }
-    let numerator = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
-    let denominator = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
-    let mut coefficient = (numerator / denominator).max(0.0).sqrt();
-    if large == sweep {
-        coefficient = -coefficient;
-    }
-    let (cxp, cyp) = (coefficient * rx * y1p / ry, -coefficient * ry * x1p / rx);
-    let (cx, cy) = (
-        cos * cxp - sin * cyp + (x1 + x2) / 2.0,
-        sin * cxp + cos * cyp + (y1 + y2) / 2.0,
-    );
-    let angle = |ux: f32, uy: f32, vx: f32, vy: f32| {
-        let dot = (ux * vx + uy * vy) / ((ux * ux + uy * uy).sqrt() * (vx * vx + vy * vy).sqrt());
-        let a = dot.clamp(-1.0, 1.0).acos();
-        if ux * vy - uy * vx < 0.0 { -a } else { a }
-    };
-    let (ux, uy) = ((x1p - cxp) / rx, (y1p - cyp) / ry);
-    let start = angle(1.0, 0.0, ux, uy);
-    let mut span = angle(ux, uy, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
-    if !sweep && span > 0.0 {
-        span -= TAU;
-    } else if sweep && span < 0.0 {
-        span += TAU;
-    }
-    let pieces = (span.abs() / FRAC_PI_2).ceil().max(1.0);
-    let step = span / pieces;
-    let handle = 4.0 / 3.0 * (step / 4.0).tan();
-    let point = |a: f32| {
-        let (s, c) = a.sin_cos();
-        (
-            cx + rx * c * cos - ry * s * sin,
-            cy + rx * c * sin + ry * s * cos,
-        )
-    };
-    let tangent = |a: f32| {
-        let (s, c) = a.sin_cos();
-        (-rx * s * cos - ry * c * sin, -rx * s * sin + ry * c * cos)
-    };
-    for n in 0..pieces as usize {
-        let a1 = start + step * n as f32;
-        let a2 = a1 + step;
-        let (p1, p2, t1, t2) = (point(a1), point(a2), tangent(a1), tangent(a2));
-        path.cubic_to(
-            p1.0 + handle * t1.0,
-            p1.1 + handle * t1.1,
-            p2.0 - handle * t2.0,
-            p2.1 - handle * t2.1,
-            p2.0,
-            p2.1,
-        );
-    }
-}
-
 #[cfg(test)]
 mod google_tests {
     use super::*;
 
     #[test]
     fn google_path_parses_and_fills_the_grid() {
-        let path = svg_path(GOOGLE_PATH).expect("path");
-        assert!(svg_path(APPLE_PATH).is_some());
-        let ios = svg_path(IOS_PATH).expect("ios");
+        let path = svg_path_of(GOOGLE_PATH).expect("path");
+        assert!(svg_path_of(APPLE_PATH).is_some());
+        let ios = svg_path_of(IOS_PATH).expect("ios");
         assert!(
             (ios.bounds().left() - 0.0).abs() < 0.01 && (ios.bounds().right() - 24.0).abs() < 0.01
         );
@@ -849,7 +667,7 @@ mod google_tests {
     #[test]
     fn arcs_reach_their_end() {
         // A half circle of radius 5 from (0, 5) to (10, 5), bulging up
-        let path = svg_path("M0 5A5 5 0 0 1 10 5Z").expect("path");
+        let path = svg_path_of("M0 5A5 5 0 0 1 10 5Z").expect("path");
         let b = path.bounds();
         assert!(
             (b.left() - 0.0).abs() < 0.01 && (b.right() - 10.0).abs() < 0.01,
@@ -863,7 +681,7 @@ mod google_tests {
 
     #[test]
     fn relative_numbers_without_separators() {
-        let path = svg_path("M1 1h2v2H1z m5 5l1-.5.5.5z").expect("path");
+        let path = svg_path_of("M1 1h2v2H1z m5 5l1-.5.5.5z").expect("path");
         let bounds = path.bounds();
         assert_eq!((bounds.left(), bounds.top()), (1.0, 1.0));
         assert_eq!((bounds.right(), bounds.bottom()), (7.5, 6.0));

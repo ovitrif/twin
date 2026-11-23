@@ -48,6 +48,9 @@ const PAIRED_HOLD: Duration = Duration::from_millis(1100);
 /// How long after launch to keep forcing the window hidden, in case the
 /// platform surfaces it despite `with_visible(false)`.
 const STARTUP_HIDE: Duration = Duration::from_millis(800);
+/// The longest "Back to menu bar" waits for the window to resize before it
+/// shows the popover
+const ATTACH_SHOW_WAIT: Duration = Duration::from_millis(400);
 
 static STATUS_EVENTS: Mutex<Vec<MenuBarIconEvent>> = Mutex::new(Vec::new());
 static MENU_EVENTS: Mutex<Vec<MenuEvent>> = Mutex::new(Vec::new());
@@ -273,7 +276,6 @@ fn skin_day_weight(transition: SkinTransition, progress: f32) -> f32 {
 pub struct App {
     shared: Arc<Mutex<Shared>>,
     settings: Settings,
-    width_text: String,
     height_text: String,
     gap_text: String,
     screen: Screen,
@@ -319,6 +321,9 @@ pub struct App {
     unsaved_frame: Option<([f32; 4], std::time::Instant)>,
     /// A text field had keyboard focus at the end of the last frame
     text_focused: bool,
+    /// The Logs page's text and its line count, and `Shared::logs_written`
+    /// when it was joined
+    logs_text: (u64, String, usize),
     quitting: bool,
 }
 
@@ -390,13 +395,11 @@ impl App {
         }
 
         let settings_detached = settings.detached && !headless;
-        let width_text = settings.window_width.to_string();
         let height_text = settings.window_height.to_string();
         let gap_text = settings.gap.to_string();
         Ok(Self {
             shared,
             settings,
-            width_text,
             height_text,
             gap_text,
             screen: Screen::Devices,
@@ -433,6 +436,7 @@ impl App {
             mode_changed_at: std::time::Instant::now(),
             unsaved_frame: None,
             text_focused: false,
+            logs_text: (u64::MAX, String::new(), 0),
             quitting: false,
         })
     }
@@ -459,6 +463,8 @@ impl App {
         }
 
         self.visible = true;
+        // Opened by hand before the last run's window came back: stay a popover
+        self.reopen_detached = false;
         self.animations.popover = Some(PopoverTransition {
             phase: PopoverTransitionPhase::Appearing,
             started_at: Instant::now(),
@@ -475,6 +481,9 @@ impl App {
         }
         // A question left open doesn't wait for the next open
         self.pending_avd_delete = None;
+        self.commit_fields();
+        // Nor a QR code no one can see
+        backend::cancel_unscanned_pairing(&self.shared);
 
         self.pending_show = false;
         self.animations.popover = Some(PopoverTransition {
@@ -500,6 +509,9 @@ impl App {
 
     fn quit(&mut self, ctx: &Context) {
         self.quitting = true;
+        self.take_field_numbers();
+        self.flush_window_frame();
+        self.save_settings();
         backend::cancel_pairing(&self.shared);
         backend::stop_all_mirrors(&self.shared);
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
@@ -514,6 +526,10 @@ impl App {
         }
         // A delete dialog belongs to the device list; leaving it dismisses it.
         self.pending_avd_delete = None;
+        // Its fields stop drawing, so they can't report losing focus
+        if self.screen == Screen::Settings {
+            self.commit_fields();
+        }
         // A transition replaced mid-slide would drop its pending cancel and
         // leave the pairing session running; cancel it now instead.
         if self
@@ -583,10 +599,14 @@ impl App {
         if let Some((frame, _)) = self.unsaved_frame.take() {
             self.settings.window_frame = Some(frame);
         }
+        if !show {
+            // The window closed: a QR code in it is out of sight
+            backend::cancel_unscanned_pairing(&self.shared);
+        }
         self.detached = false;
         self.pending_avd_delete = None;
         self.settings.detached = false;
-        self.save_settings();
+        self.commit_fields();
         if !self.headless {
             self.pending_mode = Some(false);
             set_dock_presence(false);
@@ -595,6 +615,14 @@ impl App {
             }
         }
         ctx.request_repaint();
+    }
+
+    /// Keeps a moved or resized window frame still waiting for its save,
+    /// for the save that follows
+    fn flush_window_frame(&mut self) {
+        if let Some((frame, _)) = self.unsaved_frame.take() {
+            self.settings.window_frame = Some(frame);
+        }
     }
 
     fn focus_window(&self, ctx: &Context) {
@@ -716,7 +744,6 @@ impl App {
         }
 
         if STATUS_PRIMARY_CLICK.swap(false, Ordering::SeqCst) {
-            self.last_menu_anchor = None;
             let anchor = self.menu_anchor();
             self.last_menu_anchor = anchor;
             if self.detached {
@@ -770,23 +797,29 @@ impl App {
     }
 
     fn handle_escape(&mut self, ctx: &Context) {
-        if !self.visible || self.is_disappearing() {
+        let popover_open = self.visible && !self.is_disappearing() && !self.detached;
+        if !popover_open && !self.detached {
             return;
         }
-
         let escape =
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-        // In a text field, Escape only leaves the field. The field gives up
-        // focus on the key itself, so ask whether one had it last frame.
-        if !escape || std::mem::take(&mut self.text_focused) {
+        if !escape {
             return;
         }
-        // Escape closes the innermost layer: an open delete dialog first,
-        // then the popover.
-        if self.pending_avd_delete.take().is_some() {
-            ctx.request_repaint();
-        } else {
-            self.hide(ctx);
+        // The field gives up focus on the key itself, so ask whether one had
+        // it at the end of the last frame
+        let text_focused = std::mem::take(&mut self.text_focused);
+        match escape_action(
+            popover_open,
+            text_focused,
+            self.pending_avd_delete.is_some(),
+        ) {
+            EscapeAction::Ignore => {}
+            EscapeAction::CloseDialog => {
+                self.pending_avd_delete = None;
+                ctx.request_repaint();
+            }
+            EscapeAction::Hide => self.hide(ctx),
         }
     }
 
@@ -809,14 +842,18 @@ impl App {
         }
     }
 
+    /// Where the status item is now; the last click's spot when AppKit
+    /// can't say. The icon moves as other items come and go.
     fn menu_anchor(&self) -> Option<MenuAnchor> {
-        self.last_menu_anchor.or_else(|| {
-            self.menu_bar.as_ref()?.icon.rect().map(|rect| {
+        self.menu_bar
+            .as_ref()
+            .and_then(|menu_bar| menu_bar.icon.rect())
+            .map(|rect| {
                 let click_x = rect.position.x + f64::from(rect.size.width) / 2.0;
                 let click_y = rect.position.y + f64::from(rect.size.height) / 2.0;
                 MenuAnchor::new(rect, click_x, click_y)
             })
-        })
+            .or(self.last_menu_anchor)
     }
 
     fn is_disappearing(&self) -> bool {
@@ -843,10 +880,32 @@ impl App {
     }
 
     fn save_settings(&mut self) {
-        self.settings.window_width = self.width_text.trim().parse().unwrap_or(0);
-        self.settings.window_height = self.height_text.trim().parse().unwrap_or(0);
-        self.settings.gap = self.gap_text.trim().parse().unwrap_or(12);
         self.settings.save();
+    }
+
+    /// Saves what the Settings fields hold, once an edit ends: on leaving a
+    /// field, or Settings, or the popover
+    fn commit_fields(&mut self) {
+        self.take_field_numbers();
+        self.save_settings();
+    }
+
+    /// Takes the height and gap as typed when valid; an invalid one goes
+    /// back to its saved value
+    fn take_field_numbers(&mut self) {
+        for (text, value, range) in [
+            (
+                &mut self.height_text,
+                &mut self.settings.window_height,
+                HEIGHT_RANGE,
+            ),
+            (&mut self.gap_text, &mut self.settings.gap, GAP_RANGE),
+        ] {
+            if let Some(parsed) = parse_points(text, range) {
+                *value = parsed;
+            }
+            *text = value.to_string();
+        }
     }
 
     fn sync_appearance(&mut self, ctx: &Context, now: Instant) {
@@ -893,7 +952,7 @@ impl App {
             let mut mirroring = state.mirrors.keys().cloned().collect::<HashSet<String>>();
             mirroring.extend(state.starting_mirrors.iter().cloned());
             // A phone in an open pair is already shown
-            mirroring.extend(state.pair.iter().flat_map(|pair| pair.keys.iter().cloned()));
+            mirroring.extend(state.pair_keys());
             (state.snapshot.clone(), mirroring)
         };
         let Some(snapshot) = snapshot else { return };
@@ -1055,6 +1114,48 @@ impl MenuBar {
             _click: click,
         })
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EscapeAction {
+    Ignore,
+    CloseDialog,
+    Hide,
+}
+
+/// What Escape does: in a text field it only leaves the field; otherwise it
+/// closes the innermost layer, an open delete dialog first, then the
+/// popover. The detached window never hides on it.
+fn escape_action(popover_open: bool, text_focused: bool, dialog_open: bool) -> EscapeAction {
+    if text_focused {
+        EscapeAction::Ignore
+    } else if dialog_open {
+        EscapeAction::CloseDialog
+    } else if popover_open {
+        EscapeAction::Hide
+    } else {
+        EscapeAction::Ignore
+    }
+}
+
+/// Mirror window heights and the gap between paired phones, in points
+const HEIGHT_RANGE: std::ops::RangeInclusive<u32> = 200..=4000;
+const GAP_RANGE: std::ops::RangeInclusive<u32> = 0..=200;
+
+/// A whole number of points in `range`, as typed in a Settings field
+fn parse_points(text: &str, range: std::ops::RangeInclusive<u32>) -> Option<u32> {
+    text.trim()
+        .parse()
+        .ok()
+        .filter(|points| range.contains(points))
+}
+
+/// The native window has its popover size again after being the window
+fn popover_sized(inner: Option<Rect>) -> bool {
+    inner.is_some_and(|inner| {
+        (inner.width() - theme::WINDOW_WIDTH).abs() < 1.0
+            && (inner.height() - theme::WINDOW_FULL_HEIGHT).abs() < 1.0
+    })
 }
 
 fn ready_device_mirror_keys(devices: &[backend::DeviceInfo]) -> HashSet<&str> {
@@ -1349,6 +1450,7 @@ fn text_button(ui: &mut Ui, label: &str, fill: Color32, ink: Color32) -> egui::R
         .max(48.0)
         + 28.0;
     let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
+    kit::button_info(&response, true, label);
     let (hover, _) = kit::overlay(ui, &response);
     ui.painter().rect_filled(rect, 9.0, fill);
     ui.painter().rect_filled(rect, 9.0, hover);
@@ -1376,7 +1478,7 @@ fn pair_header(ui: &mut Ui, label: Color32, look: kit::ButtonLook, tooltip: &str
         vec2(kit::BUTTON, kit::BUTTON),
     );
     put(ui, button, |ui| {
-        kit::square_button(ui, kit::Face::Glyph(pair_glyph(look)), look, tooltip).clicked()
+        kit::square_button(ui, pair_glyph(look), look, tooltip).clicked()
     })
 }
 
@@ -1503,7 +1605,7 @@ fn phone_row(ui: &mut Ui, row: PhoneRow<'_>) -> bool {
     };
     ui.push_id(("phone", row.key), |ui| {
         put(ui, button, |ui| {
-            kit::square_button(ui, kit::Face::Glyph(glyph), row.look, row.tooltip).clicked()
+            kit::square_button(ui, glyph, row.look, row.tooltip).clicked()
         })
     })
     .inner
@@ -1668,7 +1770,7 @@ struct VirtualRow<'a> {
     mark: Mark,
     running: bool,
     name: &'a str,
-    buttons: [(kit::Face, kit::ButtonLook, &'a str); 2],
+    buttons: [(kit::Glyph, kit::ButtonLook, &'a str); 2],
 }
 
 /// An emulator or a simulator: its mark, its name and two buttons. Returns
@@ -1747,7 +1849,8 @@ fn setting_row(ui: &mut Ui, label: &str, divider: bool, control: impl FnOnce(&mu
     );
 }
 
-/// A one-line text field, right-aligned, with an optional unit inside it
+/// A one-line text field, right-aligned, with an optional unit inside it;
+/// returns whether an edit just ended
 fn field(ui: &mut Ui, id: &str, value: &mut String, width: f32, unit: &str) -> bool {
     // The whole field takes a click, not only its text
     // Not a Tab stop of its own: the text inside is
@@ -1800,7 +1903,9 @@ fn field(ui: &mut Ui, id: &str, value: &mut String, width: f32, unit: &str) -> b
             theme::heading(),
         );
     }
-    output.changed()
+    // Saved once the edit ends (Enter also leaves the field), not on every
+    // keystroke, which would store a half-typed number
+    output.lost_focus()
 }
 
 /// A tool Twin uses: Ready, its warning, or a button that opens `get` (an
@@ -1869,6 +1974,7 @@ fn tool_row(
             vec2(width, 28.0),
         );
         let response = ui.interact(button, ui.id().with(("get", name)), Sense::click());
+        kit::button_info(&response, true, label);
         let (hover, _) = kit::overlay(ui, &response);
         ui.painter().rect_filled(button, 8.0, theme::button_fill());
         ui.painter().rect_filled(button, 8.0, hover);
@@ -1887,7 +1993,11 @@ fn tool_row(
             None => response,
         };
         if response.clicked() {
-            let _ = std::process::Command::new("open").arg(target).spawn();
+            // Waited for off the UI thread, so it leaves no zombie
+            let target = target.to_string();
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("open").arg(target).status();
+            });
         }
     }
 }
@@ -2260,6 +2370,9 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.take_field_numbers();
+        self.flush_window_frame();
+        self.save_settings();
         backend::cancel_pairing(&self.shared);
         backend::stop_all_mirrors(&self.shared);
     }
@@ -2271,7 +2384,7 @@ impl eframe::App for App {
 
         // Some setups surface the window on launch despite `with_visible(false)`;
         // keep it hidden until the user opens it from the menu bar icon.
-        if !self.visible && self.created_at.elapsed() < STARTUP_HIDE {
+        if !self.visible && !self.detached && self.created_at.elapsed() < STARTUP_HIDE {
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -2324,12 +2437,8 @@ impl eframe::App for App {
             self.attach(ctx, false);
         }
 
-        let interval = if self.visible || self.detached {
-            Duration::from_secs(1)
-        } else {
-            STATUS_POLL
-        };
-        ctx.request_repaint_after(interval);
+        // Wake for the next poll; what animates asks for its own frames
+        ctx.request_repaint_after(STATUS_POLL.saturating_sub(self.last_poll.elapsed()));
 
         // A finished pairing holds its "Paired" state for a moment, then
         // returns to the device list as a step back (Main slides in from the
@@ -2354,17 +2463,33 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+        self.draw(ui, frame);
+        // After the widgets ran, so a field clicked this frame counts when
+        // Escape comes in the next
+        let ctx = ui.ctx();
         self.text_focused = ctx
             .memory(|memory| memory.focused())
-            .is_some_and(|id| egui::text_edit::TextEditState::load(&ctx, id).is_some());
+            .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
+    }
+}
+
+impl App {
+    fn draw(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let rect = ui.max_rect();
 
         self.apply_window_mode(&ctx, frame);
         self.remember_window_frame(&ctx);
         if self.pending_attach_show && self.pending_mode.is_none() {
-            self.pending_attach_show = false;
-            self.show(&ctx, self.menu_anchor());
+            // Shown once the window is popover-sized again, not before the
+            // resize lands; a moment later at the latest
+            let sized = popover_sized(ctx.input(|input| input.viewport().inner_rect));
+            if sized || self.mode_changed_at.elapsed() >= ATTACH_SHOW_WAIT {
+                self.pending_attach_show = false;
+                self.show(&ctx, self.menu_anchor());
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
         }
         if self.detached {
             if self.window_ui(ui, &ctx) {
@@ -2658,6 +2783,7 @@ impl App {
                 ui.id().with(("nav", index)),
                 Sense::click(),
             );
+            kit::tab_info(&response, *screen == self.screen, window_title(*screen));
             let (hover, _) = kit::overlay(ui, &response);
             if *screen != self.screen {
                 ui.painter().rect_filled(rect, 8.0, hover);
@@ -2809,13 +2935,10 @@ impl App {
             let state = self.shared.lock().unwrap();
             let mut mirrors = state.mirrors.keys().cloned().collect::<Vec<_>>();
             mirrors.extend(state.starting_mirrors.iter().cloned());
-            let pair_keys = state
-                .pair
-                .as_ref()
-                .map(|pair| pair.keys.to_vec())
-                .unwrap_or_default();
-            // A phone hidden from the pair is not mirroring
+            let pair_keys = state.pair_keys();
+            // A phone hidden from the pair is not mirroring; one opening is
             mirrors.extend(state.pair.iter().flat_map(|pair| pair.shown_keys()));
+            mirrors.extend(state.starting_pair.iter().flatten().cloned());
             (
                 state.snapshot.clone(),
                 (mirrors, pair_keys),
@@ -2946,7 +3069,7 @@ impl App {
                             android_paired,
                         ) {
                             if android_paired {
-                                backend::set_pair_pane(shared, 0, !android_mirroring);
+                                backend::set_pair_pane(shared, ctx, 0, !android_mirroring);
                             } else if android_mirroring {
                                 backend::stop_mirror(shared, &android.mirror_key);
                             } else {
@@ -2962,7 +3085,7 @@ impl App {
                         ui.add_space(16.0);
                         if iphone_phone_row(ui, iphone, iphone_mirroring, iphone_paired) {
                             if iphone_paired {
-                                backend::set_pair_pane(shared, 1, !iphone_mirroring);
+                                backend::set_pair_pane(shared, ctx, 1, !iphone_mirroring);
                             } else if iphone_mirroring {
                                 backend::stop_mirror(shared, &iphone_key);
                             } else {
@@ -3091,7 +3214,7 @@ impl App {
                         name: &name,
                         buttons: [
                             (
-                                kit::Face::Glyph(kit::Glyph::Bin),
+                                kit::Glyph::Bin,
                                 delete,
                                 if deleting {
                                     "Deleting…"
@@ -3099,7 +3222,7 @@ impl App {
                                     "Delete emulator"
                                 },
                             ),
-                            (kit::Face::Glyph(main_glyph), main, main_tip),
+                            (main_glyph, main, main_tip),
                         ],
                     };
                     match virtual_row(ui, row) {
@@ -3131,20 +3254,12 @@ impl App {
                         running: !stopping,
                         name: &sim.name,
                         buttons: [
-                            (
-                                kit::Face::Glyph(kit::Glyph::Show),
-                                kit::ButtonLook::Normal,
-                                "Show Simulator",
-                            ),
+                            (kit::Glyph::Show, kit::ButtonLook::Normal, "Show Simulator"),
                             if stopping {
-                                (
-                                    kit::Face::Glyph(kit::Glyph::Stop),
-                                    kit::ButtonLook::Busy,
-                                    "Shutting down…",
-                                )
+                                (kit::Glyph::Stop, kit::ButtonLook::Busy, "Shutting down…")
                             } else {
                                 (
-                                    kit::Face::Glyph(kit::Glyph::Stop),
+                                    kit::Glyph::Stop,
                                     kit::ButtonLook::Active,
                                     "Shut down simulator",
                                 )
@@ -3241,19 +3356,27 @@ impl App {
     }
 
     fn logs_tab(&mut self, ui: &mut Ui, fade: &dyn Fn(egui::Pos2) -> Color32) {
-        let logs: Vec<String> = self.shared.lock().unwrap().logs.clone();
-        let empty = logs.is_empty();
+        // Joined again only when a line was logged since
+        {
+            let state = self.shared.lock().unwrap();
+            if self.logs_text.0 != state.logs_written {
+                self.logs_text = (state.logs_written, state.logs.join("\n"), state.logs.len());
+            }
+        }
+        let (_, text, rows) = &self.logs_text;
+        let empty = text.is_empty();
+        // Read-only, and still selectable for copying
         let mut log_text = if empty {
-            "No output yet.".to_string()
+            "No output yet."
         } else {
-            logs.join("\n")
+            text.as_str()
         };
 
         chrome_scroll(ui, "logs-scroll", fade, true, |ui| {
             ui.add(
                 TextEdit::multiline(&mut log_text)
                     .desired_width(f32::INFINITY)
-                    .desired_rows(logs.len().max(1))
+                    .desired_rows((*rows).max(1))
                     .font(FontId::new(10.5, FontFamily::Monospace))
                     .text_color(if empty {
                         theme::heading()
@@ -3294,6 +3417,7 @@ impl App {
         let snapshot = self.shared.lock().unwrap().snapshot.clone();
 
         let mut changed = false;
+        let mut fields_done = false;
         let mut gradients_changed = false;
         let mut theme_changed = false;
         let mut login_changed = None;
@@ -3319,10 +3443,10 @@ impl App {
                     );
                 });
                 setting_row(ui, "Height", true, |ui| {
-                    changed |= field(ui, "height", &mut self.height_text, 80.0, "pt");
+                    fields_done |= field(ui, "height", &mut self.height_text, 80.0, "pt");
                 });
                 setting_row(ui, "Gap between phones", true, |ui| {
-                    changed |= field(ui, "gap", &mut self.gap_text, 80.0, "pt");
+                    fields_done |= field(ui, "gap", &mut self.gap_text, 80.0, "pt");
                 });
                 setting_row(ui, "Side by side", true, |ui| {
                     changed |= kit::toggle(ui, &mut self.settings.side_by_side, "Side by side");
@@ -3400,6 +3524,10 @@ impl App {
             kit::card(ui, |ui| {
                 let xcode = snapshot.as_ref().map(|snapshot| &snapshot.xcode);
                 let emulator = snapshot.as_ref().map(|snapshot| &snapshot.emulator);
+                // The Xcode found, Xcode-beta.app say
+                let xcode_app = xcode
+                    .and_then(backend::xcode_app)
+                    .map(|app| app.display().to_string());
                 // Nothing installs or opens until its button is pressed
                 tool_row(
                     ui,
@@ -3407,8 +3535,8 @@ impl App {
                     "Xcode",
                     false,
                     xcode,
-                    if xcode.is_some_and(|tool| tool.available) {
-                        ("Open Xcode", "/Applications/Xcode.app")
+                    if let Some(app) = &xcode_app {
+                        ("Open Xcode", app.as_str())
                     } else {
                         ("Get Xcode", "macappstore://apps.apple.com/app/id497799835")
                     },
@@ -3426,18 +3554,43 @@ impl App {
         });
 
         if let Some(enabled) = login_changed {
-            if !self.headless {
-                login_item::set_enabled(enabled);
-            }
+            // Shown at once; the state macOS reports after the change, read
+            // off the UI thread, replaces it
             self.open_at_login = Some(enabled);
             self.login_query = None;
+            if !self.headless {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let shared = self.shared.clone();
+                let repaint = ctx.clone();
+                std::thread::spawn(move || {
+                    let result = login_item::set_enabled(enabled);
+                    let actual = login_item::is_enabled();
+                    match result {
+                        Err(error) => shared
+                            .lock()
+                            .unwrap()
+                            .log(format!("Open at login failed: {error}")),
+                        Ok(()) if enabled && !actual => shared.lock().unwrap().log(
+                            "Open at login waits for your approval in System Settings, \
+                             General, Login Items",
+                        ),
+                        Ok(()) => {}
+                    }
+                    let _ = sender.send(actual);
+                    repaint.request_repaint();
+                });
+                self.login_query = Some(receiver);
+            }
         }
         if gradients_changed {
             changed = true;
             (self.day_shell, self.night_shell, self.shell) =
                 load_shells(ctx, self.settings.gradients);
         }
-        if changed || theme_changed {
+        if fields_done {
+            self.take_field_numbers();
+        }
+        if changed || fields_done || theme_changed {
             self.save_settings();
         }
         if theme_changed {
@@ -3646,8 +3799,8 @@ fn chrome_scroll(
         } else {
             (1.0 - (since - SCROLLBAR_LINGER) / SCROLLBAR_FADE).clamp(0.0, 1.0) as f32
         };
-        if visibility > 0.0 {
-            ctx.request_repaint_after(Duration::from_millis(16));
+        if let Some(wake) = scrollbar_wake(since, engaged) {
+            ctx.request_repaint_after(wake);
         }
         let widen = ctx.animate_bool_with_time(chrome_id.with("widen"), engaged, 0.12);
 
@@ -3687,6 +3840,19 @@ fn chrome_scroll(
 
     chrome.offset = offset;
     ctx.data_mut(|data| data.insert_temp(chrome_id, chrome));
+}
+
+/// When the scrollbar next changes on its own: none while the pointer holds
+/// it (moving the pointer repaints), the start of its fade while it lingers,
+/// every frame while it fades
+fn scrollbar_wake(since: f64, engaged: bool) -> Option<Duration> {
+    if engaged || since >= SCROLLBAR_LINGER + SCROLLBAR_FADE {
+        None
+    } else if since < SCROLLBAR_LINGER {
+        Some(Duration::from_secs_f64(SCROLLBAR_LINGER - since))
+    } else {
+        Some(Duration::from_millis(16))
+    }
 }
 
 /// Handle length, proportional to the visible share of the content but never
@@ -3924,6 +4090,61 @@ mod tests {
 
     const WIDTH: f64 = 420.0;
     const MARGIN: f64 = 8.0;
+
+    #[test]
+    fn escape_leaves_a_field_then_closes_the_dialog_then_hides() {
+        use EscapeAction::*;
+        // A field focused at the end of the last frame only loses focus
+        assert_eq!(escape_action(true, true, true), Ignore);
+        assert_eq!(escape_action(true, false, true), CloseDialog);
+        assert_eq!(escape_action(true, false, false), Hide);
+        // The detached window closes its dialog, and never hides
+        assert_eq!(escape_action(false, false, true), CloseDialog);
+        assert_eq!(escape_action(false, false, false), Ignore);
+    }
+
+    #[test]
+    fn settings_numbers_must_be_whole_points_in_range() {
+        assert_eq!(parse_points(" 900 ", HEIGHT_RANGE), Some(900));
+        // Half-typed or cleared fields used to save a height of 0
+        for bad in ["", "0", "9", "-5", "1e3", "abc", "99999"] {
+            assert_eq!(parse_points(bad, HEIGHT_RANGE), None, "{bad}");
+        }
+        assert_eq!(parse_points("0", GAP_RANGE), Some(0));
+        assert_eq!(parse_points("201", GAP_RANGE), None);
+    }
+
+    #[test]
+    fn scrollbar_wakes_only_to_fade() {
+        // Held under the pointer: pointer moves repaint
+        assert_eq!(scrollbar_wake(0.0, true), None);
+        // Lingering: once, when the fade starts
+        assert_eq!(
+            scrollbar_wake(0.3, false),
+            Some(Duration::from_secs_f64(SCROLLBAR_LINGER - 0.3))
+        );
+        assert_eq!(
+            scrollbar_wake(SCROLLBAR_LINGER + 0.1, false),
+            Some(Duration::from_millis(16))
+        );
+        assert_eq!(
+            scrollbar_wake(SCROLLBAR_LINGER + SCROLLBAR_FADE, false),
+            None
+        );
+    }
+
+    #[test]
+    fn popover_shows_after_the_window_shrinks_back() {
+        assert!(!popover_sized(None));
+        assert!(!popover_sized(Some(Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            WINDOW_SIZE
+        ))));
+        assert!(popover_sized(Some(Rect::from_min_size(
+            egui::pos2(10.0, 20.0),
+            vec2(theme::WINDOW_WIDTH, theme::WINDOW_FULL_HEIGHT)
+        ))));
+    }
 
     #[test]
     fn interaction_overlay_fades_fully_to_transparent() {

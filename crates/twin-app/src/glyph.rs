@@ -450,7 +450,12 @@ pub fn shell_background_png(oversample: u32, appearance: Appearance, height: f32
 }
 
 fn skia_path(svg_path: &str) -> Option<tiny_skia::Path> {
-    let bez = BezPath::from_svg(svg_path).expect("valid design path");
+    svg_path_of(svg_path).or_else(|| panic!("invalid design path"))
+}
+
+/// An SVG path's `d`, or `None` when kurbo can't read it
+pub fn svg_path_of(svg_path: &str) -> Option<tiny_skia::Path> {
+    let bez = BezPath::from_svg(svg_path).ok()?;
     let mut builder = PathBuilder::new();
 
     for element in bez.elements() {

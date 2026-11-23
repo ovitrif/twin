@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -57,16 +57,6 @@ pub struct AvdInfo {
 }
 
 impl AvdInfo {
-    #[cfg(test)]
-    pub fn status(&self, launching: bool) -> &str {
-        match &self.device {
-            Some(device) if device.ready => "Running",
-            _ if launching => "Starting…",
-            Some(device) => &device.state,
-            None => "Stopped",
-        }
-    }
-
     pub fn can_launch(&self, launching: bool) -> bool {
         self.device.is_none() && !launching
     }
@@ -137,13 +127,19 @@ pub struct PairingSession {
 pub struct Shared {
     pub snapshot: Option<Snapshot>,
     pub device_connected: bool,
-    pub refreshing: bool,
+    refresh: RefreshQueue,
+    /// The slow iPhone and simulator lookups of a refresh are still running
+    apple_lookup_running: bool,
     pub logs: Vec<String>,
+    /// Counts lines logged, so a view of the logs knows when it is stale
+    pub logs_written: u64,
     pub logged_tool_warnings: HashSet<String>,
     pub pairing: Option<PairingSession>,
     pub mirrors: HashMap<String, Child>,
     /// Side by side: one window for an Android phone and an iPhone
     pub pair: Option<PairMirror>,
+    /// The two phones' keys of a side by side window still opening
+    pub starting_pair: Option<[String; 2]>,
     pub starting_mirrors: HashSet<String>,
     pub starting_avds: HashSet<String>,
     pub deleting_avds: HashSet<String>,
@@ -159,6 +155,7 @@ pub struct Shared {
 impl Shared {
     pub fn log(&mut self, line: impl AsRef<str>) {
         self.logs.push(format!("[{}] {}", clock(), line.as_ref()));
+        self.logs_written += 1;
 
         let overflow = self.logs.len().saturating_sub(600);
         if overflow > 0 {
@@ -231,49 +228,125 @@ fn parse_utc_offset(raw: &str) -> Option<i64> {
     }
 }
 
+/// One status refresh at a time. A full one asked for while another runs
+/// waits for it, once; a light probe asked for then adds nothing.
+#[derive(Default)]
+struct RefreshQueue {
+    running: bool,
+    pending: bool,
+}
+
+impl RefreshQueue {
+    /// Whether a refresh starts now; `full` is a full status refresh, not
+    /// the menu bar's light probe
+    fn request(&mut self, full: bool) -> bool {
+        if !self.running {
+            self.running = true;
+            return true;
+        }
+        self.pending |= full;
+        false
+    }
+
+    /// Ends the running refresh; true when a full one waits to start
+    fn finish(&mut self) -> bool {
+        self.running = false;
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// Runs its closure when dropped, also when the thread unwinds
+struct OnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(run) = self.0.take() {
+            run();
+        }
+    }
+}
+
+/// Ends the running refresh when dropped, then starts the one that waited
+fn refresh_guard(shared: Arc<Mutex<Shared>>, ctx: Context) -> OnDrop<impl FnOnce()> {
+    OnDrop(Some(move || {
+        let rerun = shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .refresh
+            .finish();
+        if rerun && !thread::panicking() {
+            refresh_status(shared, ctx);
+        }
+    }))
+}
+
 pub fn refresh_status(shared: Arc<Mutex<Shared>>, ctx: Context) {
-    let avd_generation = {
+    let (avd_generation, lookup_apple) = {
         let mut state = shared.lock().unwrap();
-        if state.refreshing {
+        if state.pairing_busy() || !state.refresh.request(true) {
             return;
         }
-        if state.pairing_busy() {
-            return;
-        }
-        state.refreshing = true;
-        state.avd_generation
+        // A lookup still running from an earlier refresh fills in for this
+        // one too, rather than starting another dmb
+        let lookup_apple = !std::mem::replace(&mut state.apple_lookup_running, true);
+        (state.avd_generation, lookup_apple)
     };
     ctx.request_repaint();
 
     thread::spawn(move || {
-        let (mut snapshot, lookups) = collect_snapshot();
-        // A hung iPhone lookup can take up to 20 s: show Android phones and
-        // emulators first, with the iPhones and simulators seen last time
-        if !lookups.finished() {
+        let refresh = refresh_guard(shared.clone(), ctx.clone());
+        let apple_done = lookup_apple.then(|| {
+            let shared = shared.clone();
+            OnDrop(Some(move || {
+                shared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .apple_lookup_running = false;
+            }))
+        });
+        let (mut snapshot, lookups) = collect_snapshot(lookup_apple);
+        if lookups.as_ref().is_some_and(|lookups| !lookups.finished()) {
             std::thread::sleep(Duration::from_millis(300));
         }
-        if !lookups.finished() {
-            let mut state = shared.lock().unwrap();
-            if let Some(current) = &state.snapshot {
-                snapshot.iphones = current.iphones.clone();
-                snapshot.simulators = current.simulators.clone();
+        let lookups = match lookups {
+            Some(lookups) if lookups.finished() => {
+                let (iphones, simulators) = lookups.join();
+                let mut state = shared.lock().unwrap();
+                publish_snapshot(&mut state, snapshot, avd_generation);
+                merge_apple_lookups(&mut state, iphones, simulators);
+                drop(state);
+                ctx.request_repaint();
+                return;
             }
-            publish_snapshot(&mut state, snapshot.clone(), avd_generation, false);
+            lookups => lookups,
+        };
+        // A hung iPhone lookup can take up to 20 s: show Android phones and
+        // emulators first, with the iPhones and simulators seen last time
+        let mut state = shared.lock().unwrap();
+        if let Some(current) = &state.snapshot {
+            snapshot.iphones = current.iphones.clone();
+            snapshot.simulators = current.simulators.clone();
+        }
+        publish_snapshot(&mut state, snapshot, avd_generation);
+        drop(state);
+        ctx.request_repaint();
+        // Refreshes asked for meanwhile need not wait for Xcode's tools
+        drop(refresh);
+
+        if let Some(lookups) = lookups {
+            let (iphones, simulators) = lookups.join();
+            let mut state = shared.lock().unwrap();
+            merge_apple_lookups(&mut state, iphones, simulators);
             drop(state);
             ctx.request_repaint();
         }
-        (snapshot.iphones, snapshot.simulators) = lookups.join();
-        let mut state = shared.lock().unwrap();
-        publish_snapshot(&mut state, snapshot, avd_generation, true);
-        state.refreshing = false;
-        drop(state);
-        ctx.request_repaint();
+        drop(apple_done);
     });
 }
 
-/// Puts a fresh snapshot in place; `last` is the refresh's final one, with
-/// its iPhones and simulators, which can end shutdowns
-fn publish_snapshot(state: &mut Shared, mut snapshot: Snapshot, avd_generation: u64, last: bool) {
+/// Puts a fresh snapshot in place, its iPhones and simulators those seen
+/// last unless `merge_apple_lookups` follows
+fn publish_snapshot(state: &mut Shared, mut snapshot: Snapshot, avd_generation: u64) {
     if state.avd_generation != avd_generation
         && let Some(current) = &state.snapshot
     {
@@ -283,23 +356,47 @@ fn publish_snapshot(state: &mut Shared, mut snapshot: Snapshot, avd_generation: 
     if mock::demo_devices() {
         add_demo_devices(&mut snapshot);
     }
-    if last {
-        // A shutdown is done once its emulator or simulator is gone
-        state.stopping.retain(|key, since| {
-            let present = snapshot
-                .avds
-                .iter()
-                .any(|avd| &avd.name == key && avd.device.is_some())
-                || snapshot.simulators.iter().any(|sim| &sim.udid == key);
-            // One that outlives its shutdown gets its Stop button back
-            present && since.elapsed() < STOP_TIMEOUT
-        });
-    }
-    let device_connected = snapshot.devices.iter().any(|device| device.ready);
+    // An emulator adb lists has started, booted or not
+    state.starting_avds.retain(|name| {
+        !snapshot
+            .avds
+            .iter()
+            .any(|avd| &avd.name == name && avd.device.is_some())
+    });
     state.reap_finished_mirrors();
     state.log_tool_warnings(&snapshot.mirror.warnings);
+    state.device_connected = snapshot_connected(&snapshot);
     state.snapshot = Some(snapshot);
-    state.device_connected = device_connected;
+}
+
+/// Fresh iPhones and simulators into the snapshot shown now, which may be
+/// newer than the refresh that looked them up: only these two lists change
+fn merge_apple_lookups(state: &mut Shared, iphones: Vec<Iphone>, simulators: Vec<Simulator>) {
+    let Some(snapshot) = state.snapshot.as_mut() else {
+        return;
+    };
+    snapshot.iphones = iphones;
+    snapshot.simulators = simulators;
+    if mock::demo_devices() {
+        add_demo_apple_devices(snapshot);
+    }
+    // A shutdown is done once its emulator or simulator is gone; AVDs and
+    // simulators share the map, so both lists are current here
+    state.stopping.retain(|key, since| {
+        let present = snapshot
+            .avds
+            .iter()
+            .any(|avd| &avd.name == key && avd.device.is_some())
+            || snapshot.simulators.iter().any(|sim| &sim.udid == key);
+        // One that outlives its shutdown gets its Stop button back
+        present && since.elapsed() < STOP_TIMEOUT
+    });
+    state.device_connected = snapshot_connected(snapshot);
+}
+
+/// Whether the menu bar icon shows a phone: a ready Android one or an iPhone
+fn snapshot_connected(snapshot: &Snapshot) -> bool {
+    snapshot.devices.iter().any(|device| device.ready) || !snapshot.iphones.is_empty()
 }
 
 /// Refresh only the state needed by the menu bar icon while the popover is
@@ -308,14 +405,14 @@ fn publish_snapshot(state: &mut Shared, mut snapshot: Snapshot, avd_generation: 
 pub fn refresh_connection_state(shared: Arc<Mutex<Shared>>, ctx: Context) {
     {
         let mut state = shared.lock().unwrap();
-        if state.refreshing || state.pairing_busy() {
+        if state.pairing_busy() || !state.refresh.request(false) {
             return;
         }
-        state.refreshing = true;
     }
 
     thread::spawn(move || {
-        let device_connected = {
+        let _refresh = refresh_guard(shared.clone(), ctx.clone());
+        let adb_ready = {
             let _adb_work = ADB_WORK_LOCK.lock().unwrap();
             Adb::resolve(None)
                 .ok()
@@ -324,15 +421,27 @@ pub fn refresh_connection_state(shared: Arc<Mutex<Shared>>, ctx: Context) {
         };
 
         let mut state = shared.lock().unwrap();
-        state.device_connected = device_connected;
-        state.refreshing = false;
+        // A mirror window closed while the popover was hidden
+        let reaped = state.reap_finished_mirrors();
+        // iPhones as the last full refresh saw them: asking dmb here would
+        // run Xcode's slow tools every few seconds
+        let connected = adb_ready
+            || state
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.iphones.is_empty());
+        let changed = reaped || state.device_connected != connected;
+        state.device_connected = connected;
         drop(state);
-        ctx.request_repaint();
+        if changed {
+            ctx.request_repaint();
+        }
     });
 }
 
-/// `TWIN_DEMO_DEVICES` (drive builds): a Wi-Fi Pixel, a USB iPhone, a
-/// running emulator and a simulator, for screenshots without real phones
+/// `TWIN_DEMO_DEVICES` (drive builds): a Wi-Fi Pixel and a running
+/// emulator, for screenshots without real phones; `add_demo_apple_devices`
+/// adds a USB iPhone and a simulator
 fn add_demo_devices(snapshot: &mut Snapshot) {
     let device = |serial: &str, name: &str, emulator: bool, wireless: bool| DeviceInfo {
         serial: serial.to_string(),
@@ -356,6 +465,10 @@ fn add_demo_devices(snapshot: &mut Snapshot) {
         avd.device = Some(running.clone());
     }
     snapshot.devices.push(running);
+}
+
+/// The demo iPhone and simulator (see `add_demo_devices`)
+fn add_demo_apple_devices(snapshot: &mut Snapshot) {
     snapshot.iphones.insert(
         0,
         Iphone {
@@ -392,30 +505,35 @@ impl AppleLookups {
 }
 
 /// Everything adb and the emulator know, with iPhones and simulators still
-/// being looked up; they fill in when `AppleLookups` finishes
-fn collect_snapshot() -> (Snapshot, AppleLookups) {
+/// being looked up when `lookup_apple` asks; they fill in when
+/// `AppleLookups` finishes
+fn collect_snapshot(lookup_apple: bool) -> (Snapshot, Option<AppleLookups>) {
     // iPhones and simulators come from Xcode's tools, which can be slow;
     // ask them alongside adb rather than after it
     let xcode = xcode_info();
-    // dmb lists iPhones through /usr/bin/xcrun, which asks a Mac without
-    // Xcode to install the developer tools
-    let has_xcode = xcode.available;
-    let iphones = thread::spawn(move || {
-        if !has_xcode {
-            return Vec::new();
-        }
-        Dmb::resolve()
-            .and_then(|dmb| dmb.iphones())
-            .unwrap_or_default()
-    });
-    let simulators = {
+    let lookups = lookup_apple.then(|| {
+        // dmb lists iPhones through /usr/bin/xcrun, which asks a Mac without
+        // Xcode to install the developer tools
+        let has_xcode = xcode.available;
+        let iphones = thread::spawn(move || {
+            if !has_xcode {
+                return Vec::new();
+            }
+            Dmb::resolve()
+                .and_then(|dmb| dmb.iphones())
+                .unwrap_or_default()
+        });
         let simctl = xcode_simctl(&xcode);
-        thread::spawn(move || {
+        let simulators = thread::spawn(move || {
             simctl
                 .and_then(|simctl| simctl.booted().ok())
                 .unwrap_or_default()
-        })
-    };
+        });
+        AppleLookups {
+            iphones,
+            simulators,
+        }
+    });
     let emulator_handle = Emulator::resolve(None);
     let (emulator_info, avds) = match &emulator_handle {
         Ok(emulator) => match emulator.list_avds() {
@@ -542,10 +660,7 @@ fn collect_snapshot() -> (Snapshot, AppleLookups) {
             iphones: Vec::new(),
             simulators: Vec::new(),
         },
-        AppleLookups {
-            iphones,
-            simulators,
-        },
+        lookups,
     )
 }
 
@@ -680,6 +795,18 @@ fn forget_android_versions(listed: &[adb::AdbDevice]) {
 fn is_wireless(serial: &str) -> bool {
     !serial.starts_with("emulator-")
         && (serial.contains(':') || adb::is_mdns_wireless_serial(serial))
+}
+
+/// The Xcode app `xcode` found, from its devicectl path
+pub fn xcode_app(xcode: &ToolInfo) -> Option<std::path::PathBuf> {
+    if !xcode.available {
+        return None;
+    }
+    // detail is …/Xcode.app/Contents/Developer/usr/bin/devicectl
+    let app = std::path::Path::new(&xcode.detail).ancestors().nth(5)?;
+    app.extension()
+        .is_some_and(|extension| extension == "app")
+        .then(|| app.to_path_buf())
 }
 
 /// simctl in the Xcode `xcode` found, never through `xcrun`
@@ -817,8 +944,28 @@ fn mirror_key_for_device(device: &adb::AdbDevice, services: &[adb::MdnsService])
     device.serial.clone()
 }
 
+/// Ends a mirror's process: killed at once, so it never outlives a quit, and
+/// reaped on its own thread, since waiting for it can block
+fn end_child(mut child: Child) {
+    let _ = child.kill();
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 impl Shared {
-    pub fn reap_finished_mirrors(&mut self) {
+    /// The keys of the phones in the side by side window, open or opening
+    pub fn pair_keys(&self) -> Vec<String> {
+        self.pair
+            .as_ref()
+            .map(|pair| &pair.keys)
+            .or(self.starting_pair.as_ref())
+            .map(|keys| keys.to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Forgets mirrors whose window closed; true when any had
+    pub fn reap_finished_mirrors(&mut self) -> bool {
         let mut finished = Vec::new();
 
         for (mirror_key, child) in self.mirrors.iter_mut() {
@@ -826,6 +973,7 @@ impl Shared {
                 finished.push(mirror_key.clone());
             }
         }
+        let mut reaped = !finished.is_empty();
 
         for mirror_key in finished {
             self.mirrors.remove(&mirror_key);
@@ -837,7 +985,9 @@ impl Shared {
         {
             self.pair = None;
             self.log("Side by side ended");
+            reaped = true;
         }
+        reaped
     }
 }
 
@@ -849,18 +999,8 @@ pub fn start_mirror(
     pair_options: PairOptions,
 ) {
     let mirror_key = device.mirror_key.clone();
-    {
-        let mut state = shared.lock().unwrap();
-        // A mirror closed in the last seconds is still listed until reaped
-        state.reap_finished_mirrors();
-        if state.mirrors.contains_key(&mirror_key)
-            || !state.starting_mirrors.insert(mirror_key.clone())
-        {
-            state.log(format!("Already mirroring {}", device.name));
-            drop(state);
-            ctx.request_repaint();
-            return;
-        }
+    if !begin_mirror_start(&shared, &ctx, &mirror_key, &device.name) {
+        return;
     }
 
     thread::spawn(move || {
@@ -882,42 +1022,71 @@ pub fn start_mirror(
                 })
             }
         };
-
-        let mut state = shared.lock().unwrap();
-        let start_still_wanted = state.starting_mirrors.remove(&mirror_key);
-        match result {
-            Ok((mut child, _)) if !start_still_wanted => {
-                let _ = child.kill();
-                let _ = child.wait();
-                state.log(format!("Cancelled mirror start for {}", device.name));
-            }
-            Ok((mut child, _)) if state.mirrors.contains_key(&mirror_key) => {
-                // Another start won the race (e.g. a rapid double-click). Drop-
-                // ping a Child does not kill scrcpy, so stop this extra process
-                // rather than replacing — and losing track of — the tracked one.
-                let _ = child.kill();
-                let _ = child.wait();
-                state.log(format!("Already mirroring {}", device.name));
-            }
-            Ok((mut child, warnings)) => {
-                state.log_tool_warnings(&warnings);
-                state.log(format!("Mirroring {} (pid {})", device.name, child.id()));
-
-                if let Some(out) = child.stdout.take() {
-                    spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
-                }
-                if let Some(err) = child.stderr.take() {
-                    spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
-                }
-
-                state.mirrors.insert(mirror_key, child);
-            }
-            Err(error) if start_still_wanted => state.log(format!("Mirror failed: {error:#}")),
-            Err(_) => {}
-        }
-        drop(state);
-        ctx.request_repaint();
+        finish_mirror_start(&shared, &ctx, mirror_key, &device.name, result);
     });
+}
+
+/// Marks a mirror as starting; false when it already runs or starts
+fn begin_mirror_start(
+    shared: &Arc<Mutex<Shared>>,
+    ctx: &Context,
+    mirror_key: &str,
+    name: &str,
+) -> bool {
+    let mut state = shared.lock().unwrap();
+    // A mirror closed in the last seconds is still listed until reaped
+    state.reap_finished_mirrors();
+    let started = !state.mirrors.contains_key(mirror_key)
+        && state.starting_mirrors.insert(mirror_key.to_string());
+    if !started {
+        state.log(format!("Already mirroring {name}"));
+    }
+    drop(state);
+    ctx.request_repaint();
+    started
+}
+
+/// Tracks a mirror spawned off the UI thread, or ends it when its start was
+/// cancelled meanwhile
+fn finish_mirror_start(
+    shared: &Arc<Mutex<Shared>>,
+    ctx: &Context,
+    mirror_key: String,
+    name: &str,
+    result: anyhow::Result<(Child, Vec<String>)>,
+) {
+    let mut state = shared.lock().unwrap();
+    let start_still_wanted = state.starting_mirrors.remove(&mirror_key);
+    match result {
+        Ok((child, _)) if !start_still_wanted => {
+            end_child(child);
+            state.log(format!("Cancelled mirror start for {name}"));
+        }
+        Ok((child, _)) if state.mirrors.contains_key(&mirror_key) => {
+            // Another start won the race (e.g. a rapid double-click). Drop-
+            // ping a Child does not kill its process, so stop this extra one
+            // rather than replacing — and losing track of — the tracked one.
+            end_child(child);
+            state.log(format!("Already mirroring {name}"));
+        }
+        Ok((mut child, warnings)) => {
+            state.log_tool_warnings(&warnings);
+            state.log(format!("Mirroring {name} (pid {})", child.id()));
+
+            if let Some(out) = child.stdout.take() {
+                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
+            }
+            if let Some(err) = child.stderr.take() {
+                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
+            }
+
+            state.mirrors.insert(mirror_key, child);
+        }
+        Err(error) if start_still_wanted => state.log(format!("Mirror failed: {error:#}")),
+        Err(_) => {}
+    }
+    drop(state);
+    ctx.request_repaint();
 }
 
 /// The key an iPhone's mirror is tracked under in `Shared::mirrors`.
@@ -935,29 +1104,17 @@ pub fn start_iphone_mirror(
     on_top: bool,
 ) {
     let mirror_key = iphone_mirror_key(&iphone);
-    let mut state = shared.lock().unwrap();
-    state.reap_finished_mirrors();
-    if state.mirrors.contains_key(&mirror_key) {
-        state.log(format!("Already mirroring {}", iphone.name));
+    if !begin_mirror_start(&shared, &ctx, &mirror_key, &iphone.name) {
         return;
     }
-    match Dmb::resolve()
-        .and_then(|dmb| dmb.spawn_mirror(&iphone.udid, height, title, touch_pointer, on_top))
-    {
-        Ok(mut child) => {
-            state.log(format!("Mirroring {} (pid {})", iphone.name, child.id()));
-            if let Some(out) = child.stdout.take() {
-                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
-            }
-            if let Some(err) = child.stderr.take() {
-                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
-            }
-            state.mirrors.insert(mirror_key, child);
-        }
-        Err(error) => state.log(format!("Mirror failed: {error:#}")),
-    }
-    drop(state);
-    ctx.request_repaint();
+    let title = title.to_string();
+    // Starting Twin Mirror runs dmb, off the UI thread
+    thread::spawn(move || {
+        let result = Dmb::resolve()
+            .and_then(|dmb| dmb.spawn_mirror(&iphone.udid, height, &title, touch_pointer, on_top))
+            .map(|child| (child, Vec::new()));
+        finish_mirror_start(&shared, &ctx, mirror_key, &iphone.name, result);
+    });
 }
 
 /// Opens side by side for this Android phone and this iPhone.
@@ -968,51 +1125,77 @@ pub fn start_pair(
     iphone: Iphone,
     options: PairOptions,
 ) {
-    let mut state = shared.lock().unwrap();
-    state.reap_finished_mirrors();
-    if state.pair.is_some() {
-        state.log("Side by side is already open");
-        return;
-    }
-    match Dmb::resolve().and_then(|dmb| dmb.spawn_pair(&device.serial, &iphone.udid, &options)) {
-        Ok(mut child) => {
-            state.log(format!(
-                "Showing {} and {} side by side (pid {})",
-                device.name,
-                iphone.name,
-                child.id()
-            ));
-            if let Some(out) = child.stdout.take() {
-                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
-            }
-            if let Some(err) = child.stderr.take() {
-                spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
-            }
-            state.pair = Some(PairMirror {
-                keys: [device.mirror_key.clone(), iphone_mirror_key(&iphone)],
-                shown: [true, true],
-                udid: iphone.udid.clone(),
-                child,
-            });
+    let keys = [device.mirror_key.clone(), iphone_mirror_key(&iphone)];
+    {
+        let mut state = shared.lock().unwrap();
+        state.reap_finished_mirrors();
+        if state.pair.is_some() || state.starting_pair.is_some() {
+            state.log("Side by side is already open");
+            return;
         }
-        Err(error) => state.log(format!("Side by side failed: {error:#}")),
+        state.starting_pair = Some(keys.clone());
     }
-    drop(state);
     ctx.request_repaint();
+
+    thread::spawn(move || {
+        let result =
+            Dmb::resolve().and_then(|dmb| dmb.spawn_pair(&device.serial, &iphone.udid, &options));
+        let mut state = shared.lock().unwrap();
+        // Stop both, pressed while it opened, cleared the start
+        let wanted = state.starting_pair.as_ref() == Some(&keys);
+        if wanted {
+            state.starting_pair = None;
+        }
+        match result {
+            Ok(child) if !wanted || state.pair.is_some() => {
+                end_child(child);
+                state.log("Cancelled side by side");
+            }
+            Ok(mut child) => {
+                state.log(format!(
+                    "Showing {} and {} side by side (pid {})",
+                    device.name,
+                    iphone.name,
+                    child.id()
+                ));
+                if let Some(out) = child.stdout.take() {
+                    spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
+                }
+                if let Some(err) = child.stderr.take() {
+                    spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
+                }
+                state.pair = Some(PairMirror {
+                    keys,
+                    shown: [true, true],
+                    udid: iphone.udid.clone(),
+                    child,
+                });
+            }
+            Err(error) if wanted => state.log(format!("Side by side failed: {error:#}")),
+            Err(_) => {}
+        }
+        drop(state);
+        ctx.request_repaint();
+    });
 }
 
 pub fn stop_pair(shared: &Arc<Mutex<Shared>>) {
     let mut state = shared.lock().unwrap();
-    if let Some(mut pair) = state.pair.take() {
-        let _ = pair.child.kill();
-        let _ = pair.child.wait();
+    if state.starting_pair.take().is_some() {
+        state.log("Cancelled side by side");
+    }
+    if let Some(pair) = state.pair.take() {
+        end_child(pair.child);
         state.log("Closed side by side");
     }
 }
 
+/// Serialises telling Twin Mirror which panes to show
+static PANE_LOCK: Mutex<()> = Mutex::new(());
+
 /// Shows or hides one phone of the open pair: 0 the Android phone, 1 the
 /// iPhone. Hiding the last one shown closes the pair.
-pub fn set_pair_pane(shared: &Arc<Mutex<Shared>>, index: usize, visible: bool) {
+pub fn set_pair_pane(shared: &Arc<Mutex<Shared>>, ctx: &Context, index: usize, visible: bool) {
     let mut state = shared.lock().unwrap();
     let Some(pair) = state.pair.as_mut() else {
         return;
@@ -1025,28 +1208,54 @@ pub fn set_pair_pane(shared: &Arc<Mutex<Shared>>, index: usize, visible: bool) {
         return;
     }
     let udid = pair.udid.clone();
-    let before = pair.shown;
     // Shown at once; Twin Mirror is told off the UI thread, so a mirror
     // that hangs can't freeze the popover, and a failure puts it back
-    pair.shown = shown;
+    pair.shown[index] = visible;
     drop(state);
     let pane = if index == 0 { "android" } else { "iphone" };
     let shared = shared.clone();
+    let ctx = ctx.clone();
     thread::spawn(move || {
-        if let Err(error) = Dmb::resolve().and_then(|dmb| dmb.set_pane(&udid, pane, visible)) {
+        // One at a time, each sending the pane as it is when its turn comes,
+        // so quick toggles can't reach Twin Mirror out of order
+        let _pane = PANE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(sent) = shared
+            .lock()
+            .unwrap()
+            .pair
+            .as_ref()
+            .filter(|pair| pair.udid == udid)
+            .map(|pair| pair.shown[index])
+        else {
+            return;
+        };
+        if let Err(error) = Dmb::resolve().and_then(|dmb| dmb.set_pane(&udid, pane, sent)) {
             let mut state = shared.lock().unwrap();
-            if let Some(pair) = state.pair.as_mut().filter(|pair| pair.udid == udid) {
-                pair.shown = before;
-            }
+            roll_back_pane(&mut state, &udid, index, sent);
             state.log(format!("Twin pane failed: {error:#}"));
+            drop(state);
+            ctx.request_repaint();
         }
     });
+}
+
+/// Puts one pane back after Twin Mirror refused `sent`, unless a later
+/// toggle changed it since; the other pane is left as it is
+fn roll_back_pane(state: &mut Shared, udid: &str, index: usize, sent: bool) {
+    if let Some(pair) = state.pair.as_mut().filter(|pair| pair.udid == udid)
+        && pair.shown[index] == sent
+    {
+        pair.shown[index] = !sent;
+    }
 }
 
 pub fn start_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String) {
     {
         let mut state = shared.lock().unwrap();
-        if state.deleting_avds.contains(&name) {
+        // Starting one still shutting down would race its shutdown
+        if state.deleting_avds.contains(&name) || state.stopping.contains_key(&name) {
             return;
         }
         if state.snapshot.as_ref().is_some_and(|snapshot| {
@@ -1072,9 +1281,6 @@ pub fn start_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String) {
                 {
                     let mut state = shared.lock().unwrap();
                     state.log(format!("Starting AVD {name} (pid {})", child.id()));
-                    if let Some(out) = child.stdout.take() {
-                        spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(out)));
-                    }
                     if let Some(err) = child.stderr.take() {
                         spawn_log_pump(shared.clone(), ctx.clone(), Box::new(BufReader::new(err)));
                     }
@@ -1082,8 +1288,14 @@ pub fn start_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String) {
                 ctx.request_repaint();
                 refresh_status(shared.clone(), ctx.clone());
 
+                // This thread logs the emulator's output until it exits;
+                // the refresh that lists it ends its "Starting…"
+                if let Some(out) = child.stdout.take() {
+                    pump_log(&shared, &ctx, BufReader::new(out));
+                }
                 let status = child.wait();
                 let mut state = shared.lock().unwrap();
+                // One that crashed before adb listed it
                 state.starting_avds.remove(&name);
                 match status {
                     Ok(status) if !status.success() => {
@@ -1163,24 +1375,26 @@ pub fn delete_avd(shared: Arc<Mutex<Shared>>, ctx: Context, name: String) {
 }
 
 fn spawn_log_pump(shared: Arc<Mutex<Shared>>, ctx: Context, reader: Box<dyn BufRead + Send>) {
-    thread::spawn(move || {
-        for line in reader.lines().map_while(Result::ok) {
-            if line.trim().is_empty() {
-                continue;
-            }
+    thread::spawn(move || pump_log(&shared, &ctx, reader));
+}
 
-            shared.lock().unwrap().log(line);
-            ctx.request_repaint();
+/// Logs each line `reader` gives until it ends
+fn pump_log(shared: &Arc<Mutex<Shared>>, ctx: &Context, reader: impl BufRead) {
+    for line in reader.lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+            continue;
         }
-    });
+
+        shared.lock().unwrap().log(line);
+        ctx.request_repaint();
+    }
 }
 
 pub fn stop_mirror(shared: &Arc<Mutex<Shared>>, serial: &str) {
     let mut state = shared.lock().unwrap();
 
-    if let Some(mut child) = state.mirrors.remove(serial) {
-        let _ = child.kill();
-        let _ = child.wait();
+    if let Some(child) = state.mirrors.remove(serial) {
+        end_child(child);
         state.log(format!("Stopped mirror of {serial}"));
     } else if state.starting_mirrors.remove(serial) {
         state.log(format!("Cancelled mirror start for {serial}"));
@@ -1189,18 +1403,13 @@ pub fn stop_mirror(shared: &Arc<Mutex<Shared>>, serial: &str) {
 
 pub fn stop_all_mirrors(shared: &Arc<Mutex<Shared>>) {
     let mut state = shared.lock().unwrap();
-    let serials: Vec<String> = state.mirrors.keys().cloned().collect();
-
-    for serial in serials {
-        if let Some(mut child) = state.mirrors.remove(&serial) {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+    for (_, child) in state.mirrors.drain() {
+        end_child(child);
     }
-    if let Some(mut pair) = state.pair.take() {
-        let _ = pair.child.kill();
-        let _ = pair.child.wait();
+    if let Some(pair) = state.pair.take() {
+        end_child(pair.child);
     }
+    state.starting_pair = None;
     state.starting_mirrors.clear();
 }
 
@@ -1255,6 +1464,31 @@ pub fn start_pairing(shared: Arc<Mutex<Shared>>, ctx: Context) {
     }
 
     ctx.request_repaint();
+}
+
+/// Cancels a pairing whose QR code no one has scanned yet, as the popover
+/// hides: its wait would otherwise run on unseen for two minutes
+pub fn cancel_unscanned_pairing(shared: &Arc<Mutex<Shared>>) {
+    let unscanned = shared
+        .lock()
+        .unwrap()
+        .pairing
+        .as_ref()
+        .is_some_and(|session| pairing_unscanned(&session.phase));
+    if unscanned {
+        cancel_pairing(shared);
+    }
+}
+
+/// Making or showing a QR code, before a phone scanned it
+fn pairing_unscanned(phase: &PairingPhase) -> bool {
+    match phase {
+        PairingPhase::Qr { .. } => true,
+        PairingPhase::Connecting { progress } => {
+            progress.kind == PairingProgressKind::WaitingForQrScan
+        }
+        PairingPhase::Failed { .. } | PairingPhase::Paired { .. } => false,
+    }
 }
 
 pub fn cancel_pairing(shared: &Arc<Mutex<Shared>>) {
@@ -1327,13 +1561,13 @@ fn run_pairing(
     ctx: &Context,
     cancel: &Arc<AtomicBool>,
 ) -> anyhow::Result<String> {
-    let _adb_work = ADB_WORK_LOCK.lock().unwrap();
-    let adb = Adb::resolve(None)?;
     let mut delegate = AppPairingDelegate {
         shared,
         ctx,
         cancel,
+        adb_work: Some(ADB_WORK_LOCK.lock().unwrap()),
     };
+    let adb = Adb::resolve(None)?;
     let phone = pairing_flow::pair_and_connect(&adb, PAIRING_TIMEOUT, &mut delegate)?;
 
     Ok(phone.display_name)
@@ -1351,6 +1585,7 @@ fn run_mock_pairing(
         shared,
         ctx,
         cancel,
+        adb_work: None,
     };
     delegate.on_event(PairingEvent::QrReady(PairingQr::with_instance(
         "twin-mock".to_string(),
@@ -1412,6 +1647,9 @@ struct AppPairingDelegate<'a> {
     shared: &'a Arc<Mutex<Shared>>,
     ctx: &'a Context,
     cancel: &'a Arc<AtomicBool>,
+    /// Held while the pairing flow runs adb, let go while it waits between
+    /// polls (most of a 120 s QR wait), so other adb work gets its turn
+    adb_work: Option<MutexGuard<'static, ()>>,
 }
 
 impl PairingFlowDelegate for AppPairingDelegate<'_> {
@@ -1471,7 +1709,12 @@ impl PairingFlowDelegate for AppPairingDelegate<'_> {
     }
 
     fn sleep(&mut self, duration: Duration) -> anyhow::Result<()> {
-        sleep_or_cancel(self.cancel, duration)
+        let held = self.adb_work.take().is_some();
+        sleep_or_cancel(self.cancel, duration)?;
+        if held {
+            self.adb_work = Some(ADB_WORK_LOCK.lock().unwrap());
+        }
+        Ok(())
     }
 
     fn choose_already_connected(
@@ -1652,9 +1895,9 @@ mod tests {
                 rows.iter().map(|row| &row.name).collect::<Vec<_>>(),
                 names.iter().collect::<Vec<_>>()
             );
-            assert_eq!(rows[0].status(launching), expected_status);
+            assert_eq!(status(&rows[0], launching), expected_status);
             assert_eq!(rows[0].can_launch(launching), can_launch);
-            assert_eq!(rows[1].status(false), "Stopped");
+            assert_eq!(status(&rows[1], false), "Stopped");
         }
     }
 
@@ -1670,9 +1913,9 @@ mod tests {
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "Pixel_9a");
-        assert_eq!(rows[0].status(false), "Running");
+        assert_eq!(status(&rows[0], false), "Running");
         assert_eq!(rows[1].name, "emulator-5556");
-        assert_eq!(rows[1].status(false), "offline");
+        assert_eq!(status(&rows[1], false), "offline");
         assert!(rows.iter().all(|row| !row.can_launch(false)));
     }
 
@@ -1691,8 +1934,185 @@ mod tests {
         );
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].status(false), "Running");
+        assert_eq!(status(&rows[0], false), "Running");
         assert!(!rows[0].can_launch(false));
+    }
+
+    #[test]
+    fn refreshes_asked_for_mid_run_queue_once() {
+        let mut queue = RefreshQueue::default();
+        assert!(queue.request(true));
+        // Asked for while one runs: dropped before, now held for one rerun
+        assert!(!queue.request(true));
+        assert!(!queue.request(true));
+        assert!(queue.finish());
+        assert!(queue.request(true));
+        assert!(!queue.finish());
+
+        // A light probe adds nothing to a refresh, and a full refresh
+        // waits behind a probe
+        assert!(queue.request(false));
+        assert!(!queue.request(false));
+        assert!(!queue.finish());
+        assert!(queue.request(false));
+        assert!(!queue.request(true));
+        assert!(queue.finish());
+    }
+
+    fn tool() -> ToolInfo {
+        ToolInfo {
+            available: true,
+            detail: String::new(),
+            warnings: vec![],
+        }
+    }
+
+    fn snapshot(devices: Vec<DeviceInfo>, avds: Vec<AvdInfo>) -> Snapshot {
+        Snapshot {
+            emulator: tool(),
+            mirror: tool(),
+            xcode: tool(),
+            devices,
+            avds,
+            iphones: vec![],
+            simulators: vec![],
+        }
+    }
+
+    fn iphone() -> Iphone {
+        Iphone {
+            udid: "00008150-TEST".to_string(),
+            name: "iPhone".to_string(),
+            model: "iPhone Air".to_string(),
+            os_version: "27.0".to_string(),
+        }
+    }
+
+    #[test]
+    fn slow_apple_lookups_keep_newer_android_state() {
+        let mut state = Shared::default();
+        let avd = |device| AvdInfo {
+            name: "Pixel_9a".to_string(),
+            device,
+        };
+        // The refresh that started the lookups saw no emulator; a later one
+        // saw it running and a phone
+        publish_snapshot(&mut state, snapshot(vec![], vec![avd(None)]), 0);
+        let emulator = device_info("emulator-5554", true, true);
+        let phone = device_info("phone", false, true);
+        publish_snapshot(
+            &mut state,
+            snapshot(vec![phone, emulator.clone()], vec![avd(Some(emulator))]),
+            0,
+        );
+        state.stopping.insert("SIM".to_string(), Instant::now());
+
+        merge_apple_lookups(&mut state, vec![iphone()], vec![]);
+
+        let shown = state.snapshot.as_ref().unwrap();
+        assert_eq!(shown.devices.len(), 2);
+        assert!(shown.avds[0].device.is_some());
+        assert_eq!(shown.iphones.len(), 1);
+        // The simulator is gone, so its shutdown is done
+        assert!(state.stopping.is_empty());
+    }
+
+    #[test]
+    fn menu_icon_counts_iphones() {
+        let mut only_iphone = snapshot(vec![device_info("phone", false, false)], vec![]);
+        assert!(!snapshot_connected(&only_iphone));
+        only_iphone.iphones.push(iphone());
+        assert!(snapshot_connected(&only_iphone));
+    }
+
+    #[test]
+    fn listed_emulators_are_no_longer_starting() {
+        let mut state = Shared {
+            starting_avds: HashSet::from(["Pixel_9a".to_string(), "Other".to_string()]),
+            ..Shared::default()
+        };
+        let emulator = device_info("emulator-5554", true, false);
+        let avds = vec![
+            AvdInfo {
+                name: "Pixel_9a".to_string(),
+                device: Some(emulator.clone()),
+            },
+            AvdInfo {
+                name: "Other".to_string(),
+                device: None,
+            },
+        ];
+        publish_snapshot(&mut state, snapshot(vec![emulator], avds), 0);
+        assert_eq!(state.starting_avds, HashSet::from(["Other".to_string()]));
+    }
+
+    #[test]
+    fn pane_rollback_touches_only_its_own_pane() {
+        let child = std::process::Command::new("true").spawn().unwrap();
+        let mut state = Shared {
+            pair: Some(PairMirror {
+                keys: ["android".to_string(), "ios:udid".to_string()],
+                // The iPhone pane was hidden, then the Android one too
+                shown: [false, false],
+                udid: "udid".to_string(),
+                child,
+            }),
+            ..Shared::default()
+        };
+        // Twin Mirror refused hiding the iPhone: only it comes back
+        roll_back_pane(&mut state, "udid", 1, false);
+        assert_eq!(state.pair.as_ref().unwrap().shown, [false, true]);
+        // A refusal for a pane toggled again since leaves it as it is now
+        roll_back_pane(&mut state, "udid", 1, false);
+        assert_eq!(state.pair.as_ref().unwrap().shown, [false, true]);
+        // Another pair's refusal changes nothing
+        roll_back_pane(&mut state, "other", 0, false);
+        assert_eq!(state.pair.as_ref().unwrap().shown, [false, true]);
+        let _ = state.pair.take().unwrap().child.wait();
+    }
+
+    #[test]
+    fn hiding_cancels_only_an_unscanned_pairing() {
+        let progress = |kind| PairingProgress::new(kind, "", "");
+        assert!(pairing_unscanned(&PairingPhase::Connecting {
+            progress: progress(PairingProgressKind::WaitingForQrScan),
+        }));
+        assert!(!pairing_unscanned(&PairingPhase::Connecting {
+            progress: progress(PairingProgressKind::CompletingPairing),
+        }));
+        assert!(!pairing_unscanned(&PairingPhase::Failed {
+            message: String::new(),
+        }));
+    }
+
+    #[test]
+    fn xcode_app_is_the_one_devicectl_came_from() {
+        let xcode = ToolInfo {
+            available: true,
+            detail: "/Applications/Xcode-beta.app/Contents/Developer/usr/bin/devicectl".to_string(),
+            warnings: vec![],
+        };
+        assert_eq!(
+            xcode_app(&xcode),
+            Some(std::path::PathBuf::from("/Applications/Xcode-beta.app"))
+        );
+        assert_eq!(
+            xcode_app(&ToolInfo {
+                available: false,
+                ..xcode
+            }),
+            None
+        );
+    }
+
+    /// How a row reads, for checking `avd_rows`
+    fn status(avd: &AvdInfo, launching: bool) -> &str {
+        match &avd.device {
+            Some(device) if device.ready => "Running",
+            _ if launching => "Starting…",
+            Some(device) => &device.state,
+            None => "Stopped",
+        }
     }
 
     fn device_info(serial: &str, is_emulator: bool, ready: bool) -> DeviceInfo {

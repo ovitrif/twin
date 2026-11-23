@@ -19,10 +19,13 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     // `--login-item [on|off]` sets Open at Login, then prints it, for checks
     if let Some(index) = args.iter().position(|arg| arg == "--login-item") {
-        match args.get(index + 1).map(String::as_str) {
+        let result = match args.get(index + 1).map(String::as_str) {
             Some("on") => login_item::set_enabled(true),
             Some("off") => login_item::set_enabled(false),
-            _ => {}
+            _ => Ok(()),
+        };
+        if let Err(error) = result {
+            eprintln!("open at login failed: {error}");
         }
         println!("open at login: {}", login_item::is_enabled());
         return Ok(());
