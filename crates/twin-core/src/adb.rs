@@ -374,9 +374,17 @@ impl Adb {
     }
 }
 
+/// The command as errors show it, with `adb pair`'s pairing code masked
 fn command_display(path: &std::path::Path, args: &[OsString]) -> String {
+    let pairing = args.first().is_some_and(|arg| arg == "pair");
     let mut parts = vec![path.display().to_string()];
-    parts.extend(args.iter().map(|arg| arg.to_string_lossy().to_string()));
+    parts.extend(args.iter().enumerate().map(|(index, arg)| {
+        if pairing && index == 2 {
+            "******".to_string()
+        } else {
+            arg.to_string_lossy().to_string()
+        }
+    }));
     parts.join(" ")
 }
 
@@ -797,6 +805,21 @@ fn summarize_wifi_status(output: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masks_the_pairing_code_in_command_display() {
+        let path = Path::new("/usr/bin/adb");
+        let args = |args: &[&str]| args.iter().map(OsString::from).collect::<Vec<_>>();
+
+        assert_eq!(
+            command_display(path, &args(&["pair", "192.168.1.5:41234", "482915"])),
+            "/usr/bin/adb pair 192.168.1.5:41234 ******"
+        );
+        assert_eq!(
+            command_display(path, &args(&["connect", "192.168.1.5:5555"])),
+            "/usr/bin/adb connect 192.168.1.5:5555"
+        );
+    }
 
     #[cfg(unix)]
     #[test]
