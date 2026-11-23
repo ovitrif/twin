@@ -73,7 +73,7 @@ public struct PairOptions {
 /// Lays out the two phones a gap apart, centered, at one scale: each phone's
 /// long side has the same length, so a phone turned sideways keeps its size
 /// and lies across instead of growing to the other phone's height.
-private final class PairView: NSView {
+final class PairView: NSView {
     let android = MirrorView(frame: .zero)
     let iphone = MirrorView(frame: .zero)
     var androidAspect: CGFloat = 1080.0 / 2400
@@ -112,7 +112,8 @@ private final class PairView: NSView {
 
     /// The longest long side that fits this size
     func long(fitting size: CGSize) -> CGFloat {
-        min(size.height / tallest, (size.width - gaps) / widths).rounded(.down)
+        guard widths > 0, tallest > 0 else { return 0 }
+        return max(0, min(size.height / tallest, (size.width - gaps) / widths).rounded(.down))
     }
 
     private var gaps: CGFloat { showsAndroid && showsIPhone ? gap : 0 }
@@ -229,6 +230,10 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
                 return
             }
+            // Typing and Home go to the phone still shown
+            let (hidden, other) = request.pane == .android ? (self.pair.android, self.pair.iphone)
+                                                           : (self.pair.iphone, self.pair.android)
+            if !request.visible, self.window.firstResponder === hidden { self.window.makeFirstResponder(other) }
             self.fitWindow()
         }
     }
@@ -350,7 +355,9 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
         frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - width)
         frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - height)
         window.setFrame(frame, display: true)
+        // The style rounds the panes' new frames, so they lay out first
         pair.needsLayout = true
+        pair.layoutSubtreeIfNeeded()
         styler.applyStyle()
     }
 
