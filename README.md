@@ -19,7 +19,8 @@ without remembering SDK commands. Nothing is installed on either phone.
   window that moves as one; each phone can also open or hide on its own.
 
 Twin runs on Apple silicon Macs; the `twin` CLI also runs on Linux, for Android. More at
-[ovitrif.com/apps/twin](https://ovitrif.com/apps/twin/).
+[ovitrif.com/apps/twin](https://ovitrif.com/apps/twin/) and
+[releases](https://ovitrif.com/apps/twin/releases/).
 
 ## Install
 
@@ -34,7 +35,9 @@ curl -fsSL https://github.com/ovitrif/twin/releases/latest/download/install.sh |
   TWIN_INSTALL_TAG=vX.Y.Z TWIN_INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
-`install.sh` installs the `twin` CLI and, on macOS, `Twin.app` into /Applications.
+`install.sh` verifies checksums, installs or updates the `twin` CLI and (on macOS) `Twin.app`
+into `/Applications`, and clears Gatekeeper quarantine — recommended on macOS, since release
+builds aren't Apple-notarized.
 
 What Twin needs, which its Settings check under Setup:
 
@@ -123,6 +126,8 @@ asks once for camera access.
 In the window:
 
 - Click, drag and scroll to touch the phone; type to type into it.
+- ⌘V pastes your Mac clipboard onto either phone; on Android, ⌘C / ⌘X and text copied on the
+  phone sync back to your Mac clipboard.
 - ⌘H goes home, ⌘L locks, ⌘B or right-click goes back on Android, ⌘W closes the mirror.
 - Hold ⌘ to see the title bar; ⌘ + drag anywhere moves the window.
 - Drag any edge of the phone's outline to resize; the window keeps the phone's aspect and
