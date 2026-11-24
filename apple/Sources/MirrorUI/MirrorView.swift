@@ -2,6 +2,78 @@ import AppKit
 import AVFoundation
 import DMBCore
 
+/// Tracks decode-failure recovery for a video layer: after a failure or a
+/// required flush, non-sync P-frames are dropped until a keyframe arrives so
+/// they cannot immediately re-fail the decoder; if recovery stalls past
+/// `stallTimeout`, the caller is asked to restart the session.
+struct DecodeRecovery {
+    struct Action: Equatable {
+        var flush = false
+        var enqueue = true
+        var requestKeyframe = false
+        var logError: String?
+        var restartSession = false
+    }
+
+    let stallTimeout: TimeInterval
+    private(set) var waitingForKeyframe = false
+    private(set) var stuckSince: TimeInterval?
+
+    init(stallTimeout: TimeInterval = 5) {
+        self.stallTimeout = stallTimeout
+    }
+
+    mutating func reset() {
+        waitingForKeyframe = false
+        stuckSince = nil
+    }
+
+    mutating func step(isSync: Bool, needsFlush: Bool, error: String?, now: TimeInterval) -> Action {
+        if needsFlush {
+            var action = Action(flush: true, enqueue: false, requestKeyframe: !isSync)
+            if stuckSince == nil {
+                stuckSince = now
+                action.logError = error ?? "decode failed"
+            }
+            if isSync {
+                // Keep `stuckSince` until the next frame proves this keyframe decoded cleanly
+                waitingForKeyframe = false
+                action.enqueue = true
+            } else {
+                waitingForKeyframe = true
+                if let since = stuckSince, now - since >= stallTimeout {
+                    action.restartSession = true
+                    stuckSince = now
+                }
+            }
+            return action
+        }
+
+        if waitingForKeyframe {
+            if isSync {
+                waitingForKeyframe = false
+                return Action(flush: false, enqueue: true)
+            }
+            var action = Action(flush: false, enqueue: false, requestKeyframe: true)
+            if let since = stuckSince, now - since >= stallTimeout {
+                action.restartSession = true
+                stuckSince = now
+            }
+            return action
+        }
+
+        stuckSince = nil
+        return Action(flush: false, enqueue: true)
+    }
+
+    /// Fires if recovery is still waiting for a keyframe when frames stop arriving
+    mutating func checkWatchdog(now: TimeInterval) -> Bool {
+        guard waitingForKeyframe, let since = stuckSince, now - since >= stallTimeout else { return false }
+        stuckSince = now
+        return true
+    }
+}
+
 /// Shows the phone's screen and turns mouse and keyboard input into touches.
 /// While Cmd is held, a press moves the window and nothing reaches the phone.
 final class MirrorView: NSView {
@@ -10,6 +82,9 @@ final class MirrorView: NSView {
     weak var input: InputSink?
     private var pressed = false
     private var commandPress = false
+    private let decodeLock = NSLock()
+    private var decodeRecovery = DecodeRecovery()
+    private var stallTimer: Timer?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -75,6 +150,43 @@ final class MirrorView: NSView {
     /// The decoder failed and was reset; the stream should send a key frame.
     /// Runs on the frame's queue.
     var onDecodeFailure: (() -> Void)?
+    /// First error observed when entering a decode-failure episode. Runs on any queue.
+    var onDecodeError: ((String) -> Void)?
+    /// Decode stayed stuck waiting for a keyframe past the stall timeout; the
+    /// session should be restarted. Runs on any queue.
+    var onDecodeStall: (() -> Void)?
+
+    /// Whether `buffer` can start decoding right after a flush (a keyframe or uncompressed frame)
+    static func isSyncFrame(_ buffer: CMSampleBuffer) -> Bool {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false),
+              CFArrayGetCount(attachments) > 0 else { return true }
+        let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFDictionary.self)
+        guard let value = CFDictionaryGetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque())
+        else { return true }
+        return !CFEqual(unsafeBitCast(value, to: CFTypeRef.self), kCFBooleanTrue)
+    }
+
+    private func armStallWatchdog() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.stallTimer == nil else { return }
+            let timeout = self.decodeLock.withLock { self.decodeRecovery.stallTimeout }
+            self.stallTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                self.stallTimer = nil
+                let stalled = self.decodeLock.withLock {
+                    self.decodeRecovery.checkWatchdog(now: ProcessInfo.processInfo.systemUptime)
+                }
+                if stalled { self.onDecodeStall?() }
+            }
+        }
+    }
+
+    private func disarmStallWatchdog() {
+        DispatchQueue.main.async { [weak self] in
+            self?.stallTimer?.invalidate()
+            self?.stallTimer = nil
+        }
+    }
 
     override func layout() {
         super.layout()
@@ -98,7 +210,8 @@ final class MirrorView: NSView {
 
     /// Shows a frame as soon as it arrives and returns the size the window
     /// should take: the screen's, without any padding; nil while that is
-    /// not known yet. Runs on any queue.
+    /// not known yet or while waiting for a keyframe after a decode error.
+    /// Runs on any queue.
     @discardableResult
     func enqueue(_ buffer: CMSampleBuffer) -> CGSize? {
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: true),
@@ -108,10 +221,25 @@ final class MirrorView: NSView {
                                  Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
         }
         let renderer = display.sampleBufferRenderer
-        if renderer.status == .failed {
-            renderer.flush()
-            onDecodeFailure?()
+        let isSync = Self.isSyncFrame(buffer)
+        let needsFlush = renderer.status == .failed || renderer.requiresFlushToResumeDecoding
+        let errText = renderer.error?.localizedDescription
+            ?? (renderer.requiresFlushToResumeDecoding ? "renderer requires flush" : nil)
+        let (action, stillWaiting) = decodeLock.withLock { () -> (DecodeRecovery.Action, Bool) in
+            let act = decodeRecovery.step(isSync: isSync, needsFlush: needsFlush, error: errText,
+                                          now: ProcessInfo.processInfo.systemUptime)
+            return (act, decodeRecovery.waitingForKeyframe)
         }
+        if let msg = action.logError { onDecodeError?(msg) }
+        if action.flush { renderer.flush() }
+        if action.requestKeyframe {
+            onDecodeFailure?()
+            armStallWatchdog()
+        } else if !stillWaiting && !needsFlush {
+            disarmStallWatchdog()
+        }
+        if action.restartSession { onDecodeStall?() }
+        guard action.enqueue else { return nil }
         renderer.enqueue(buffer)
         guard let format = CMSampleBufferGetFormatDescription(buffer) else { return nil }
         let dims = CMVideoFormatDescriptionGetDimensions(format)
@@ -135,6 +263,14 @@ final class MirrorView: NSView {
             screen = CGSize(width: screen.height, height: screen.width)
         }
         return screen
+    }
+
+    /// Wipes the last displayed frame to black and resets decode recovery,
+    /// so a disconnected or restarting phone never leaves a stale image on screen
+    func clear() {
+        decodeLock.withLock { decodeRecovery.reset() }
+        disarmStallWatchdog()
+        display.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 
     /// Back to whole, unpadded frames filling the view, for the capture path

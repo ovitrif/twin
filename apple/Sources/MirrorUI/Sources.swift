@@ -7,6 +7,7 @@ import DMBCore
 protocol FrameSource: AnyObject {
     var onFrame: ((CMSampleBuffer) -> Void)? { get set }
     var onStatus: ((String) -> Void)? { get set }
+    var onDisconnected: (() -> Void)? { get set }
     func start()
     func stop()
 }
@@ -15,6 +16,7 @@ protocol FrameSource: AnyObject {
 final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onFrame: ((CMSampleBuffer) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onDisconnected: (() -> Void)?
     private let name: String?
     private let session = AVCaptureSession()
     /// The session changes, starts and stops only on this queue
@@ -110,6 +112,7 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
             self.session.outputs.forEach(self.session.removeOutput)
             self.session.commitConfiguration()
             self.onStatus?("Waiting for \(self.name ?? "the iPhone")…")
+            DispatchQueue.main.async { self.onDisconnected?() }
         }
     }
 
@@ -130,6 +133,7 @@ final class CaptureSource: NSObject, FrameSource, AVCaptureVideoDataOutputSample
 final class ReplaySource: FrameSource {
     var onFrame: ((CMSampleBuffer) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onDisconnected: (() -> Void)?
     private let urls: [URL]
     private let queue = DispatchQueue(label: "dmb.replay", qos: .userInteractive)
     private var running = false
@@ -189,6 +193,7 @@ final class ReplaySource: FrameSource {
 final class MJPEGSource: NSObject, FrameSource, URLSessionDataDelegate {
     var onFrame: ((CMSampleBuffer) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onDisconnected: (() -> Void)?
     private let url: URL
     private let lock = NSLock()
     private var session: URLSession?
@@ -284,9 +289,11 @@ final class MJPEGSource: NSObject, FrameSource, URLSessionDataDelegate {
 final class DeviceHubSource: FrameSource {
     var onFrame: ((CMSampleBuffer) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onDisconnected: (() -> Void)?
     /// The screen's size in pixels; the stream pads it
     var onScreenSize: ((CGSize) -> Void)?
     let hid: HIDInput
+    private let assemblerLock = NSLock()
     private let assembler = HEVCAssembler()
 
     init(hid: HIDInput) { self.hid = hid }
@@ -295,8 +302,17 @@ final class DeviceHubSource: FrameSource {
         onStatus?("Connecting to the iPhone…")
         hid.onScreenSize = { [weak self] in self?.onScreenSize?($0) }
         hid.onLocked = { [weak self] in self?.onStatus?("Unlock the iPhone to see it") }
+        hid.onWillStart = { [weak self] in
+            self?.assemblerLock.withLock { self?.assembler.reset() }
+        }
+        hid.onDisconnected = { [weak self] in
+            self?.assemblerLock.withLock { self?.assembler.reset() }
+            self?.onDisconnected?()
+        }
         hid.onVideoFrame = { [weak self] unit in
-            guard let self, let sample = self.assembler.sampleBuffer(accessUnit: unit) else { return }
+            guard let self,
+                  let sample = self.assemblerLock.withLock({ self.assembler.sampleBuffer(accessUnit: unit) })
+            else { return }
             self.onFrame?(sample)
         }
         do { try hid.start() } catch { onStatus?("Cannot start dmb-hid: \(error)") }

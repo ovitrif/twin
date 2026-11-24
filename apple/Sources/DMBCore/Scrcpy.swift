@@ -235,6 +235,9 @@ public final class ScrcpySession {
     public var videoSize: CGSize { locked { size } }
     public var onFrame: ((CMSampleBuffer) -> Void)?
     public var onStatus: ((String) -> Void)?
+    /// Runs once if the stream drops unexpectedly (not after an explicit `stop()`),
+    /// after sockets, shell and port forward have been cleaned up
+    public var onEnded: ((Error?) -> Void)?
     /// Text the phone copied, off the main thread
     public var onClipboard: ((String) -> Void)?
     public private(set) var deviceName = ""
@@ -292,6 +295,21 @@ public final class ScrcpySession {
                        "\(home)/Applications/Twin.app/Contents/Helpers/platform-tools/adb",
                        "\(home)/Library/Android/sdk/platform-tools/adb", "/opt/homebrew/bin/adb", "/usr/local/bin/adb"]
         return candidates
+    }
+
+    /// Fast check that `serial` is online in adb before pushing scrcpy-server
+    public static func isDeviceReady(adb: String, serial: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: adb)
+        p.arguments = ["-s", serial, "get-state"]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return false }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { return false }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "device"
     }
 
     @discardableResult
@@ -440,7 +458,10 @@ public final class ScrcpySession {
                 handle(packet, keyFrame: pts & ScrcpyProtocol.flagKeyFrame != 0)
             }
         } catch {
-            if !stopped { onStatus?("\(error)") }
+            if !stopped {
+                stop()
+                if let onEnded { onEnded(error) } else { onStatus?("\(error)") }
+            }
         }
     }
 

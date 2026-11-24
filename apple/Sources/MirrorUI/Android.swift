@@ -2,39 +2,148 @@ import AppKit
 import AVFoundation
 import DMBCore
 
-/// An Android phone's screen through the scrcpy client.
+/// The surface `ScrcpySource` and `ScrcpyInput` need from a scrcpy session,
+/// so reconnect and input handoff can be tested without adb or sockets.
+protocol ScrcpyClient: AnyObject {
+    var videoSize: CGSize { get }
+    var onFrame: ((CMSampleBuffer) -> Void)? { get set }
+    var onStatus: ((String) -> Void)? { get set }
+    var onClipboard: ((String) -> Void)? { get set }
+    var onEnded: ((Error?) -> Void)? { get set }
+    func start() throws
+    func stop()
+    func send(_ message: Data)
+}
+
+extension ScrcpySession: ScrcpyClient {}
+
+/// An Android phone's screen through the scrcpy client; when the phone drops,
+/// it notifies `onDisconnected` and watches adb to reconnect automatically.
 final class ScrcpySource: FrameSource {
     var onFrame: ((CMSampleBuffer) -> Void)?
     var onStatus: ((String) -> Void)?
-    let session: ScrcpySession
+    var onDisconnected: (() -> Void)?
+    var onClipboard: ((String) -> Void)?
+    var onError: ((String) -> Void)?
+    let serial: String
 
-    init(session: ScrcpySession) { self.session = session }
+    private let makeSession: () -> ScrcpyClient
+    private let isReady: () -> Bool
+    private let retryDelay: TimeInterval
+    private let queue = DispatchQueue(label: "dmb.scrcpy.source", qos: .userInitiated)
+    private let lock = NSLock()
+    private var current: ScrcpyClient?
+    private var stopped = false
+    private var retryWork: DispatchWorkItem?
+
+    /// The live scrcpy session, or nil while disconnected/reconnecting
+    var activeSession: ScrcpyClient? { lock.withLock { current } }
+
+    convenience init(serial: String, adb: String, server: String, maxSize: Int = 0, retryDelay: TimeInterval = 1.5) {
+        self.init(
+            serial: serial,
+            retryDelay: retryDelay,
+            isReady: { ScrcpySession.isDeviceReady(adb: adb, serial: serial) },
+            makeSession: { ScrcpySession(serial: serial, adb: adb, server: server, maxSize: maxSize) }
+        )
+    }
+
+    init(serial: String, retryDelay: TimeInterval = 1.5,
+         isReady: @escaping () -> Bool, makeSession: @escaping () -> ScrcpyClient) {
+        self.serial = serial
+        self.retryDelay = retryDelay
+        self.isReady = isReady
+        self.makeSession = makeSession
+    }
 
     func start() {
-        onStatus?("Connecting to \(session.serial)…")
-        session.onFrame = { [weak self] in self?.onFrame?($0) }
-        session.onStatus = { [weak self] text in DispatchQueue.main.async { self?.onStatus?(text) } }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        lock.withLock { stopped = false }
+        onStatus?("Connecting…")
+        attempt(initial: true)
+    }
+
+    func stop() {
+        let session = lock.withLock { () -> ScrcpyClient? in
+            stopped = true
+            retryWork?.cancel()
+            retryWork = nil
+            defer { current = nil }
+            return current
+        }
+        session?.stop()
+    }
+
+    private func attempt(initial: Bool) {
+        queue.async { [weak self] in
             guard let self else { return }
-            do { try self.session.start() } catch {
-                DispatchQueue.main.async { self.onStatus?("\(error)") }
+            guard self.lock.withLock({ !self.stopped }) else { return }
+            if !initial && !self.isReady() {
+                self.scheduleRetry()
+                return
+            }
+            let session = self.makeSession()
+            session.onFrame = { [weak self] in self?.onFrame?($0) }
+            session.onClipboard = { [weak self] in self?.onClipboard?($0) }
+            session.onEnded = { [weak self, weak session] error in
+                guard let self, let session else { return }
+                let dropped = self.lock.withLock { () -> Bool in
+                    guard !self.stopped, self.current === session else { return false }
+                    self.current = nil
+                    return true
+                }
+                guard dropped else { return }
+                if let error { self.onError?("Android stream ended: \(error)") }
+                DispatchQueue.main.async { self.onDisconnected?() }
+                self.scheduleRetry()
+            }
+            let installed = self.lock.withLock { () -> Bool in
+                guard !self.stopped else { return false }
+                self.current = session
+                return true
+            }
+            guard installed else { session.stop(); return }
+            do {
+                try session.start()
+            } catch {
+                let active = self.lock.withLock { () -> Bool in
+                    if self.current === session { self.current = nil }
+                    return !self.stopped
+                }
+                guard active else { return }
+                self.onError?("Android connect failed: \(error)")
+                if initial {
+                    DispatchQueue.main.async { self.onDisconnected?() }
+                }
+                self.scheduleRetry()
             }
         }
     }
 
-    func stop() { session.stop() }
+    private func scheduleRetry() {
+        let work = DispatchWorkItem { [weak self] in self?.attempt(initial: false) }
+        let scheduled = lock.withLock { () -> Bool in
+            guard !stopped else { return false }
+            retryWork?.cancel()
+            retryWork = work
+            return true
+        }
+        guard scheduled else { return }
+        queue.asyncAfter(deadline: .now() + retryDelay, execute: work)
+    }
 }
 
 /// Touch, keys and buttons for an Android phone, in scrcpy's control format.
+/// Reads the active session from `ScrcpySource` so input and clipboard resume
+/// seamlessly after a reconnect.
 final class ScrcpyInput: InputSink {
     var onError: ((String) -> Void)?
-    private let session: ScrcpySession
+    private weak var source: ScrcpySource?
     private var scrollPending = CGVector.zero
 
-    init(session: ScrcpySession) {
-        self.session = session
+    init(source: ScrcpySource) {
+        self.source = source
         // What the phone copies lands on the Mac's clipboard, as in scrcpy
-        session.onClipboard = { [weak self] text in
+        source.onClipboard = { [weak self] text in
             DispatchQueue.main.async {
                 // The phone echoes a paste back; text the Mac already holds
                 // stays as it is, anything else lands
@@ -45,20 +154,23 @@ final class ScrcpyInput: InputSink {
         }
     }
 
+    private var session: ScrcpyClient? { source?.activeSession }
+
     /// ⌘V hands the Mac's clipboard to the phone and pastes it; ⌘C and ⌘X
     /// copy or cut on the phone, whose clipboard then comes back to the Mac
     func clipboard(_ command: ClipboardCommand) {
         switch command {
         case .paste:
             guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
-            session.send(ScrcpyProtocol.setClipboard(text, paste: true))
+            session?.send(ScrcpyProtocol.setClipboard(text, paste: true))
         case .copy: tap(278)  // KEYCODE_COPY
         case .cut: tap(277)   // KEYCODE_CUT
         }
     }
 
     private func position(_ p: CGPoint) -> (Int32, Int32, UInt16, UInt16)? {
-        Self.position(p, in: session.videoSize)
+        guard let session else { return nil }
+        return Self.position(p, in: session.videoSize)
     }
 
     /// A point from 0 to 1 in pixels of a video this size, with the size as
@@ -73,7 +185,7 @@ final class ScrcpyInput: InputSink {
     func touch(_ phase: TouchPhase, at point: CGPoint) {
         guard let (x, y, w, h) = position(point) else { return }
         let action: ScrcpyProtocol.TouchAction = phase == .down ? .down : (phase == .up ? .up : .move)
-        session.send(ScrcpyProtocol.touch(action, x: x, y: y, width: w, height: h))
+        session?.send(ScrcpyProtocol.touch(action, x: x, y: y, width: w, height: h))
     }
 
     /// A wheel or trackpad scroll as Android mouse wheel steps, about one per
@@ -86,7 +198,7 @@ final class ScrcpyInput: InputSink {
         guard hs != 0 || vs != 0 else { return }
         scrollPending.dx -= hs
         scrollPending.dy -= vs
-        session.send(ScrcpyProtocol.scroll(x: x, y: y, width: w, height: h, h: Float(-hs), v: Float(vs)))
+        session?.send(ScrcpyProtocol.scroll(x: x, y: y, width: w, height: h, h: Float(-hs), v: Float(vs)))
     }
 
     func type(_ text: String) {
@@ -95,7 +207,7 @@ final class ScrcpyInput: InputSink {
         case "\u{7F}": tap(112)     // KEYCODE_FORWARD_DEL
         case "\n": tap(66)          // KEYCODE_ENTER
         case "\t": tap(61)          // KEYCODE_TAB
-        default: session.send(ScrcpyProtocol.text(text))
+        default: session?.send(ScrcpyProtocol.text(text))
         }
     }
 
@@ -110,14 +222,14 @@ final class ScrcpyInput: InputSink {
         case "home": tap(3)    // KEYCODE_HOME
         case "lock": tap(26)   // KEYCODE_POWER
         case "back":
-            session.send(ScrcpyProtocol.back(down: true))
-            session.send(ScrcpyProtocol.back(down: false))
+            session?.send(ScrcpyProtocol.back(down: true))
+            session?.send(ScrcpyProtocol.back(down: false))
         default: break
         }
     }
 
     private func tap(_ keycode: UInt32) {
-        session.send(ScrcpyProtocol.key(keycode, down: true))
-        session.send(ScrcpyProtocol.key(keycode, down: false))
+        session?.send(ScrcpyProtocol.key(keycode, down: true))
+        session?.send(ScrcpyProtocol.key(keycode, down: false))
     }
 }

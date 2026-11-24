@@ -148,3 +148,87 @@ private func frame(_ width: Int, _ height: Int) -> CMSampleBuffer {
         .compactMap { line in (line["touch"] as? String).map { "\($0) \(line["x"] as? Double ?? -1)" } }
     #expect(touches == ["down 0.5", "move 0.5", "up 0.5", "down 0.2", "up 0.2"])
 }
+
+@Test func decodeRecoveryDropsNonSyncFramesUntilKeyframe() {
+    var recovery = DecodeRecovery(stallTimeout: 5)
+    // Healthy frame passes straight through
+    #expect(recovery.step(isSync: false, needsFlush: false, error: nil, now: 10)
+        == .init(flush: false, enqueue: true, requestKeyframe: false, logError: nil, restartSession: false))
+
+    // Failure on a P-frame flushes, logs once, drops the P-frame, and requests a keyframe
+    #expect(recovery.step(isSync: false, needsFlush: true, error: "bad data", now: 11)
+        == .init(flush: true, enqueue: false, requestKeyframe: true, logError: "bad data", restartSession: false))
+
+    // Subsequent P-frames while waiting are dropped without re-logging
+    #expect(recovery.step(isSync: false, needsFlush: false, error: nil, now: 12)
+        == .init(flush: false, enqueue: false, requestKeyframe: true, logError: nil, restartSession: false))
+
+    // Keyframe arrives: enqueued and clears waitingForKeyframe
+    #expect(recovery.step(isSync: true, needsFlush: false, error: nil, now: 12.5)
+        == .init(flush: false, enqueue: true, requestKeyframe: false, logError: nil, restartSession: false))
+
+    // Next healthy P-frame clears stuckSince completely
+    #expect(recovery.step(isSync: false, needsFlush: false, error: nil, now: 12.6)
+        == .init(flush: false, enqueue: true, requestKeyframe: false, logError: nil, restartSession: false))
+    #expect(recovery.stuckSince == nil)
+}
+
+@Test func decodeRecoveryRequestsRestartWhenStalledPastTimeout() {
+    var recovery = DecodeRecovery(stallTimeout: 5)
+    _ = recovery.step(isSync: false, needsFlush: true, error: "invalid session", now: 100)
+    // Still stuck at +4.9s: no restart yet
+    let before = recovery.step(isSync: false, needsFlush: false, error: nil, now: 104.9)
+    #expect(!before.restartSession)
+    #expect(!before.enqueue)
+    // Past +5s: asks to restart session once, then resets timer
+    let atTimeout = recovery.step(isSync: false, needsFlush: false, error: nil, now: 105.1)
+    #expect(atTimeout.restartSession)
+    let rightAfter = recovery.step(isSync: false, needsFlush: false, error: nil, now: 105.2)
+    #expect(!rightAfter.restartSession)
+    // Watchdog also fires if frames stop arriving for another stallTimeout
+    let earlyWatchdog = recovery.checkWatchdog(now: 109.9)
+    #expect(!earlyWatchdog)
+    let lateWatchdog = recovery.checkWatchdog(now: 110.2)
+    #expect(lateWatchdog)
+}
+
+@Test func isSyncFrameDistinguishesKeyframesFromNonSyncBuffers() {
+    let sync = frame(16, 16)
+    #expect(MirrorView.isSyncFrame(sync))
+
+    let nonSync = frame(16, 16)
+    let attachments = CMSampleBufferGetSampleAttachmentsArray(nonSync, createIfNecessary: true)!
+    let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+    CFDictionarySetValue(dict, Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque(),
+                         Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
+    #expect(!MirrorView.isSyncFrame(nonSync))
+}
+
+@MainActor @Test func hidInputRestartRespawnsHelperWithoutTriggeringDisconnect() async throws {
+    let script = FileManager.default.temporaryDirectory.appendingPathComponent("dmb-hid-restart-\(UUID()).sh")
+    let starts = script.appendingPathExtension("starts")
+    try "#!/bin/sh\necho start >> '\(starts.path)'\necho ready\ncat > /dev/null\n"
+        .write(to: script, atomically: true, encoding: .utf8)
+    chmod(script.path, 0o755)
+    let hid = HIDInput(helper: script, udid: "TEST")
+    var readyCount = 0
+    var disconnects = 0
+    hid.onReady = { readyCount += 1 }
+    hid.onDisconnected = { disconnects += 1 }
+    try hid.start()
+    let waitReady: (Int) async throws -> Void = { target in
+        let deadline = Date().addingTimeInterval(3)
+        while readyCount < target && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+    try await waitReady(1)
+    #expect(readyCount == 1)
+    hid.restart()
+    try await waitReady(2)
+    hid.stop()
+    #expect(readyCount == 2)
+    #expect(disconnects == 0)
+    let lines = try String(contentsOf: starts, encoding: .utf8).split(separator: "\n")
+    #expect(lines.count == 2)
+}

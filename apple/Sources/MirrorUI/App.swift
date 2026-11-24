@@ -117,6 +117,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startSource() {
         source.onStatus = { [weak self] text in DispatchQueue.main.async { self?.view.setStatus(text) } }
+        source.onDisconnected = { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.view.clear()
+                self.videoSize = .zero
+                self.view.setStatus("\(self.options.title ?? "iPhone") disconnected\nWaiting to reconnect…")
+            }
+        }
         source.onFrame = { [weak self] buffer in self?.show(buffer) }
         source.start()
     }
@@ -127,7 +135,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func deviceHub() -> DeviceHubSource? {
         guard options.wda == nil, let udid = options.udid, let helper = hidHelper else { return nil }
         // Before iOS 27 there is no Device Hub: fall back to the capture path
-        let (hid, hub) = MirrorUI.deviceHub(helper: helper, udid: udid, view: view) { [weak self] in
+        let log: (String) -> Void = { FileHandle.standardError.write(Data("dmb: \($0)\n".utf8)) }
+        let (hid, hub) = MirrorUI.deviceHub(helper: helper, udid: udid, view: view, log: log) { [weak self] in
             self?.fallBackToCapture()
         }
         self.hid = hid

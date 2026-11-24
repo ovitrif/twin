@@ -13,6 +13,15 @@ public final class HEVCAssembler {
 
     public init() {}
 
+    /// Drops cached parameter sets before a fresh stream starts
+    public func reset() {
+        vps = nil
+        sps = nil
+        pps = nil
+        format = nil
+        codedSize = .zero
+    }
+
     static func nalType(_ unit: Data) -> UInt8 { (unit[unit.startIndex] >> 1) & 0x3F }
 
     public func sampleBuffer(accessUnit: Data) -> CMSampleBuffer? {
@@ -26,7 +35,7 @@ public final class HEVCAssembler {
             case 34: if pps != unit { pps = unit; changed = true }
             case 0...31:
                 slices.append(unit)
-                if (16...21).contains(Self.nalType(unit)) { keyFrame = true }  // IRAP pictures
+                if (16...23).contains(Self.nalType(unit)) { keyFrame = true }  // IRAP pictures
             default: break  // access unit delimiters, SEI
             }
         }

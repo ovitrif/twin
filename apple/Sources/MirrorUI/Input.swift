@@ -62,9 +62,16 @@ final class HIDInput: InputSink {
     var onFailed: (() -> Void)?
     /// The phone refused the session until it is unlocked; it retries
     var onLocked: (() -> Void)?
+    /// An active session dropped (phone unplugged or tunnel ended); fires once until ready again
+    var onDisconnected: (() -> Void)?
+    /// Runs right before a fresh `dmb-hid` process launches, so the video assembler can drop old parameter sets
+    var onWillStart: (() -> Void)?
     /// Tries left while the phone has not listed its display service yet
     private var displayRetries = 0
     private var everReady = false
+    private var disconnected = false
+    private var restarting = false
+    private var lastRestart = Date.distantPast
     private var lastError = ""
 
     init(helper: URL, udid: String, video: Bool = false) {
@@ -86,6 +93,7 @@ final class HIDInput: InputSink {
                 guard let self else { return }
                 if line == "ready" {
                     self.everReady = true
+                    self.disconnected = false
                     self.onReady?()
                 } else if line.hasPrefix("screen "), case let parts = line.split(separator: " "), parts.count == 3,
                           let w = Double(parts[1]), let h = Double(parts[2]) {
@@ -125,32 +133,66 @@ final class HIDInput: InputSink {
             process.standardOutput = text
         }
         process.terminationHandler = { [weak self] ended in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            DispatchQueue.main.async {
                 guard let self, !self.stopping, self.process === ended else { return }
-                if !self.everReady {
-                    // A locked phone refuses CoreDevice; wait for it rather
-                    // than give up on the Device Hub stream
-                    if self.lastError.contains("PasswordProtected") {
-                        self.onLocked?()
-                        self.retry()
-                    } else if self.lastError.contains("no display service"), self.displayRetries < 10 {
-                        // A phone just plugged in lists its display service
-                        // a few seconds late; only one that never lists it
-                        // has no Device Hub
-                        self.displayRetries += 1
-                        self.retry()
-                    } else {
-                        self.onFailed?()
-                    }
-                    return
+                let intentionalRestart = self.restarting
+                if self.everReady && !intentionalRestart && !self.disconnected {
+                    self.disconnected = true
+                    self.onDisconnected?()
                 }
-                self.onError?("input session ended (\(ended.terminationStatus)), reconnecting")
-                try? self.start()
+                let delay: TimeInterval = intentionalRestart ? 0.3 : 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self, !self.stopping, self.process === ended else { return }
+                    if !self.everReady && !intentionalRestart {
+                        // A locked phone refuses CoreDevice; wait for it rather
+                        // than give up on the Device Hub stream
+                        if self.lastError.contains("PasswordProtected") {
+                            self.onLocked?()
+                            self.retry()
+                        } else if self.lastError.contains("no display service"), self.displayRetries < 10 {
+                            // A phone just plugged in lists its display service
+                            // a few seconds late; only one that never lists it
+                            // has no Device Hub
+                            self.displayRetries += 1
+                            self.retry()
+                        } else {
+                            self.onFailed?()
+                        }
+                        return
+                    }
+                    self.restarting = false
+                    if !intentionalRestart {
+                        self.onError?("input session ended (\(ended.terminationStatus)), reconnecting")
+                    }
+                    try? self.start()
+                }
             }
         }
+        onWillStart?()
         try process.run()
         self.process = process
         self.stdin = stdin
+    }
+
+    /// Cleanly stops the current `dmb-hid` process and lets `terminationHandler`
+    /// start a fresh session (at most once every 5 s), recovering from a stalled video stream
+    func restart() {
+        guard !stopping, !restarting, Date().timeIntervalSince(lastRestart) >= 5 else { return }
+        lastRestart = Date()
+        restarting = true
+        onError?("video decode stalled, restarting iPhone session")
+        guard let current = process, current.isRunning else {
+            restarting = false
+            try? start()
+            return
+        }
+        let writeEnd = stdin.fileHandleForWriting
+        DispatchQueue.global(qos: .utility).async {
+            try? writeEnd.close()
+            let deadline = Date().addingTimeInterval(0.5)
+            while current.isRunning && Date() < deadline { usleep(20_000) }
+            if current.isRunning { current.terminate() }
+        }
     }
 
     /// Starts again in 2 s, unless the window closed meanwhile

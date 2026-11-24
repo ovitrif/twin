@@ -47,6 +47,7 @@ func buildMenu(target: AnyObject, home: Selector, lock: Selector, back: Selector
 /// `view`; `onFailed` runs on a phone with no Device Hub (before iOS 27),
 /// for the caller to capture the screen instead
 func deviceHub(helper: URL, udid: String, view: MirrorView,
+               log: @escaping (String) -> Void = { _ in },
                onFailed: @escaping () -> Void) -> (HIDInput, DeviceHubSource) {
     let hid = HIDInput(helper: helper, udid: udid, video: true)
     let hub = DeviceHubSource(hid: hid)
@@ -55,6 +56,13 @@ func deviceHub(helper: URL, udid: String, view: MirrorView,
     view.waitsForScreenSize = true
     // A frame lost on the way fails every frame after it until a key frame
     view.onDecodeFailure = { [weak hid] in DispatchQueue.main.async { hid?.requestKeyframe() } }
+    view.onDecodeError = { log("iPhone video decode failed: \($0)") }
+    view.onDecodeStall = { [weak hid, weak view] in
+        DispatchQueue.main.async {
+            view?.clear()
+            hid?.restart()
+        }
+    }
     hid.onFailed = { [weak view] in
         view?.resetForCapture()
         onFailed()

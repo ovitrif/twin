@@ -140,11 +140,108 @@ final class PairView: NSView {
     }
 }
 
+enum PairSide: Equatable { case android, iphone }
+
+/// Decides which panes a pair window shows from user toggles (`dmb pane`) and
+/// live connection state: a disconnected phone drops out of the pair cleanly
+/// and returns to its slot automatically when it reconnects.
+struct PairPaneState {
+    struct Layout: Equatable {
+        var showsAndroid: Bool
+        var showsIPhone: Bool
+        var shouldTerminate: Bool
+        var androidStatus: String? = nil
+        var iphoneStatus: String? = nil
+    }
+
+    let hasIPhone: Bool
+    let androidTitle: String
+    let iphoneTitle: String
+    var userShowsAndroid = true
+    var userShowsIPhone: Bool
+    var androidConnected = true
+    var iphoneConnected: Bool
+    private(set) var lastShown: PairSide = .android
+
+    init(hasIPhone: Bool, androidTitle: String = "Android", iphoneTitle: String = "iPhone") {
+        self.hasIPhone = hasIPhone
+        self.androidTitle = androidTitle
+        self.iphoneTitle = iphoneTitle
+        self.userShowsIPhone = hasIPhone
+        self.iphoneConnected = hasIPhone
+    }
+
+    mutating func setConnected(_ side: PairSide, _ connected: Bool) {
+        switch side {
+        case .android: androidConnected = connected
+        case .iphone: iphoneConnected = connected
+        }
+        if connected {
+            lastShown = side
+        } else if side == .android && hasIPhone && userShowsIPhone && iphoneConnected {
+            lastShown = .iphone
+        } else if side == .iphone && userShowsAndroid && androidConnected {
+            lastShown = .android
+        }
+    }
+
+    /// Applies a `dmb pane` hide/show from the menu bar; hiding the only
+    /// connected pane closes the window instead of leaving a dead placeholder
+    mutating func setUserVisible(_ side: PairSide, _ visible: Bool) -> Layout {
+        switch side {
+        case .android: userShowsAndroid = visible
+        case .iphone: userShowsIPhone = visible
+        }
+        if !visible {
+            let anyLive = (userShowsAndroid && androidConnected) || (hasIPhone && userShowsIPhone && iphoneConnected)
+            if !anyLive {
+                return Layout(showsAndroid: false, showsIPhone: false, shouldTerminate: true)
+            }
+        }
+        return layout()
+    }
+
+    func layout() -> Layout {
+        if !userShowsAndroid && (!hasIPhone || !userShowsIPhone) {
+            return Layout(showsAndroid: false, showsIPhone: false, shouldTerminate: true)
+        }
+        let wantAndroid = userShowsAndroid && androidConnected
+        let wantIPhone = hasIPhone && userShowsIPhone && iphoneConnected
+        if wantAndroid || wantIPhone {
+            return Layout(showsAndroid: wantAndroid, showsIPhone: wantIPhone, shouldTerminate: false)
+        }
+        // Neither wanted phone is connected: keep one cleared dark pane open
+        // so the window stays alive and expands back on reconnect
+        let showAndroid: Bool
+        if hasIPhone && userShowsAndroid && userShowsIPhone {
+            showAndroid = lastShown == .android
+        } else {
+            showAndroid = userShowsAndroid
+        }
+        let msg: String
+        if hasIPhone && userShowsAndroid && userShowsIPhone {
+            msg = "Phones disconnected\nWaiting to reconnect…"
+        } else if showAndroid {
+            msg = "\(androidTitle) disconnected\nWaiting to reconnect…"
+        } else {
+            msg = "\(iphoneTitle) disconnected\nWaiting to reconnect…"
+        }
+        return Layout(
+            showsAndroid: showAndroid,
+            showsIPhone: !showAndroid,
+            shouldTerminate: false,
+            androidStatus: showAndroid ? msg : nil,
+            iphoneStatus: showAndroid ? nil : msg
+        )
+    }
+}
+
 public final class PairDelegate: NSObject, NSApplicationDelegate {
     private let options: PairOptions
     private var window: MirrorWindow!
     private var pair: PairView!
     private var styler: WindowStyler!
+    private var paneState: PairPaneState!
     private var androidSource: FrameSource?
     private var iphoneSource: FrameSource?
     private var hid: HIDInput?
@@ -167,6 +264,9 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
 
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let height = options.height ?? (screen.height * 0.8).rounded()
+        paneState = PairPaneState(hasIPhone: options.hasIPhone,
+                                  androidTitle: options.androidTitle,
+                                  iphoneTitle: options.iphoneTitle)
         pair = PairView(frame: .zero)
         pair.showsIPhone = options.hasIPhone
         pair.gap = options.gap
@@ -222,20 +322,36 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
             forName: PaneRequest.name, object: options.udid ?? options.iphoneReplay, queue: .main
         ) { [weak self] note in
             guard let self, let request = PaneRequest(note.userInfo) else { return }
-            switch request.pane {
-            case .android: self.pair.showsAndroid = request.visible
-            case .iphone: self.pair.showsIPhone = request.visible
-            }
-            if !self.pair.showsAndroid && !self.pair.showsIPhone {
-                NSApp.terminate(nil)
-                return
-            }
-            // Typing and Home go to the phone still shown
-            let (hidden, other) = request.pane == .android ? (self.pair.android, self.pair.iphone)
-                                                           : (self.pair.iphone, self.pair.android)
-            if !request.visible, self.window.firstResponder === hidden { self.window.makeFirstResponder(other) }
-            self.fitWindow()
+            let side: PairSide = request.pane == .android ? .android : .iphone
+            let layout = self.paneState.setUserVisible(side, request.visible)
+            self.applyPaneLayout(layout)
         }
+    }
+
+    private func applyPaneLayout(_ layout: PairPaneState.Layout, forceFit: Bool = false) {
+        if layout.shouldTerminate {
+            NSApp.terminate(nil)
+            return
+        }
+        let changed = pair.showsAndroid != layout.showsAndroid || pair.showsIPhone != layout.showsIPhone
+        pair.showsAndroid = layout.showsAndroid
+        pair.showsIPhone = layout.showsIPhone
+        if let text = layout.androidStatus { pair.android.setStatus(text) }
+        if let text = layout.iphoneStatus { pair.iphone.setStatus(text) }
+        // Typing and Home go to the phone still shown
+        if !pair.showsAndroid, pair.showsIPhone, window.firstResponder === pair.android {
+            window.makeFirstResponder(pair.iphone)
+        } else if !pair.showsIPhone, pair.showsAndroid, window.firstResponder === pair.iphone {
+            window.makeFirstResponder(pair.android)
+        }
+        if pair.showsAndroid && pair.showsIPhone {
+            window.title = "\(options.androidTitle) and \(options.iphoneTitle)"
+        } else if pair.showsAndroid {
+            window.title = options.androidTitle
+        } else if pair.showsIPhone {
+            window.title = options.iphoneTitle
+        }
+        if changed || forceFit { fitWindow() }
     }
 
     private var serverPath: String? {
@@ -257,14 +373,26 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
             pair.android.setStatus("adb or scrcpy-server not found")
             return
         }
-        let session = ScrcpySession(serial: serial, adb: adb, server: server)
-        let source = ScrcpySource(session: session)
-        source.onStatus = { [weak self] in self?.pair.android.setStatus($0) }
+        let source = ScrcpySource(serial: serial, adb: adb, server: server)
+        source.onError = { [weak self] in self?.log($0) }
+        source.onStatus = { [weak self] text in DispatchQueue.main.async { self?.pair.android.setStatus(text) } }
+        source.onDisconnected = { [weak self] in
+            guard let self else { return }
+            self.pair.android.clear()
+            self.androidSize = .zero
+            self.paneState.setConnected(.android, false)
+            self.applyPaneLayout(self.paneState.layout())
+        }
         source.onFrame = { [weak self] buffer in
             guard let self, let size = self.pair.android.enqueue(buffer) else { return }
-            DispatchQueue.main.async { if size != self.androidSize { self.resized(android: size) } }
+            DispatchQueue.main.async {
+                if size != self.androidSize || !self.paneState.androidConnected {
+                    self.resized(android: size)
+                }
+            }
         }
-        let input = ScrcpyInput(session: session)
+        pair.android.onDecodeError = { [weak self] in self?.log("Android video decode failed: \($0)") }
+        let input = ScrcpyInput(source: source)
         input.onError = { [weak self] in self?.log($0) }
         pair.android.input = input
         androidInput = input
@@ -280,7 +408,8 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if let udid = options.udid, let helper = hidHelper {
-            let (hid, hub) = deviceHub(helper: helper, udid: udid, view: pair.iphone) { [weak self] in
+            let (hid, hub) = deviceHub(helper: helper, udid: udid, view: pair.iphone,
+                                       log: { [weak self] in self?.log($0) }) { [weak self] in
                 self?.captureIPhone()
             }
             hid.onError = { [weak self] in self?.log($0) }
@@ -308,33 +437,48 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
 
     private func run(_ source: FrameSource) {
         source.onStatus = { [weak self] text in DispatchQueue.main.async { self?.pair.iphone.setStatus(text) } }
+        source.onDisconnected = { [weak self] in
+            guard let self else { return }
+            self.pair.iphone.clear()
+            self.iphoneSize = .zero
+            self.paneState.setConnected(.iphone, false)
+            self.applyPaneLayout(self.paneState.layout())
+        }
         source.onFrame = { [weak self] buffer in
             guard let self, let size = self.pair.iphone.enqueue(buffer) else { return }
-            DispatchQueue.main.async { if size != self.iphoneSize { self.resized(iphone: size) } }
+            DispatchQueue.main.async {
+                if size != self.iphoneSize || !self.paneState.iphoneConnected {
+                    self.resized(iphone: size)
+                }
+            }
         }
         iphoneSource = source
         source.start()
     }
 
     private func resized(android size: CGSize) {
-        if androidSize == .zero { pair.android.setStatus(nil) }
+        let reconnected = !paneState.androidConnected
+        if androidSize == .zero || reconnected { pair.android.setStatus(nil) }
+        if reconnected { paneState.setConnected(.android, true) }
         androidSize = size
         pair.androidAspect = size.width / size.height
-        fitWindow()
+        applyPaneLayout(paneState.layout(), forceFit: true)
     }
 
     private func resized(iphone size: CGSize) {
-        if iphoneSize == .zero {
+        let reconnected = !paneState.iphoneConnected
+        if iphoneSize == .zero || reconnected {
             pair.iphone.setStatus(nil)
             // With capture the phone reconnects its USB once it starts, so
             // input waits for it
-            if let hid, !hid.video {
+            if iphoneSize == .zero, let hid, !hid.video {
                 do { try hid.start() } catch { log("cannot start dmb-hid: \(error)") }
             }
         }
+        if reconnected { paneState.setConnected(.iphone, true) }
         iphoneSize = size
         pair.iphoneAspect = size.width / size.height
-        fitWindow()
+        applyPaneLayout(paneState.layout(), forceFit: true)
     }
 
     /// Keeps the phones' size and the window's center when a phone turns or
@@ -363,7 +507,10 @@ public final class PairDelegate: NSObject, NSApplicationDelegate {
 
     /// The phone the pointer last used takes Home, Lock and typing
     private var activeInput: InputSink? {
-        (window.firstResponder as? MirrorView)?.input ?? androidInput
+        if let active = window.firstResponder as? MirrorView, !active.isHidden { return active.input }
+        if pair.showsAndroid { return androidInput }
+        if pair.showsIPhone { return hid }
+        return androidInput
     }
 
     @objc private func home() { activeInput?.button("home") }
